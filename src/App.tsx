@@ -909,8 +909,8 @@ export default function App() {
                   <AerialMark size={18} />
                 </div>
                 <div className="shrink-0">
-                  <h1 className="font-rephen text-xl tracking-widest leading-none text-foreground" style={{ letterSpacing: '0.15em' }}>AERIAL</h1>
-                  <p className="text-[9px] uppercase tracking-widest text-muted-foreground font-bold mt-0.5">Board Software</p>
+                  <h1 className="font-rephen text-xl tracking-widest leading-none text-foreground" style={{ letterSpacing: '0.15em' }}>AERIAL PREMIUM</h1>
+                  <p className="text-[9px] uppercase tracking-widest text-muted-foreground font-bold mt-0.5">Premium Edition</p>
                 </div>
               </div>
               <div className="p-2">

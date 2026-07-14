@@ -1,11 +1,17 @@
-root ::= statement (newline statement)*
-statement ::= metadata | connection | nodedef
-metadata ::= "@type: " type
-type ::= "architecture" | "flowchart"
-nodedef ::= "[" ident "]: \"" string "\""
-connection ::= "[" ident "] " arrow " [" ident "]" label?
-label ::= ": \"" string "\""
-arrow ::= "-->" | "<--" | "<->" | "--"
+root ::= (stmt "\n")* stmt?
+stmt ::= type-stmt | group-stmt | node-stmt | conn-stmt | style-stmt
+
+type-stmt ::= "@type: " ("architecture" | "flowchart")
+
+group-stmt ::= "group \"" string "\" {\n" node-list "\n}"
+node-list ::= (node-stmt "\n")* node-stmt?
+
+node-stmt ::= "[" ident "]: \"" string "\""
+
+conn-stmt ::= "[" ident "] --> [" ident "]" (": \"" string "\"")?
+
+style-stmt ::= "style [" ident "] { " ident ": \"" string "\" }"
+
 ident ::= [a-zA-Z0-9_-]+
 string ::= [^"]+
-newline ::= "\n"
+

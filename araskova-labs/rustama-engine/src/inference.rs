@@ -92,42 +92,30 @@ impl Role {
 
 // ─── Engine ──────────────────────────────────────────────────────────────────
 
+pub mod actor;
+use actor::{spawn_inference_actor, InferenceCommand};
+
 pub struct InferenceEngine {
     config: InferenceConfig,
-    model: LlamaModel,
-    backend: LlamaBackend,
     history: Vec<ChatMessage>,
+    tx: tokio::sync::mpsc::UnboundedSender<InferenceCommand>,
 }
 
 impl InferenceEngine {
     /// Load a model from disk. Blocks until weights are memory-mapped.
     pub async fn load(config: InferenceConfig) -> Result<Self> {
-        info!("Loading model from {:?}", config.model_path);
+        info!("Spawning inference actor for {:?}", config.model_path);
 
-        // Run the blocking load on a dedicated thread so we don't stall the async runtime
         let config_clone = config.clone();
-        let (backend, model) = tokio::task::spawn_blocking(move || -> Result<_> {
-            let backend = LlamaBackend::init()?;
+        
+        // spawn_inference_actor performs blocking initializations (loading model from disk),
+        // so we wrap it in spawn_blocking so we don't stall the async runtime.
+        let tx = tokio::task::spawn_blocking(move || spawn_inference_actor(config_clone))
+            .await??;
 
-            let gpu_layers = config_clone.n_gpu_layers.unwrap_or(u32::MAX); // MAX = all layers on GPU
-            let model_params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
-
-            let model = LlamaModel::load_from_file(
-                &backend,
-                &config_clone.model_path,
-                &model_params,
-            )
-            .context("Failed to load model — is the .gguf file valid?")?;
-
-            Ok((backend, model))
-        })
-        .await??;
-
-        info!("Model loaded successfully");
+        info!("Model actor spawned successfully");
 
         let mut history = Vec::new();
-
-        // Seed history with system prompt if provided
         if let Some(ref sys) = config.system_prompt {
             history.push(ChatMessage {
                 role: Role::System,
@@ -135,7 +123,7 @@ impl InferenceEngine {
             });
         }
 
-        Ok(Self { config, model, backend, history })
+        Ok(Self { config, history, tx })
     }
 
     /// Generate a response, streaming individual tokens via `on_token`.
@@ -149,14 +137,30 @@ impl InferenceEngine {
             content: user_input.to_owned(),
         });
 
-        // Build the full prompt string in ChatML / llama-3 format
         let prompt = self.build_prompt();
         debug!("Prompt ({} chars): {}…", prompt.len(), &prompt[..prompt.len().min(120)]);
 
-        let config = self.config.clone();
-        let full_response = self.run_inference(&prompt, &config, &mut on_token).await?;
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let (token_tx, mut token_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Append assistant turn to history
+        self.tx.send(InferenceCommand::Generate {
+            prompt,
+            config: self.config.clone(),
+            token_tx,
+            reply_tx,
+        }).map_err(|_| anyhow::anyhow!("Actor thread died"))?;
+
+        // Stream tokens to caller
+        let mut full_response = String::new();
+        while let Some(tok) = token_rx.recv().await {
+            on_token(&tok);
+            full_response.push_str(&tok);
+        }
+
+        // Wait for final result status
+        reply_rx.await??;
+
+        // Append assistant turn
         self.history.push(ChatMessage {
             role: Role::Assistant,
             content: full_response.clone(),
@@ -165,24 +169,21 @@ impl InferenceEngine {
         Ok(full_response)
     }
 
-    /// Generate without streaming (returns the complete string).
+    /// Generate without streaming.
     pub async fn generate(&mut self, user_input: &str) -> Result<String> {
         let mut output = String::new();
         self.generate_streaming(user_input, |tok| output.push_str(tok)).await?;
         Ok(output)
     }
 
-    /// Reset conversation history (keeps system prompt).
+    /// Reset conversation history and clear KV cache
     pub fn clear_context(&mut self) {
         self.history.retain(|m| m.role == Role::System);
+        let _ = self.tx.send(InferenceCommand::ClearContext);
     }
 
     // ── Private ──────────────────────────────────────────────────────────────
 
-    /// Formats history into a ChatML-style prompt string.
-    ///
-    /// Most modern GGUF models include their template in the metadata;
-    /// in production you'd read it from there. ChatML is the common default.
     fn build_prompt(&self) -> String {
         let mut s = String::new();
         for msg in &self.history {
@@ -194,126 +195,5 @@ impl InferenceEngine {
         }
         s.push_str("<|im_start|>assistant\n");
         s
-    }
-
-    /// Core inference loop using llama_cpp_2 primitives.
-    async fn run_inference<F>(
-        &self,
-        prompt: &str,
-        config: &InferenceConfig,
-        on_token: &mut F,
-    ) -> Result<String>
-    where
-        F: FnMut(&str),
-    {
-        let prompt = prompt.to_owned();
-        let max_new = config.max_new_tokens;
-        let temperature = config.temperature;
-        let top_p = config.top_p;
-        let repeat_penalty = config.repeat_penalty;
-        let ctx_size = config.context_size;
-        let grammar_str_opt = config.grammar_str.clone();
-
-        // Capture tokens for return value
-        let mut collected = Vec::<String>::new();
-
-        // Run the synchronous llama_cpp_2 loop on a thread-pool thread
-        let model_ref = &self.model;
-        let backend_ref = &self.backend;
-
-        // NOTE: In a full implementation, this closure would call into llama_cpp_2's
-        // context → batch → sampling loop. Outlined here for clarity:
-        let tokens: Vec<String> = tokio::task::spawn_blocking({
-            let prompt = prompt.clone();
-            let model = unsafe {
-                // SAFETY: LlamaModel is !Send, so we transmute the lifetime to 'static
-                // for the blocking task. In production, use Arc<Mutex<>> or a dedicated
-                // inference actor (e.g. a tokio::sync::mpsc channel worker).
-                //
-                // A cleaner pattern is to keep the model in a dedicated thread and
-                // communicate via channels — see inference/actor.rs in the full version.
-                std::mem::transmute::<&LlamaModel, &'static LlamaModel>(model_ref)
-            };
-            let backend = unsafe {
-                std::mem::transmute::<&LlamaBackend, &'static LlamaBackend>(backend_ref)
-            };
-
-            move || -> Result<Vec<String>> {
-                let ctx_params = LlamaContextParams::default()
-                    .with_n_ctx(Some(std::num::NonZeroU32::new(ctx_size).unwrap()));
-
-                let mut ctx = model
-                    .new_context(backend, ctx_params)
-                    .context("Failed to create inference context")?;
-
-                // Tokenize the prompt
-                let tokens_list = model
-                    .str_to_token(&prompt, AddBos::Always)
-                    .context("Tokenization failed")?;
-
-                // Feed prompt tokens through the context in one batch
-                let mut batch = LlamaBatch::new(tokens_list.len() + max_new as usize, 1);
-                for (i, &tok) in tokens_list.iter().enumerate() {
-                    let is_last = i == tokens_list.len() - 1;
-                    batch.add(tok, i as i32, &[0], is_last)?;
-                }
-                ctx.decode(&mut batch).context("Prompt decode failed")?;
-
-                let mut samplers = vec![
-                    llama_cpp_2::sampling::LlamaSampler::temp(temperature),
-                    llama_cpp_2::sampling::LlamaSampler::top_p(top_p, 1),
-                    llama_cpp_2::sampling::LlamaSampler::penalties(
-                        -1,
-                        repeat_penalty,
-                        0.0,
-                        0.0,
-                    ),
-                ];
-                
-                if let Some(grammar_str) = grammar_str_opt {
-                    samplers.push(llama_cpp_2::sampling::LlamaSampler::grammar(&model, &grammar_str, "root").context("Failed to load grammar")?);
-                }
-                
-                samplers.push(llama_cpp_2::sampling::LlamaSampler::greedy());
-
-                let mut sampler = llama_cpp_2::sampling::LlamaSampler::chain_simple(samplers);
-
-                // Sampling loop
-                let mut output_tokens: Vec<String> = Vec::new();
-                let mut n_cur = tokens_list.len() as i32;
-                let eos = model.token_eos();
-
-                for _ in 0..max_new {
-                    let next_token = sampler.sample(&ctx, batch.n_tokens() - 1);
-                    sampler.accept(next_token);
-
-                    if next_token == eos {
-                        break;
-                    }
-
-                    #[allow(deprecated)]
-                    let token_str = model.token_to_str(next_token, Special::Tokenize)?;
-                    output_tokens.push(token_str);
-
-                    // Advance the batch
-                    batch.clear();
-                    batch.add(next_token, n_cur, &[0], true)?;
-                    ctx.decode(&mut batch).context("Token decode failed")?;
-                    n_cur += 1;
-                }
-
-                Ok(output_tokens)
-            }
-        })
-        .await??;
-
-        // Stream tokens to the caller and collect for return
-        let mut full = String::new();
-        for tok in tokens {
-            on_token(&tok);
-            full.push_str(&tok);
-        }
-
-        Ok(full)
     }
 }

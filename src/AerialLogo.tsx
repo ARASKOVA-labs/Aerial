@@ -65,7 +65,7 @@ const sizeMap = {
  */
 export function AerialWordmark({ className = '', showMark = false, size = 'md' }: AerialWordmarkProps) {
   const s = sizeMap[size];
-  const textW = s.fontSize * 7.5; // approx width of "AERIAL" + letter-spacing
+  const textW = s.fontSize * 16.5; // approx width of "AERIAL PREMIUM" + letter-spacing
   const totalW = (showMark ? s.markSize + s.gap : 0) + textW + s.dot + 4;
   const h = s.fontSize * 1.4;
 
@@ -107,7 +107,7 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md' }
         letterSpacing={s.tracking}
         fill="currentColor"
         style={{ fontFamily: 'Rephen, serif' }}
-      >AERIAL</text>
+      >AERIAL PREMIUM</text>
 
       {/* Indigo dot */}
       <circle
@@ -151,8 +151,8 @@ export function AerialLogoStack({ className = '' }: { className?: string }) {
 
       {/* AERIAL wordmark below */}
       <svg
-        viewBox="0 0 200 28"
-        width={200}
+        viewBox="0 0 400 28"
+        width={400}
         height={28}
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
@@ -168,7 +168,7 @@ export function AerialLogoStack({ className = '' }: { className?: string }) {
           letterSpacing="10"
           fill="currentColor"
           style={{ fontFamily: 'Rephen, serif' }}
-        >AERIAL</text>
+        >AERIAL PREMIUM</text>
       </svg>
 
       {/* Thin horizon accent */}

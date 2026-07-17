@@ -115,7 +115,10 @@ struct AppState {
 }
 
 #[tauri::command]
-fn save_board(state: State<'_, AppState>, payload: Vec<u8>) -> Result<(), String> {
+fn save_board(state: State<'_, AppState>, payload_b64: String) -> Result<(), String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let payload = STANDARD.decode(&payload_b64).map_err(|e| e.to_string())?;
+
     let write_txn = state.db.begin_write().map_err(|e| e.to_string())?;
     {
         let mut table = write_txn.open_table(BOARDS_TABLE).map_err(|e| e.to_string())?;

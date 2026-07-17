@@ -90,10 +90,10 @@ interface AerialEngine {
   zoom_in: () => void;
   zoom_out: () => void;
   reset_view: () => void;
-  on_mouse_down: (e: MouseEvent) => void;
-  on_mouse_move: (e: MouseEvent) => void;
-  on_mouse_up: (e: MouseEvent) => void;
-  on_double_click: (e: MouseEvent) => string | undefined;
+  on_mouse_down: (raw_x: number, raw_y: number) => void;
+  on_mouse_move: (raw_x: number, raw_y: number) => void;
+  on_mouse_up: (raw_x: number, raw_y: number) => void;
+  on_double_click: (raw_x: number, raw_y: number) => string | undefined;
   get_element_code: (id: bigint) => string | undefined;
   on_wheel: (dx: number, dy: number, ctrl: boolean, sx: number, sy: number) => void;
   delete_selected: () => void;
@@ -315,7 +315,13 @@ export default function App() {
       const needsSave = e.check_and_clear_dirty();
       if (needsSave) {
         const stateBytes = e.export_full_state();
-        invoke('save_board', { payload: Array.from(stateBytes) }).catch(err => console.error("Auto-save failed:", err));
+        let binary = '';
+        const chunkSize = 8192;
+        for (let i = 0; i < stateBytes.length; i += chunkSize) {
+            binary += String.fromCharCode.apply(null, stateBytes.subarray(i, i + chunkSize) as any);
+        }
+        const b64 = window.btoa(binary);
+        invoke('save_board', { payloadB64: b64 }).catch(err => console.error("Auto-save failed:", err));
         
         // Blast delta updates to the room if connected
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -368,7 +374,8 @@ export default function App() {
 
   const onDoubleClick = useCallback((e: React.MouseEvent) => {
     if (!engineRef.current) return;
-    const hitIdStr = engineRef.current.on_double_click(e.nativeEvent);
+    const rect = canvasRef.current!.getBoundingClientRect();
+    const hitIdStr = engineRef.current.on_double_click(e.clientX - rect.left, e.clientY - rect.top);
     if (hitIdStr) {
       const [elementIdStr, nodeId] = hitIdStr.split(',');
       const elementId = BigInt(elementIdStr);
@@ -684,23 +691,36 @@ export default function App() {
       return;
     }
     
-    engineRef.current?.on_mouse_down(e.nativeEvent as unknown as MouseEvent);
+    const rect = canvasRef.current!.getBoundingClientRect();
+    engineRef.current?.on_mouse_down(e.clientX - rect.left, e.clientY - rect.top);
   }, [activeTool, typingText, showWelcome]);
   
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
+    const rect = canvasRef.current!.getBoundingClientRect();
     if (activeTool === 'eraser') {
-      const rect = canvasRef.current!.getBoundingClientRect();
       setEraserPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     }
-    engineRef.current?.on_mouse_move(e.nativeEvent as unknown as MouseEvent);
+    const nativeEvent = e.nativeEvent;
+    const coalesced = typeof nativeEvent.getCoalescedEvents === 'function'
+      ? nativeEvent.getCoalescedEvents()
+      : [];
+    
+    if (coalesced.length > 0) {
+      for (const ev of coalesced) {
+        engineRef.current?.on_mouse_move(ev.clientX - rect.left, ev.clientY - rect.top);
+      }
+    } else {
+      engineRef.current?.on_mouse_move(e.clientX - rect.left, e.clientY - rect.top);
+    }
   }, [activeTool]);
   
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     if (e.target instanceof Element) {
       e.target.releasePointerCapture(e.pointerId);
     }
-    engineRef.current?.on_mouse_up(e.nativeEvent as unknown as MouseEvent);
+    const rect = canvasRef.current!.getBoundingClientRect();
+    engineRef.current?.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
 
     if (activeTool === 'magic_pen') {
       if (magicTimeoutRef.current) clearTimeout(magicTimeoutRef.current);
@@ -909,8 +929,7 @@ export default function App() {
                   <AerialMark size={18} />
                 </div>
                 <div className="shrink-0">
-                  <h1 className="font-rephen text-xl tracking-widest leading-none text-foreground" style={{ letterSpacing: '0.15em' }}>AERIAL PREMIUM</h1>
-                  <p className="text-[9px] uppercase tracking-widest text-muted-foreground font-bold mt-0.5">Premium Edition</p>
+                  <h1 className="font-rephen text-xl tracking-widest leading-none text-foreground" style={{ letterSpacing: '0.15em' }}>AERIAL</h1>
                 </div>
               </div>
               <div className="p-2">

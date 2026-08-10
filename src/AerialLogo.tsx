@@ -1,8 +1,6 @@
 /**
  * Aerial brand components using Rephen font.
  * Rephen is loaded via @font-face in index.css from /fonts/rephen.ttf.
- * Inline SVG <text> in React inherits the document's CSS @font-face, so
- * font-family="Rephen" works correctly here — no paths needed.
  */
 
 interface AerialMarkProps {
@@ -11,8 +9,35 @@ interface AerialMarkProps {
 }
 
 /**
- * The Aerial icon mark:
- * A single 'A' in Rephen font on a white background.
+ * Premium 'L' Monogram
+ * A single 'L' in Rephen font on an Apple-style white squircle background.
+ */
+function MonogramL() {
+  return (
+    <>
+      <defs>
+        <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
+      </defs>
+      
+      {/* Dynamic background with Apple-like squircle curves */}
+      <rect width="44" height="44" rx="10" fill="currentColor" />
+      
+      {/* 'L' in Rephen */}
+      <text
+        x="22"
+        y="32"
+        fontFamily="Rephen, serif"
+        fontSize="30"
+        fill="var(--background)"
+        textAnchor="middle"
+        style={{ fontFamily: 'Rephen, serif' }}
+      >L</text>
+    </>
+  );
+}
+
+/**
+ * The Aerial icon mark
  */
 export function AerialMark({ size = 32, className = '' }: AerialMarkProps) {
   return (
@@ -25,23 +50,7 @@ export function AerialMark({ size = 32, className = '' }: AerialMarkProps) {
       className={className}
       aria-label="Aerial"
     >
-      <defs>
-        <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
-      </defs>
-      
-      {/* White background */}
-      <rect width="44" height="44" rx="8" fill="white" />
-      
-      {/* 'A' in Rephen */}
-      <text
-        x="22"
-        y="32"
-        fontFamily="Rephen, serif"
-        fontSize="30"
-        fill="black"
-        textAnchor="middle"
-        style={{ fontFamily: 'Rephen, serif' }}
-      >A</text>
+      <MonogramL />
     </svg>
   );
 }
@@ -61,7 +70,6 @@ const sizeMap = {
 
 /**
  * Full wordmark: optional mark + "AERIAL" in Rephen + indigo dot.
- * Uses SVG <text> so font rendering matches the rest of the app.
  */
 export function AerialWordmark({ className = '', showMark = false, size = 'md' }: AerialWordmarkProps) {
   const s = sizeMap[size];
@@ -79,22 +87,9 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md' }
       className={className}
       aria-label="Aerial"
     >
-      <defs>
-        <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
-      </defs>
-
       {showMark && (
         <svg x="0" y={(h - s.markSize) / 2} width={s.markSize} height={s.markSize} viewBox="0 0 44 44">
-          <rect width="44" height="44" rx="8" fill="white" />
-          <text
-            x="22"
-            y="32"
-            fontFamily="Rephen, serif"
-            fontSize="30"
-            fill="black"
-            textAnchor="middle"
-            style={{ fontFamily: 'Rephen, serif' }}
-          >A</text>
+          <MonogramL />
         </svg>
       )}
 
@@ -121,32 +116,20 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md' }
 }
 
 /**
- * Loading screen stack: large AL mark + AERIAL wordmark below + horizon line.
+ * Loading screen stack: large monogram mark + AERIAL wordmark below + horizon line.
  */
 export function AerialLogoStack({ className = '' }: { className?: string }) {
   return (
     <div className={`flex flex-col items-center gap-3 ${className}`}>
-      {/* Large A mark */}
+      {/* Large Monogram */}
       <svg
-        viewBox="0 0 80 80"
+        viewBox="0 0 44 44"
         width={80}
         height={80}
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <defs>
-          <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
-        </defs>
-        <rect width="80" height="80" rx="16" fill="white" />
-        <text
-          x="40"
-          y="56"
-          fontFamily="Rephen, serif"
-          fontSize="50"
-          fill="black"
-          textAnchor="middle"
-          style={{ fontFamily: 'Rephen, serif' }}
-        >A</text>
+        <MonogramL />
       </svg>
 
       {/* AERIAL wordmark below */}

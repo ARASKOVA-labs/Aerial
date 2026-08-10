@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   Menu,
-  Users,
-  Settings,
   Plus,
-  FilePenLine,
   Pen,
   Square,
   Circle,
@@ -33,13 +30,16 @@ import {
   Eraser,
   Languages,
   Activity,
+  MoreHorizontal,
+  Undo,
+  Redo,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 // import mermaid from 'mermaid';
 import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 import './App.css';
-import { AerialLogoStack, AerialWordmark, AerialMark } from './AerialLogo';
+import { AerialLogoStack, AerialMark } from './AerialLogo';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -80,30 +80,34 @@ interface AerialEngine {
   set_fountain_sharpness: (s: number) => void;
   screen_to_world_x: (sx: number) => number;
   screen_to_world_y: (sy: number) => number;
-  add_text: (text: string, x: number, y: number, size: number, font_family?: string) => void;
+  add_text: (text: string, x: number, y: number, size: number, font_family?: string, color?: string) => void;
   clear_board: () => void;
   set_stroke_color: (c: string) => void;
   set_fill_color: (c: string) => void;
   set_stroke_width: (w: number) => void;
   set_is_rough: (rough: boolean) => void;
   set_is_curved: (curved: boolean) => void;
-  zoom_in: () => void;
-  zoom_out: () => void;
-  reset_view: () => void;
+  zoom_in: () => number;
+  zoom_out: () => number;
+  reset_view: () => number;
   on_mouse_down: (raw_x: number, raw_y: number) => void;
   on_mouse_move: (raw_x: number, raw_y: number) => void;
   on_mouse_up: (raw_x: number, raw_y: number) => void;
   on_double_click: (raw_x: number, raw_y: number) => string | undefined;
   get_element_code: (id: bigint) => string | undefined;
-  on_wheel: (dx: number, dy: number, ctrl: boolean, sx: number, sy: number) => void;
+  on_wheel: (dx: number, dy: number, ctrl: boolean, sx: number, sy: number) => number;
   delete_selected: () => void;
   render: () => void;
   tick_animations: () => boolean;
+  undo: () => boolean;
+  redo: () => boolean;
+  set_eraser_radius: (r: number) => void;
+  set_dpr: (dpr: number) => void;
 }
 
 // ── Toolbar items ──────────────────────────────────────────────────────────────
 
-const STROKE_COLORS = ['#1a1a2e', '#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#0ea5e9'];
+const STROKE_COLORS = ['#000000', '#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#0ea5e9'];
 
 // Global flag to prevent double-initialization of Wasm in React StrictMode
 let wasmInitPromise: Promise<any> | null = null;
@@ -116,17 +120,21 @@ export default function App() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const [activeTool, setActiveTool] = useState<ToolId>('freedraw');
-  const [strokeColor, setStrokeColor] = useState('#1a1a2e');
+  const [strokeColor, setStrokeColor] = useState('#000000');
+  const [fillColor] = useState('transparent');
   const [strokeWidth, setStrokeWidth] = useState(2.5);
   const [eraserSize, setEraserSize] = useState(24);
-  const [eraserMode, setEraserMode] = useState<'stroke' | 'element' | 'area'>('stroke');
+  const [eraserMode, setEraserMode] = useState<'stroke' | 'element'>('stroke');
   const [fountainSharpness, setFountainSharpness] = useState(0.5);
   const [magicLanguage, setMagicLanguage] = useState<'en' | 'ml' | 'ta' | 'te'>('en');
   const [magicFont, setMagicFont] = useState("'Space Grotesk', sans-serif");
   const [showSettings, setShowSettings] = useState(false);
+  const [showMoreTools, setShowMoreTools] = useState(false);
   const magicTimeoutRef = useRef<number | null>(null);
+  const prevToolRef = useRef<ToolId | null>(null);
   const [showMermaidDialog, setShowMermaidDialog] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [engineReady, setEngineReady] = useState(false);
   const [eraserPos, setEraserPos] = useState<{x: number; y: number} | null>(null);
   
@@ -198,9 +206,13 @@ export default function App() {
   const [fontFamily, setFontFamily] = useState('Caveat');
   const [isRough, setIsRough] = useState(true);
   const [isCurved, setIsCurved] = useState(true);
+  const initStarted = useRef(false);
 
   // ── Load Wasm ──────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (initStarted.current) return;
+    initStarted.current = true;
+
     async function loadWasm() {
       try {
         const timestamp = Date.now();
@@ -215,19 +227,17 @@ export default function App() {
           wasmInitPromise = mod.default({ module_or_path: wasmUrl });
         }
         await wasmInitPromise;
+        await wasmInitPromise;
         await document.fonts.ready;
-
-        // Clean up previous engine instance if it exists (StrictMode)
-        if (engineRef.current) {
-          (engineRef.current as any).free?.();
-        }
 
         const canvas = canvasRef.current!;
         const parent = canvas.parentElement!;
-        canvas.width  = parent.clientWidth;
-        canvas.height = parent.clientHeight;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width  = parent.clientWidth * dpr;
+        canvas.height = parent.clientHeight * dpr;
 
         const engine: AerialEngine = new mod.AerialCanvas('aerial-canvas');
+        engine.set_dpr(dpr);
         
         // Try to load from Tauri backend DB
         let loadedDbBoard = false;
@@ -264,9 +274,17 @@ export default function App() {
           console.error("Failed to load from redb DB:", e);
         }
 
-        // Apply initial UI states to the engine
+        // ── Sync all initial React state → engine ────────────────────────────
+        engine.set_dark_mode(isDarkMode);
+        engine.set_grid_type(gridType);
+        engine.set_stroke_color(strokeColor);
+        engine.set_fill_color(fillColor);
+        engine.set_stroke_width(strokeWidth);
         engine.set_is_rough(isRough);
         engine.set_is_curved(isCurved);
+        // Sync the active tool (engine defaults to FreeDraw, but keep explicit)
+        engine.set_tool_freedraw();
+
 
         if (!loadedDbBoard) {
            setShowWelcome(true);
@@ -275,6 +293,22 @@ export default function App() {
         engine.render();
         engineRef.current = engine;
         setEngineReady(true);
+        
+        // Handle dynamic resizing with ResizeObserver — single authoritative observer
+        const observer = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const { width, height } = entry.contentRect;
+            const currentDpr = window.devicePixelRatio || 1;
+            canvas.width = width * currentDpr;
+            canvas.height = height * currentDpr;
+            engine.set_dpr(currentDpr);
+            engine.render();
+          }
+        });
+        observer.observe(canvas);
+        return () => observer.disconnect();
+        
+        // Store observer for cleanup if needed, but here it's fine tied to DOM
       } catch (e: any) {
         console.error('Aerial engine failed to load:', e);
         setLoadError(String(e?.message ?? e));
@@ -295,10 +329,18 @@ export default function App() {
   useEffect(() => {
     if (!engineReady) return;
     let animationFrameId: number;
+    let errorLogged = false;
     const loop = () => {
       const e = engineRef.current;
       if (e && e.tick_animations) {
-         e.tick_animations();
+        try {
+          e.tick_animations();
+        } catch (err) {
+          if (!errorLogged) {
+            console.error('[Aerial] tick_animations threw:', err);
+            errorLogged = true;
+          }
+        }
       }
       animationFrameId = requestAnimationFrame(loop);
     };
@@ -336,28 +378,22 @@ export default function App() {
     return () => clearInterval(interval);
   }, [engineReady]);
 
-  // ── Resize observer ────────────────────────────────────────────────────────
+  // ── Resize observer (fullscreen change only) ───────────────────────────────
   useEffect(() => {
     if (!engineReady) return;
-    const obs = new ResizeObserver(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      canvas.width  = canvas.parentElement!.clientWidth;
-      canvas.height = canvas.parentElement!.clientHeight;
-      engineRef.current?.render();
-    });
-    obs.observe(canvasRef.current!.parentElement!);
-
+    // NOTE: Canvas resize is handled by the ResizeObserver set up in loadWasm.
+    // This effect only tracks fullscreen state.
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-
     return () => {
-      obs.disconnect();
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, [engineReady]);
+
+  // ── Zoom state sync ────────────────────────────────────────────────────────
+  const [zoomLevel, setZoomLevel] = useState(100);
 
   // ── Environment Controls ───────────────────────────────────────────────────
   useEffect(() => {
@@ -380,16 +416,17 @@ export default function App() {
       const [elementIdStr, nodeId] = hitIdStr.split(',');
       const elementId = BigInt(elementIdStr);
       
-      const dslCode = engineRef.current.get_element_code(elementId);
-      if (dslCode) {
-        const newLabel = window.prompt(`Rename diagram node [${nodeId}]:`);
-        if (newLabel && newLabel.trim().length > 0) {
-          import('@tauri-apps/api/tauri').then(({ invoke }) => {
-            invoke<string>('update_diagram_node', {
-              code: dslCode,
-              nodeId,
-              newLabel
-            }).then(newCode => {
+      if (nodeId) {
+        const dslCode = engineRef.current.get_element_code(elementId);
+        if (dslCode) {
+          const newLabel = window.prompt(`Rename diagram node [${nodeId}]:`);
+          if (newLabel && newLabel.trim().length > 0) {
+            import('@tauri-apps/api/tauri').then(({ invoke }) => {
+              invoke<string>('update_diagram_node', {
+                code: dslCode,
+                nodeId,
+                newLabel
+              }).then(newCode => {
               // Now we need to ask backend for SVG again
               invoke<any>('render_diagram', { code: newCode }).then(res => {
                 const blob = new Blob([res.svg], { type: 'image/svg+xml' });
@@ -414,8 +451,18 @@ export default function App() {
           });
         }
       }
+      } else {
+        const text = engineRef.current.get_selected_text();
+        if (text) {
+          const newText = window.prompt("Edit text:", text);
+          if (newText !== null) {
+             engineRef.current.update_selected_text(newText);
+             engineRef.current.render();
+          }
+        }
+      }
     }
-  }, []);
+  }, [engineReady]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -424,9 +471,51 @@ export default function App() {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         engineRef.current?.delete_selected();
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          engineRef.current?.redo();
+        } else {
+          engineRef.current?.undo();
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        engineRef.current?.redo();
+      }
+      // Spacebar → temporarily activate hand/pan tool
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (activeTool !== 'hand') {
+          prevToolRef.current = activeTool;
+          setActiveTool('hand');
+          engineRef.current?.set_tool_hand();
+        }
+      }
+      // Escape key shortcuts
+      if (e.key === 'Escape') {
+        setShowSettings(false);
+        setShowMoreTools(false);
+        setIsMenuOpen(false);
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        // Restore previous tool on spacebar release
+        const prev = prevToolRef.current;
+        if (prev) {
+          setActiveTool(prev);
+          selectTool(prev);
+          prevToolRef.current = null;
+        }
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+    };
   }, []);
 
   useEffect(() => {
@@ -436,11 +525,24 @@ export default function App() {
   }, [gridType, engineReady]);
 
   const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen();
-    } else {
-      document.exitFullscreen();
-    }
+    setIsFullscreen((prev) => {
+      const next = !prev;
+      import('@tauri-apps/api/window')
+        .then(({ appWindow }) => {
+          appWindow.setFullscreen(next).catch(() => {});
+        })
+        .catch(() => {
+          // Fallback for web
+          if (next) {
+            document.documentElement.requestFullscreen().catch(() => {});
+          } else {
+            if (document.fullscreenElement) {
+              document.exitFullscreen().catch(() => {});
+            }
+          }
+        });
+      return next;
+    });
   }, []);
 
   // ── Tool selection ─────────────────────────────────────────────────────────
@@ -556,8 +658,9 @@ export default function App() {
     }
     
     try {
-      const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`);
-      const data = await res.json();
+      const { fetch: tauriFetch } = await import('@tauri-apps/api/http');
+      const res = await tauriFetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`);
+      const data: any = res.data;
       if (data && data[0]) {
         const translated = data[0].map((x: any) => x[0]).join('');
         engineRef.current.update_selected_text(translated);
@@ -666,6 +769,7 @@ export default function App() {
   // ── Canvas events ──────────────────────────────────────────────────────────
   // Using Pointer events ensures full support for Mouse, Touch, and Stylus/Pen.
   const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (!engineReady || !engineRef.current) return; // Bug #4 fix: guard against pre-load clicks
     if (showWelcome) setShowWelcome(false);
     
     // Prevent default browser behavior (like text selection or dragging the window)
@@ -678,10 +782,15 @@ export default function App() {
       magicTimeoutRef.current = null;
     }
     
+    const rect = canvasRef.current!.getBoundingClientRect();
+    
     if (activeTool === 'text') {
       if (typingText) return; // if already typing, let blur handle it
+      
+      // Prevent the pointerdown from triggering a focus shift (which would instantly blur the new textarea)
+      e.preventDefault();
+      
       if (engineRef.current) {
-        const rect = canvasRef.current!.getBoundingClientRect();
         const screenX = e.clientX - rect.left;
         const screenY = e.clientY - rect.top;
         const worldX = engineRef.current.screen_to_world_x(screenX);
@@ -691,34 +800,33 @@ export default function App() {
       return;
     }
     
-    const rect = canvasRef.current!.getBoundingClientRect();
     engineRef.current?.on_mouse_down(e.clientX - rect.left, e.clientY - rect.top);
-  }, [activeTool, typingText, showWelcome]);
+  }, [activeTool, typingText, showWelcome, engineReady]);
   
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
-    const rect = canvasRef.current!.getBoundingClientRect();
-    if (activeTool === 'eraser') {
-      setEraserPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
-    }
-    const nativeEvent = e.nativeEvent;
-    const coalesced = typeof nativeEvent.getCoalescedEvents === 'function'
-      ? nativeEvent.getCoalescedEvents()
-      : [];
+    if (!engineReady || !engineRef.current) return;
     
-    if (coalesced.length > 0) {
-      for (const ev of coalesced) {
-        engineRef.current?.on_mouse_move(ev.clientX - rect.left, ev.clientY - rect.top);
-      }
-    } else {
-      engineRef.current?.on_mouse_move(e.clientX - rect.left, e.clientY - rect.top);
+    const rect = canvasRef.current!.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    if (activeTool === 'eraser') {
+      setEraserPos({ x, y });
     }
-  }, [activeTool]);
+
+    if (e.buttons > 0) {
+      engineRef.current?.on_mouse_move(x, y);
+    }
+  }, [activeTool, engineReady]);
   
   const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (!engineReady || !engineRef.current) return;
+    
     if (e.target instanceof Element) {
       e.target.releasePointerCapture(e.pointerId);
     }
+    
     const rect = canvasRef.current!.getBoundingClientRect();
     engineRef.current?.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
 
@@ -749,16 +857,20 @@ export default function App() {
             }]
           };
           
-          const res = await fetch("https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8", {
+          // Import Tauri fetch dynamically to bypass CORS
+          const { fetch: tauriFetch, Body } = await import('@tauri-apps/api/http');
+          
+          const res = await tauriFetch("https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8", {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: Body.json(payload)
           });
           
-          const data = await res.json();
+          const data: any = res.data;
           if (data[0] === 'SUCCESS' && data[1] && data[1][0] && data[1][0][1] && data[1][0][1][0]) {
             const recognized = data[1][0][1][0];
-            engineRef.current.add_text(recognized, startX, startY, 40.0, magicFont);
+            // Pass the magic purple color explicitly
+            engineRef.current.add_text(recognized, startX, startY, 40.0, magicFont, "#a855f7");
             engineRef.current.render();
           }
         } catch (err) {
@@ -771,7 +883,10 @@ export default function App() {
   }, [activeTool, magicLanguage, magicFont]);
 
   const onPointerLeave = useCallback((e: React.PointerEvent) => {
-    onPointerUp(e);
+    // Only end the stroke if the pointer was actually down when leaving (prevents cutting strokes mid-draw)
+    if (e.buttons > 0) {
+      onPointerUp(e);
+    }
     setEraserPos(null);
   }, [onPointerUp]);
 
@@ -780,7 +895,7 @@ export default function App() {
       const rect = canvasRef.current!.getBoundingClientRect();
       setEraserPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     }
-  }, [activeTool]);
+  }, [activeTool, engineReady]);
 
   const onWheel = useCallback((e: React.WheelEvent) => {
     if (!engineRef.current) return;
@@ -788,8 +903,20 @@ export default function App() {
     const rect = canvasRef.current!.getBoundingClientRect();
     const screenX = e.clientX - rect.left;
     const screenY = e.clientY - rect.top;
-    engineRef.current.on_wheel(e.deltaX, e.deltaY, ctrl, screenX, screenY);
+    const newZoom = engineRef.current.on_wheel(e.deltaX, e.deltaY, ctrl, screenX, screenY);
+    if (ctrl) {
+      setZoomLevel(Math.round(newZoom * 100));
+    }
   }, []);
+
+  // Prevent browser native elastic scroll on canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const preventScroll = (e: WheelEvent) => e.preventDefault();
+    canvas.addEventListener('wheel', preventScroll, { passive: false });
+    return () => canvas.removeEventListener('wheel', preventScroll);
+  }, [engineReady]);
 
   // ── Cursor class for active tool ───────────────────────────────────────────
   const cursorClass =
@@ -871,7 +998,7 @@ export default function App() {
               transform: 'translateY(-14px)',
               fontFamily: 'Caveat',
               fontSize: '28px',
-              color: isDarkMode ? '#fff' : '#1a1a2e',
+              color: isDarkMode ? '#fff' : '#000000',
               background: 'transparent',
               border: '1px dashed #6366f1',
               outline: 'none',
@@ -894,13 +1021,13 @@ export default function App() {
             }}
             onBlur={() => {
               if (typingText.value.trim() && engineRef.current) {
-                engineRef.current.add_text(typingText.value, typingText.worldX, typingText.worldY, 28, fontFamily);
-                setActiveTool('select');
+                engineRef.current.add_text(typingText.value, typingText.worldX, typingText.worldY, 28, fontFamily, undefined);
+                selectTool('select');
               }
               setTypingText(null);
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Escape') {
                 e.preventDefault();
                 e.currentTarget.blur();
               }
@@ -913,7 +1040,7 @@ export default function App() {
       <div className="absolute inset-0 z-50 pointer-events-none flex">
         
         {/* Top-Left Hamburger Menu */}
-        <div className={`absolute top-4 left-4 z-50 ${isFullscreen ? 'hidden' : ''}`}>
+        <div className={`absolute top-4 left-4 z-50 transition-all duration-500 ease-in-out ${isFullscreen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
           <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
             className="pointer-events-auto w-10 h-10 flex items-center justify-center bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-xl hover:bg-foreground/5 transition-colors"
@@ -932,111 +1059,145 @@ export default function App() {
                   <h1 className="font-rephen text-xl tracking-widest leading-none text-foreground" style={{ letterSpacing: '0.15em' }}>AERIAL</h1>
                 </div>
               </div>
-              <div className="p-2">
-                <button className="w-full bg-foreground text-background hover:bg-foreground/90 rounded-lg py-2 px-3 flex justify-center items-center gap-2 text-sm font-semibold transition-all">
+              <div className="p-3 flex flex-col gap-3">
+                {/* Environment Controls */}
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs font-semibold text-muted-foreground">Appearance</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setIsDarkMode(!isDarkMode)}
+                      className="flex items-center justify-center w-7 h-7 hover:bg-muted rounded-full transition-colors"
+                      title="Toggle Dark Mode"
+                    >
+                      {isDarkMode ? <Moon className="w-4 h-4 text-foreground" /> : <Sun className="w-4 h-4 text-foreground" />}
+                    </button>
+                    <div className="flex items-center gap-1.5 bg-background/50 px-2 py-1 rounded-md border border-foreground/10">
+                      <Grid className="w-3.5 h-3.5 text-muted-foreground" />
+                      <select
+                        value={gridType}
+                        onChange={(e) => setGridType(e.target.value)}
+                        className="bg-transparent text-[11px] font-semibold outline-none cursor-pointer text-foreground border-0 p-0"
+                      >
+                        <option value="dots">Dots</option>
+                        <option value="lines">Lines</option>
+                        <option value="blank">Blank</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="h-px w-full bg-border" />
+
+                {/* New Board */}
+                <button
+                  className="w-full bg-foreground text-background hover:bg-foreground/90 rounded-lg py-2 px-3 flex justify-center items-center gap-2 text-sm font-semibold transition-all"
+                  onClick={() => {
+                    setShowClearConfirm(true);
+                  }}
+                >
                   <Plus className="w-4 h-4" />
                   New Board
                 </button>
               </div>
-              <nav className="px-2 pb-2 space-y-1">
-                <NavItem icon={FilePenLine} label="Recent Boards" active />
-                <NavItem icon={Users} label="Intern Meetings" />
-                <NavItem icon={Settings} label="Settings" />
-              </nav>
             </div>
           )}
         </div>
 
-        {/* Bottom-Left Brand Widget */}
-        <div className={`absolute bottom-4 left-4 z-50 pointer-events-auto flex items-center gap-2 bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-full px-3 py-2 ${isFullscreen ? 'hidden' : ''}`}>
-          {/* AERIAL Wordmark with icon mark */}
-          <AerialWordmark size="sm" showMark={true} />
-
-          <div className="w-px h-4 bg-border mx-1" />
-
-          {/* Environment Controls */}
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="flex items-center justify-center w-7 h-7 hover:bg-muted rounded-full transition-colors"
-              title="Toggle Dark Mode"
-            >
-              {isDarkMode ? <Moon className="w-4 h-4 text-foreground" /> : <Sun className="w-4 h-4 text-foreground" />}
-            </button>
-            <div className="flex items-center gap-1.5">
-              <Grid className="w-4 h-4 text-muted-foreground" />
-              <select
-                value={gridType}
-                onChange={(e) => setGridType(e.target.value)}
-                className="bg-background text-xs font-semibold outline-none cursor-pointer text-foreground border-0 rounded-sm"
-                style={{ backgroundColor: isDarkMode ? '#0a0a0f' : '#ffffff', color: isDarkMode ? '#f5f5f5' : '#1a1a2e' }}
-              >
-                <option value="dots">Dots</option>
-                <option value="lines">Lines</option>
-                <option value="blank">Blank</option>
-              </select>
-            </div>
-          </div>
-        </div>
 
         {/* Center Area */}
         <div className="flex-1 relative">
            
-           {/* Top Floating Toolbar */}
-           <div className={`pointer-events-auto absolute top-4 left-16 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 max-w-[calc(100vw-5rem)] overflow-x-auto flex-nowrap [&::-webkit-scrollbar]:hidden bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-2xl px-4 py-2 flex items-center gap-2 ${isFullscreen ? 'hidden' : ''}`}>
-             
-             {/* Zoom controls */}
-             <div className="flex items-center gap-1">
-               <ToolBtn icon={ZoomOut}  title="Zoom Out"    onClick={() => engineRef.current?.zoom_out()} />
-               <ToolBtn icon={Maximize} title="Reset View"  onClick={() => engineRef.current?.reset_view()} />
-               <ToolBtn icon={ZoomIn}   title="Zoom In"     onClick={() => engineRef.current?.zoom_in()} />
-             </div>
-
-             <div className="w-px h-6 bg-foreground/15 mx-1" />
-
-
-
-             {/* Drawing Tools */}
-             <div className="flex items-center gap-1">
-               {/* Selection & Navigation */}
-               <ToolBtn icon={MousePointer2} title="Select" active={activeTool === 'select'}   onClick={() => selectTool('select')} />
-               <ToolBtn icon={Hand}     title="Pan (Hand)"  active={activeTool === 'hand'}     onClick={() => selectTool('hand')} />
-               
-               {/* Drawing & Erasing */}
-               <ToolBtn icon={Pen}      title="Draw (Round Pen)"   active={activeTool === 'freedraw'} onClick={() => selectTool('freedraw')} />
-               <ToolBtn icon={Pen}      title="Calligraphy (Broad Pen)" active={activeTool === 'fountain'} onClick={() => selectTool('fountain')} />
-               <ToolBtn icon={Wand2}    title="Magic Pen (Smart Ink)" active={activeTool === 'magic_pen'} onClick={() => selectTool('magic_pen')} />
-               <ToolBtn icon={Activity} title="Laser Pen (Fading Glow)" active={activeTool === 'laser_pen'} onClick={() => selectTool('laser_pen')} />
-               <ToolBtn icon={Highlighter} title="Highlighter" active={activeTool === 'highlighter'} onClick={() => selectTool('highlighter')} />
-               <ToolBtn icon={Eraser}   title="Eraser"      active={activeTool === 'eraser'}    onClick={() => selectTool('eraser')} />
-               
-               {/* Shapes & Text */}
+           {/* Top Center: Main Drawing Tools */}
+           <div className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-2xl px-2 py-2 w-max max-w-[calc(100vw-2rem)] transition-all duration-500 ease-in-out ${isFullscreen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
+             <ToolBtn icon={MousePointer2} title="Select" active={activeTool === 'select'}   onClick={() => selectTool('select')} />
+             <ToolBtn icon={Hand}     title="Pan (Hand)"  active={activeTool === 'hand'}     onClick={() => selectTool('hand')} />
+             <div className="w-px h-5 bg-foreground/15 mx-1 hidden sm:block" />
+             <div className="hidden sm:flex items-center gap-1">
                <ToolBtn icon={Square}   title="Rectangle"   active={activeTool === 'rectangle'} onClick={() => selectTool('rectangle')} />
                <ToolBtn icon={Circle}   title="Ellipse"     active={activeTool === 'ellipse'}   onClick={() => selectTool('ellipse')} />
                <ToolBtn icon={Minus}    title="Line"        active={activeTool === 'line'}      onClick={() => selectTool('line')} />
                <ToolBtn icon={ArrowUpRight} title="Arrow"   active={activeTool === 'arrow'}     onClick={() => selectTool('arrow')} />
-               <ToolBtn icon={Type}     title="Text"        active={activeTool === 'text'}      onClick={() => selectTool('text')} />
              </div>
-
-             <div className="w-px h-6 bg-foreground/15 mx-1" />
-
-             {/* Special Tools */}
-             <div className="flex items-center gap-1">
+             <div className="w-px h-5 bg-foreground/15 mx-1 hidden sm:block" />
+             <ToolBtn icon={Pen}      title="Draw (Pen)"  active={activeTool === 'freedraw'}  onClick={() => selectTool('freedraw')} />
+             <ToolBtn icon={Type}     title="Text"        active={activeTool === 'text'}      onClick={() => selectTool('text')} />
+             <ToolBtn icon={Eraser}   title="Eraser"      active={activeTool === 'eraser'}    onClick={() => selectTool('eraser')} />
+             <div className="hidden sm:block">
                <ToolBtn icon={ImageIcon} title="Insert Image" onClick={() => imageInputRef.current?.click()} />
-               <ToolBtn icon={FileText} title="Insert PDF" onClick={() => pdfInputRef.current?.click()} />
-               <ToolBtn icon={Code} title="Insert Mermaid Chart" onClick={handleMermaid} />
              </div>
-             
-             <input type="file" accept="image/*" className="hidden" ref={imageInputRef} onChange={handleImageUpload} />
-             <input type="file" accept="application/pdf" className="hidden" ref={pdfInputRef} onChange={handlePdfUpload} />
+             <div className="w-px h-5 bg-foreground/15 mx-1" />
+             <div className="relative">
+               <ToolBtn 
+                 icon={MoreHorizontal} 
+                 title="More Tools" 
+                 active={showMoreTools || ['fountain', 'magic_pen', 'laser_pen', 'highlighter'].includes(activeTool)} 
+                 onClick={() => setShowMoreTools(!showMoreTools)} 
+               />
+               {showMoreTools && (
+                 <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-background/80 backdrop-blur-2xl border border-foreground/10 shadow-2xl rounded-xl p-2 w-48 flex flex-col gap-1 z-50">
+                   <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold px-2 py-1">Special Pens</p>
+                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'fountain' ? 'bg-foreground/10' : ''}`} onClick={() => { selectTool('fountain'); setShowMoreTools(false); }}>
+                     <Pen className="w-4 h-4" /> Calligraphy Pen
+                   </button>
+                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'highlighter' ? 'bg-foreground/10' : ''}`} onClick={() => { selectTool('highlighter'); setShowMoreTools(false); }}>
+                     <Highlighter className="w-4 h-4" /> Highlighter
+                   </button>
+                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'magic_pen' ? 'bg-foreground/10 text-purple-500' : ''}`} onClick={() => { selectTool('magic_pen'); setShowMoreTools(false); }}>
+                     <Wand2 className="w-4 h-4" /> Magic Pen
+                   </button>
+                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'laser_pen' ? 'bg-foreground/10 text-red-500' : ''}`} onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }}>
+                     <Activity className="w-4 h-4" /> Laser Pen
+                   </button>
+                   
+                   <div className="h-px bg-foreground/10 my-1" />
+                   <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold px-2 py-1">Insert & Actions</p>
+                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }}>
+                     <FileText className="w-4 h-4" /> Insert PDF
+                   </button>
+                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }}>
+                     <ImageIcon className="w-4 h-4" /> Insert Image
+                   </button>
+                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5" onClick={() => { handleMermaid(); setShowMoreTools(false); }}>
+                     <Code className="w-4 h-4" /> Mermaid Chart
+                   </button>
+                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5" onClick={() => { handleTranslate(magicLanguage); setShowMoreTools(false); }}>
+                     <Languages className="w-4 h-4" /> Translate Text
+                   </button>
+                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 text-red-500" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }}>
+                     <Trash2 className="w-4 h-4" /> Clear Board
+                   </button>
+                 </div>
+               )}
+             </div>
+           </div>
 
-             <div className="w-px h-6 bg-foreground/15 mx-1" />
-
-             {/* Clear & Fullscreen */}
-             <ToolBtn icon={Languages} title={`Translate Selected Text to ${magicLanguage.toUpperCase()}`} onClick={() => handleTranslate(magicLanguage)} />
-             <ToolBtn icon={Trash2} title="Clear Board" onClick={() => engineRef.current?.clear_board()} />
+           {/* Top Right: Fullscreen Toggle */}
+           <div className={`pointer-events-auto absolute top-4 right-4 flex items-center gap-1 bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-2xl px-2 py-2 transition-opacity duration-300 ${isFullscreen ? 'opacity-20 hover:opacity-100' : 'opacity-100'}`}>
              <ToolBtn icon={isFullscreen ? Minimize : Maximize} title="Toggle Fullscreen" onClick={toggleFullscreen} />
            </div>
+
+           {/* Bottom Left: Zoom & History */}
+           <div className={`pointer-events-auto absolute bottom-6 left-4 flex items-center gap-1 bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-2xl px-2 py-2 transition-all duration-500 ease-in-out ${isFullscreen ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
+             <ToolBtn icon={ZoomOut}  title="Zoom Out"    onClick={() => {
+               if (engineRef.current) setZoomLevel(Math.round(engineRef.current.zoom_out() * 100));
+             }} />
+             <button 
+               onClick={() => { if (engineRef.current) setZoomLevel(Math.round(engineRef.current.reset_view() * 100)); }}
+               title="Reset View"
+               className="text-center font-bold text-[10px] select-none text-muted-foreground hover:text-foreground transition-colors w-10 px-1 rounded-sm cursor-pointer hover:bg-muted"
+             >
+               {zoomLevel}%
+             </button>
+             <ToolBtn icon={ZoomIn}   title="Zoom In"     onClick={() => {
+               if (engineRef.current) setZoomLevel(Math.round(engineRef.current.zoom_in() * 100));
+             }} />
+             <div className="w-px h-5 bg-foreground/15 mx-1" />
+             <ToolBtn icon={Undo} title="Undo (Cmd+Z)" onClick={() => engineRef.current?.undo()} />
+             <ToolBtn icon={Redo} title="Redo (Cmd+Shift+Z)" onClick={() => engineRef.current?.redo()} />
+           </div>
+           
+           <input type="file" accept="image/*" className="hidden" ref={imageInputRef} onChange={handleImageUpload} />
+           <input type="file" accept="application/pdf" className="hidden" ref={pdfInputRef} onChange={handlePdfUpload} />
 
            {/* Settings Popover */}
            {showSettings && (
@@ -1117,7 +1278,7 @@ export default function App() {
                        ))}
                      </div>
                      <p className="text-[9px] text-muted-foreground mt-2">
-                       {eraserMode === 'stroke' ? 'Erases individual strokes you touch' : 'Erases entire elements at once'}
+                       {eraserMode === 'stroke' ? 'Erases individual strokes you touch' : 'Erases entire elements you touch (faster)'}
                      </p>
                    </div>
                    <div>
@@ -1275,24 +1436,44 @@ export default function App() {
       {showMermaidDialog && (
         <MermaidDialog onClose={() => setShowMermaidDialog(false)} onSubmit={submitMermaid} />
       )}
+
+      {/* Clear Board Confirmation Modal */}
+      {showClearConfirm && (
+        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-background/60 backdrop-blur-sm pointer-events-auto">
+          <div className="bg-background/80 backdrop-blur-xl border border-foreground/10 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4">
+            <div className="w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
+              <Trash2 className="w-6 h-6 text-red-500" />
+            </div>
+            <h2 className="text-xl font-semibold text-foreground mb-2 tracking-tight">Clear the board?</h2>
+            <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+              This will permanently delete all your drawings, text, and images. This action cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button 
+                onClick={() => setShowClearConfirm(false)}
+                className="px-4 py-2.5 rounded-xl text-sm font-semibold text-foreground hover:bg-foreground/5 transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  engineRef.current?.clear_board();
+                  setShowClearConfirm(false);
+                  setIsMenuOpen(false);
+                }}
+                className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-red-500 text-white hover:bg-red-600 transition-colors shadow-sm"
+              >
+                Yes, Clear Board
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
-
-function NavItem({ icon: Icon, label, active = false, collapsed = false }: { icon: React.FC<{className?: string}>; label: string; active?: boolean; collapsed?: boolean }) {
-  return (
-    <a href="#" title={collapsed ? label : undefined} className={`flex items-center ${collapsed ? 'justify-center px-0' : 'gap-3 px-3'} py-2 rounded-lg text-sm transition-colors overflow-hidden
-      ${active
-        ? 'bg-muted/60 text-foreground font-semibold'
-        : 'text-muted-foreground hover:bg-muted/40 hover:text-foreground'
-      }`}>
-      <Icon className="w-4 h-4 shrink-0" />
-      {!collapsed && <span className="whitespace-nowrap">{label}</span>}
-    </a>
-  );
-}
 
 function ToolBtn({ icon: Icon, title, onClick, active }: { icon: React.FC<{className?: string}>; title: string; onClick: () => void; active?: boolean }) {
   return (
@@ -1324,7 +1505,7 @@ function MermaidDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (
   const [selectedModel, setSelectedModel] = useState<string>('');
   
   // OpenRouter state
-  const OR_API_KEY = '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';
+  const OR_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || '';
   const OPENROUTER_MODELS = [
     { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 550B (Free)' },
     { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (Free)' },

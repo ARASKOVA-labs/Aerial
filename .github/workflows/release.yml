@@ -42,6 +42,14 @@ jobs:
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
           
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'latest'
+
+      - name: Build Wasm engine
+        run: cd aerial-core/aerial-engine && wasm-pack build --target web --out-dir ../../public/aerial-engine
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         

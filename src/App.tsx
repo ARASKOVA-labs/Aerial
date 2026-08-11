@@ -33,6 +33,7 @@ import {
   MoreHorizontal,
   Undo,
   Redo,
+  MessageSquare,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/tauri';
 // import mermaid from 'mermaid';
@@ -135,6 +136,9 @@ export default function App() {
   const [showMermaidDialog, setShowMermaidDialog] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [feedbackSent, setFeedbackSent] = useState(false);
   const [engineReady, setEngineReady] = useState(false);
   const [eraserPos, setEraserPos] = useState<{x: number; y: number} | null>(null);
   
@@ -1090,13 +1094,25 @@ export default function App() {
 
                 {/* New Board */}
                 <button
-                  className="w-full bg-foreground text-background hover:bg-foreground/90 rounded-lg py-2 px-3 flex justify-center items-center gap-2 text-sm font-semibold transition-all"
+                  className="w-full bg-foreground text-background hover:bg-foreground/90 rounded-lg py-2 px-3 flex justify-center items-center gap-2 text-sm font-semibold transition-all mb-2"
                   onClick={() => {
                     setShowClearConfirm(true);
                   }}
                 >
                   <Plus className="w-4 h-4" />
                   New Board
+                </button>
+
+                {/* Beta Feedback */}
+                <button
+                  className="w-full bg-muted/60 text-foreground hover:bg-muted border border-foreground/10 rounded-lg py-2 px-3 flex justify-center items-center gap-2 text-xs font-semibold transition-all"
+                  onClick={() => {
+                    setShowFeedbackModal(true);
+                    setIsMenuOpen(false);
+                  }}
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Beta Feedback & Bug Report
                 </button>
               </div>
             </div>
@@ -1466,6 +1482,85 @@ export default function App() {
                 Yes, Clear Board
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Beta Feedback Modal */}
+      {showFeedbackModal && (
+        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-background/60 backdrop-blur-sm pointer-events-auto">
+          <div className="bg-background/90 backdrop-blur-xl border border-foreground/10 rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                  <MessageSquare className="w-5 h-5 text-purple-500" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-foreground tracking-tight">Beta Feedback</h2>
+                  <p className="text-xs text-muted-foreground">Help us improve Aerial for public launch</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setShowFeedbackModal(false); setFeedbackSent(false); }}
+                className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-foreground/10 transition-colors"
+              >
+                <X className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </div>
+
+            {feedbackSent ? (
+              <div className="py-8 flex flex-col items-center justify-center text-center gap-2">
+                <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center text-green-500 text-xl font-bold">
+                  ✓
+                </div>
+                <h3 className="font-semibold text-foreground">Thank you for your feedback!</h3>
+                <p className="text-xs text-muted-foreground max-w-xs">Your input has been recorded and will help make Aerial better.</p>
+                <button
+                  onClick={() => { setShowFeedbackModal(false); setFeedbackSent(false); }}
+                  className="mt-4 px-4 py-2 bg-foreground text-background rounded-xl text-xs font-semibold hover:opacity-90 transition-all"
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                <textarea
+                  value={feedbackText}
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                  placeholder="Describe any bugs you encountered or suggestions you have..."
+                  className="w-full h-32 bg-background border border-border rounded-xl p-3 text-sm focus:outline-none focus:border-foreground focus:ring-1 focus:ring-foreground resize-none"
+                />
+                <div className="flex items-center justify-between">
+                  <a
+                    href="https://github.com/ARASKOVA-labs/Aerial/issues/new"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-purple-500 hover:underline flex items-center gap-1 font-medium"
+                  >
+                    Open GitHub Issue →
+                  </a>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowFeedbackModal(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-foreground hover:bg-foreground/5 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      disabled={!feedbackText.trim()}
+                      onClick={() => {
+                        console.log('[Beta Feedback Submitted]:', feedbackText);
+                        setFeedbackSent(true);
+                        setFeedbackText('');
+                      }}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 transition-all shadow-sm"
+                    >
+                      Submit Feedback
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

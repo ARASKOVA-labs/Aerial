@@ -1,0 +1,8 @@
+[package]
+name = "aras-layout"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aras-dsl = { path = "../aras-dsl" }
+serde = { version = "1.0", features = ["derive"] }

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { motion, useAnimate } from "motion/react";
 import {
   Menu,
   Plus,
@@ -23,13 +24,11 @@ import {
   Sparkles,
   Image as ImageIcon,
   FileText,
-  Code2,
   X,
-  Loader2,
   Wand2,
   Eraser,
   Languages,
-  Activity,
+  Zap,
   MoreHorizontal,
   Undo,
   Redo,
@@ -1152,36 +1151,18 @@ export default function App() {
                {showMoreTools && (
                  <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-background/80 backdrop-blur-2xl border border-foreground/10 shadow-2xl rounded-xl p-2 w-48 flex flex-col gap-1 z-50">
                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold px-2 py-1">Special Pens</p>
-                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'fountain' ? 'bg-foreground/10' : ''}`} onClick={() => { selectTool('fountain'); setShowMoreTools(false); }}>
-                     <Pen className="w-4 h-4" /> Calligraphy Pen
-                   </button>
-                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'highlighter' ? 'bg-foreground/10' : ''}`} onClick={() => { selectTool('highlighter'); setShowMoreTools(false); }}>
-                     <Highlighter className="w-4 h-4" /> Highlighter
-                   </button>
-                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'magic_pen' ? 'bg-foreground/10 text-purple-500' : ''}`} onClick={() => { selectTool('magic_pen'); setShowMoreTools(false); }}>
-                     <Wand2 className="w-4 h-4" /> Magic Pen
-                   </button>
-                   <button className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 ${activeTool === 'laser_pen' ? 'bg-foreground/10 text-red-500' : ''}`} onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }}>
-                     <Activity className="w-4 h-4" /> Laser Pen
-                   </button>
+                   <DropdownToolBtn icon={Pen} title="Calligraphy Pen" active={activeTool === 'fountain'} onClick={() => { selectTool('fountain'); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={Highlighter} title="Highlighter" active={activeTool === 'highlighter'} onClick={() => { selectTool('highlighter'); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={Wand2} title="Magic Pen" active={activeTool === 'magic_pen'} className="text-purple-500" onClick={() => { setShowMermaidDialog(true); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={Zap} title="Laser Pen" active={activeTool === 'laser_pen'} className="text-red-500" onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }} />
                    
                    <div className="h-px bg-foreground/10 my-1" />
                    <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold px-2 py-1">Insert & Actions</p>
-                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }}>
-                     <FileText className="w-4 h-4" /> Insert PDF
-                   </button>
-                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }}>
-                     <ImageIcon className="w-4 h-4" /> Insert Image
-                   </button>
-                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5" onClick={() => { handleMermaid(); setShowMoreTools(false); }}>
-                     <Code className="w-4 h-4" /> Mermaid Chart
-                   </button>
-                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5" onClick={() => { handleTranslate(magicLanguage); setShowMoreTools(false); }}>
-                     <Languages className="w-4 h-4" /> Translate Text
-                   </button>
-                   <button className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 text-red-500" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }}>
-                     <Trash2 className="w-4 h-4" /> Clear Board
-                   </button>
+                   <DropdownToolBtn icon={FileText} title="Insert PDF" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={ImageIcon} title="Insert Image" className="sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={Code} title="Mermaid Chart" onClick={() => { handleMermaid(); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={Languages} title="Translate Text" onClick={() => { setShowMermaidDialog(true); setShowMoreTools(false); }} />
+                   <DropdownToolBtn icon={Trash2} title="Clear Board" className="text-red-500 hover:text-red-600" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }} />
                  </div>
                )}
              </div>
@@ -1570,373 +1551,128 @@ export default function App() {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function ToolBtn({ icon: Icon, title, onClick, active }: { icon: React.FC<{className?: string}>; title: string; onClick: () => void; active?: boolean }) {
+function AnimatedToolIcon({ icon: Icon, title, className, isHovered }: { icon: any, title: string, className?: string, isHovered?: boolean }) {
+  const [scope, animate] = useAnimate();
+  const MotionIcon = useMemo(() => motion.create(Icon), [Icon]);
+
+  const handleHover = useCallback(async () => {
+    if (!scope.current) return;
+    const t = title.toLowerCase();
+    
+    if (scope.current?.startAnimation) {
+       scope.current.startAnimation();
+       return;
+    }
+
+    if (t.includes("pen") || t.includes("draw")) {
+      await animate(scope.current, { rotate: [0, -20, 10, -10, 0], x: [0, -2, 2, -1, 0] }, { duration: 0.5 });
+    } else if (t.includes("select")) {
+      await animate(scope.current, { scale: [1, 0.7, 1.2, 1], y: [0, -3, 0] }, { duration: 0.4 });
+    } else if (t.includes("hand") || t.includes("pan")) {
+      await animate(scope.current, { x: [0, -4, 4, -2, 2, 0], y: [0, 2, 0] }, { duration: 0.5 });
+    } else if (t.includes("eraser")) {
+      await animate(scope.current, { rotate: [0, 30, -30, 0], x: [0, 4, -4, 0] }, { duration: 0.4 });
+    } else if (t.includes("rectangle") || t.includes("square")) {
+      await animate(scope.current, { scale: [1, 1.1, 0.9, 1], rotate: [0, 5, -5, 0] }, { duration: 0.4 });
+    } else if (t.includes("circle") || t.includes("ellipse")) {
+      await animate(scope.current, { scale: [1, 1.1, 0.9, 1], rotate: [0, 180, 360] }, { duration: 0.6 });
+    } else if (t.includes("arrow") || t.includes("line")) {
+      await animate(scope.current, { x: [0, 5, 0], y: [0, -5, 0] }, { duration: 0.4 });
+    } else if (t.includes("text") || t.includes("type")) {
+      await animate(scope.current, { y: [0, -4, 0], scale: [1, 1.1, 1] }, { duration: 0.4 });
+    } else if (t.includes("image")) {
+      await animate(scope.current, { scale: [1, 1.2, 1], rotate: [0, 5, -5, 0] }, { duration: 0.4 });
+    } else if (t.includes("trash") || t.includes("clear")) {
+      await animate(scope.current, { rotate: [0, -10, 10, -10, 0], y: [0, -2, 0] }, { duration: 0.4 });
+    } else if (t.includes("zoom")) {
+      await animate(scope.current, { scale: [1, 1.3, 1] }, { duration: 0.4 });
+    } else if (t.includes("undo")) {
+      await animate(scope.current, { rotate: [0, -45, 0], x: [0, -3, 0] }, { duration: 0.4 });
+    } else if (t.includes("redo")) {
+      await animate(scope.current, { rotate: [0, 45, 0], x: [0, 3, 0] }, { duration: 0.4 });
+    } else {
+      await animate(scope.current, { scale: [1, 1.2, 0.9, 1] }, { duration: 0.4 });
+    }
+  }, [animate, scope, title]);
+
+  const handleLeave = useCallback(async () => {
+    if (scope.current?.stopAnimation) {
+      scope.current.stopAnimation();
+    } else if (scope.current) {
+      await animate(scope.current, { rotate: 0, x: 0, y: 0, scale: 1 }, { duration: 0.2 });
+    }
+  }, [animate, scope]);
+
+  useEffect(() => {
+    if (isHovered) handleHover();
+    else handleLeave();
+  }, [isHovered, handleHover, handleLeave]);
+
+  return <MotionIcon ref={scope} className={className} />;
+}
+
+function DropdownToolBtn({ icon, title, onClick, active, className }: any) {
+  const [isHovered, setIsHovered] = useState(false);
+  return (
+    <button
+      className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 transition-all duration-200 hover:scale-105 active:scale-95 ${active ? 'bg-foreground/10 text-primary' : ''} ${className || ''}`}
+      onClick={onClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
+      <AnimatedToolIcon icon={icon} title={title} isHovered={isHovered} className="w-4 h-4" />
+      {title}
+    </button>
+  );
+}
+
+function ToolBtn({ icon, title, onClick, active }: { icon: any; title: string; onClick: () => void; active?: boolean }) {
+  const [isHovered, setIsHovered] = useState(false);
   return (
     <button
       title={title}
       onClick={onClick}
-      className={`w-8 h-8 rounded-md flex items-center justify-center transition-all ${
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      className={`group w-8 h-8 rounded-md flex items-center justify-center transition-all duration-200 hover:scale-110 active:scale-95 ${
         active
-          ? 'bg-foreground text-background shadow-sm'
+          ? 'bg-foreground text-background shadow-sm scale-110'
           : 'text-foreground hover:bg-foreground/10'
       }`}
     >
-      <Icon className="w-4 h-4" />
+      <AnimatedToolIcon icon={icon} title={title} isHovered={isHovered} className="w-4 h-4" />
     </button>
   );
 }
 
 // ... The new MermaidDialog component will go here ...
-type FeaturedModel = { alias: string, display_name: string, description: string, default_quant: string, size_gb: number };
-type ModelEntry = { name: string, size_bytes: number };
-
-function MermaidDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (code: string) => void }) {
-  const [tab, setTab] = useState<'generate' | 'library' | 'code'>('generate');
-  const [input, setInput] = useState('');
-  
-  // Model State
-  const [featuredModels, setFeaturedModels] = useState<FeaturedModel[]>([]);
-  const [installedModels, setInstalledModels] = useState<ModelEntry[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  
-  // OpenRouter state
-  const OR_API_KEY = import.meta.env.VITE_OPENROUTER_API_KEY || '';
-  const OPENROUTER_MODELS = [
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 550B (Free)' },
-    { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B (Free)' },
-  ];
-  const isOpenRouter = selectedModel.startsWith('openrouter:');
-  const openRouterModelId = selectedModel.replace('openrouter:', '');
-  
-  // Generation State
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedOutput, setGeneratedOutput] = useState('');
-  
-  // Download State
-  const [downloadingAlias, setDownloadingAlias] = useState<string | null>(null);
-  const [downloadPct, setDownloadPct] = useState(0);
-
-  useEffect(() => {
-    import('@tauri-apps/api/tauri').then(({ invoke }) => {
-      invoke<FeaturedModel[]>('rustama_get_featured_models').then(setFeaturedModels);
-      refreshInstalledModels();
-    });
-    
-    let isMounted = true;
-    let unlistenProgress: any;
-    let unlistenToken: any;
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      listen<{ downloaded: number, total: number, pct: number }>('rustama://pull-progress', (e) => {
-        setDownloadPct(e.payload.pct);
-      }).then(u => {
-        if (!isMounted) u();
-        else unlistenProgress = u;
-      });
-      
-      listen<string>('rustama://token', (e) => {
-        setGeneratedOutput(prev => prev + e.payload);
-      }).then(u => {
-        if (!isMounted) u();
-        else unlistenToken = u;
-      });
-    });
-    
-    return () => { 
-      isMounted = false;
-      if (unlistenProgress) unlistenProgress(); 
-      if (unlistenToken) unlistenToken(); 
-    };
-  }, []);
-
-  const refreshInstalledModels = () => {
-    import('@tauri-apps/api/tauri').then(({ invoke }) => {
-      invoke<ModelEntry[]>('rustama_list_models').then(models => {
-        setInstalledModels(models);
-        if (models.length > 0 && !selectedModel) {
-          setSelectedModel(models[0].name);
-        } else if (models.length === 0 && !selectedModel) {
-          // Default to first OpenRouter model for testing
-          setSelectedModel('openrouter:nvidia/nemotron-3-ultra-550b-a55b:free');
-        }
-      });
-    });
-  };
-
-  const handleDownload = async (m: FeaturedModel) => {
-    setDownloadingAlias(m.alias);
-    setDownloadPct(0);
-    try {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-      await invoke('rustama_pull_model', { name: m.alias, quant: m.default_quant });
-      refreshInstalledModels();
-    } catch (e) {
-      alert("Failed to download model: " + e);
-    }
-    setDownloadingAlias(null);
-  };
-
-  const handleGenerate = async () => {
-    if (!input || !selectedModel) return;
-    setIsGenerating(true);
-    setGeneratedOutput('');
-    
-    try {
-      const { invoke } = await import('@tauri-apps/api/tauri');
-      let finalCode: string;
-
-      if (isOpenRouter) {
-        finalCode = await invoke<string>('openrouter_generate', {
-          model: openRouterModelId,
-          prompt: input,
-          apiKey: OR_API_KEY,
-        });
-      } else {
-        finalCode = await invoke<string>('rustama_generate', { model: selectedModel, prompt: input });
-      }
-      
-      // ── Deep clean-up of AI output (6-pass robust sanitizer) ────────────────
-      let cleanCode = finalCode;
-
-      // Pass 1: Strip AI reasoning blocks, markdown fences and stop tokens
-      cleanCode = cleanCode.replace(/<think>[\s\S]*?<\/think>/g, '');
-      cleanCode = cleanCode.replace(/```(?:aras|mermaid|diagram)?/gi, '').replace(/```/g, '');
-      cleanCode = cleanCode.replace(/<\|im_end\|>/g, '').replace(/<\/s>/g, '').replace(/<\|eot_id\|>/g, '');
-      // Strip leading prose like "Here is the diagram:"
-      cleanCode = cleanCode.replace(/^[\s\S]*?(?=@type\s*:)/m, '');
-
-      // Pass 2: Normalize quoted label contents (collapse newlines inside quotes)
-      cleanCode = cleanCode.replace(/"([^"]*)"/g, (_, inner) =>
-        '"' + inner.replace(/\\n/g, ' ').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim() + '"'
-      );
-
-      // Pass 3: Fix malformed DSL syntax from AI
-      // Fix: group"Name" → group "Name"
-      cleanCode = cleanCode.replace(/\bgroup"([^"]+)"/g, 'group "$1"');
-      // Fix: "Name"{ → "Name" {
-      cleanCode = cleanCode.replace(/("[^"]+")\{/g, '$1 {');
-      // Fix: } immediately followed by a new statement on same line
-      cleanCode = cleanCode.replace(/\}\s*(group|style|@[a-z]|\[)/g, '\n}\n$1');
-      // Fix: statement ending then [ on same line (but not arrow targets)
-      cleanCode = cleanCode.replace(/([^-<>\s])\s+\[/g, '$1\n[');
-
-      // Pass 4: Merge multi-line labels (lines not starting a new statement are continuations)
-      const rawLines = cleanCode.split('\n');
-      const mergedLines: string[] = [];
-      for (const line of rawLines) {
-        const t = line.trim();
-        if (t === '') continue;
-        const isNewStmt =
-          t.startsWith('@') ||
-          t.startsWith('[') ||
-          t.startsWith('//') ||
-          t.startsWith('group') ||
-          t.startsWith('style') ||
-          t === '}';
-        if (isNewStmt) {
-          mergedLines.push(t);
-        } else if (mergedLines.length > 0) {
-          mergedLines[mergedLines.length - 1] = mergedLines[mergedLines.length - 1].trimEnd() + ' ' + t;
-        }
-      }
-      cleanCode = mergedLines.join('\n').trim();
-
-      // Pass 5: Remove lines that are just lone punctuation artifacts from the AI
-      cleanCode = cleanCode.split('\n')
-        .filter(l => !/^[|,;:.\-]+$/.test(l.trim()))
-        .join('\n');
-
-      console.log('[ArasDiagram] Code to render:\n', cleanCode);
-      setGeneratedOutput(cleanCode);
-
-      onSubmit(cleanCode);
-    } catch (e) {
-      console.error('[ArasDiagram] Generation error:', e);
-      alert("Generation failed: " + e);
-    }
-    setIsGenerating(false);
-  };
-
-  const isInstalled = (alias: string) => installedModels.some(m => m.name === alias);
-
+function MermaidDialog({ onClose }: { onClose: () => void; onSubmit?: (code: string) => void }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/50 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden flex flex-col max-h-[90vh]">
-        
-        {/* Header */}
+      <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between p-4 border-b border-border bg-muted/20">
           <div className="flex items-center gap-3">
             <Sparkles className="w-5 h-5 text-primary" />
             <div>
               <h2 className="text-sm font-bold">Aerial AI Studio</h2>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Powered by Rustama Engine</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-muted rounded-md transition-colors text-muted-foreground hover:text-foreground">
             <X className="w-4 h-4" />
           </button>
         </div>
-        
-        {/* Tabs */}
-        <div className="flex px-4 pt-4 border-b border-border bg-muted/10 gap-6">
+        <div className="p-6 text-center">
+          <Wand2 className="w-12 h-12 text-primary mx-auto mb-4 opacity-50" />
+          <h3 className="text-lg font-bold mb-2">Coming Soon</h3>
+          <p className="text-sm text-muted-foreground">
+            AI features will be enabled in future patches. Stay tuned!
+          </p>
           <button
-            onClick={() => setTab('generate')}
-            className={`pb-3 text-xs font-bold uppercase tracking-widest transition-colors ${tab === 'generate' ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'}`}
+            onClick={onClose}
+            className="mt-6 bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-lg text-sm font-bold w-full transition-all shadow-md"
           >
-            Generate
+            Got it
           </button>
-          <button
-            onClick={() => setTab('library')}
-            className={`pb-3 text-xs font-bold uppercase tracking-widest transition-colors flex items-center gap-2 ${tab === 'library' ? 'text-foreground border-b-2 border-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            Model Library
-            <span className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{installedModels.length}</span>
-          </button>
-          <button
-            onClick={() => setTab('code')}
-            className={`pb-3 text-xs font-bold uppercase tracking-widest transition-colors ${tab === 'code' ? 'text-foreground border-b-2 border-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-          >
-            Raw Code
-          </button>
-        </div>
-
-        {/* Body */}
-        <div className="p-6 overflow-y-auto">
-          {tab === 'generate' && (
-            <div className="flex flex-col gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold">Engine:</span>
-                <select 
-                  value={selectedModel} 
-                  onChange={e => setSelectedModel(e.target.value)}
-                  className="bg-muted text-sm rounded-md px-3 py-1.5 border border-border focus:outline-none flex-1"
-                >
-                  {installedModels.length === 0 && OPENROUTER_MODELS.length === 0 && <option value="">No models available</option>}
-                  {installedModels.length > 0 && (
-                    <optgroup label="🖥️ Local (Rustama Engine)">
-                      {installedModels.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
-                    </optgroup>
-                  )}
-                  <optgroup label="☁️ OpenRouter (Cloud)">
-                    {OPENROUTER_MODELS.map(m => (
-                      <option key={m.id} value={`openrouter:${m.id}`}>{m.label}</option>
-                    ))}
-                  </optgroup>
-                </select>
-                {installedModels.length === 0 && !isOpenRouter && (
-                  <button onClick={() => setTab('library')} className="text-xs text-primary font-bold hover:underline">
-                    Download local model
-                  </button>
-                )}
-              </div>
-
-              <textarea
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                placeholder="e.g., Create a sequence diagram of OAuth2 login flow..."
-                className="w-full h-24 bg-background border border-border rounded-lg p-3 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary resize-none placeholder:text-muted-foreground"
-              />
-              
-              <div className="flex justify-end">
-                <button
-                  onClick={handleGenerate}
-                  disabled={!input || isGenerating || !selectedModel}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all shadow-md hover:shadow-lg"
-                >
-                  {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-                  {isGenerating ? 'Generating...' : 'Generate Flowchart'}
-                </button>
-              </div>
-
-              {(isGenerating || generatedOutput) && (
-                <div className="mt-2 bg-muted/30 border border-border rounded-lg p-4 font-mono text-sm whitespace-pre-wrap text-foreground/80 min-h-[100px]">
-                  {(generatedOutput
-                      .replace(/<\|im_end\|>/g, '')
-                      .replace(/<\/s>/g, '')
-                      .replace(/<\|eot_id\|>/g, '')
-                      .replace(/```(?:aras|mermaid)?/gi, '')
-                      .replace(/```/g, '')
-                      .trim()) || "Connecting to engine..."}
-                  {isGenerating && <span className="animate-pulse inline-block w-2 h-4 bg-primary ml-1" />}
-                </div>
-              )}
-            </div>
-          )}
-
-          {tab === 'library' && (
-            <div className="grid grid-cols-2 gap-4">
-              {featuredModels.map(m => {
-                const installed = isInstalled(m.alias);
-                const downloading = downloadingAlias === m.alias;
-                return (
-                  <div key={m.alias} className="border border-border rounded-lg p-4 bg-muted/10 flex flex-col gap-2">
-                    <div className="flex justify-between items-start">
-                      <h3 className="font-bold text-sm">{m.display_name}</h3>
-                      <span className="text-[10px] uppercase font-bold bg-muted px-2 py-1 rounded tracking-widest">{m.size_gb} GB</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground line-clamp-2 min-h-[32px]">{m.description}</p>
-                    <div className="flex gap-2 mt-1">
-                      {(m as any).tags?.map((t: string) => <span key={t} className="text-[9px] uppercase border border-border px-1.5 py-0.5 rounded text-muted-foreground">{t}</span>)}
-                    </div>
-                    
-                    <div className="mt-2 pt-3 border-t border-border">
-                      {installed ? (
-                        <div className="flex justify-between items-center text-xs font-bold text-green-600 dark:text-green-400">
-                          <span>Installed</span>
-                          <button 
-                            className="text-red-500 hover:underline"
-                            onClick={async () => {
-                              const { invoke } = await import('@tauri-apps/api/tauri');
-                              await invoke('rustama_delete_model', { name: m.alias });
-                              refreshInstalledModels();
-                            }}
-                          >Delete</button>
-                        </div>
-                      ) : downloading ? (
-                        <div className="flex flex-col gap-1">
-                          <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
-                            <span>Downloading...</span>
-                            <span>{downloadPct}%</span>
-                          </div>
-                          <div className="w-full bg-muted rounded-full h-1.5">
-                            <div className="bg-primary h-1.5 rounded-full transition-all duration-300" style={{ width: `${downloadPct}%` }} />
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          disabled={downloadingAlias !== null}
-                          onClick={() => handleDownload(m)}
-                          className="w-full text-xs font-bold bg-foreground text-background py-1.5 rounded-md hover:opacity-90 transition-opacity disabled:opacity-30"
-                        >
-                          Download Model
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          
-          {tab === 'code' && (
-            <div className="flex flex-col gap-4">
-              <textarea
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                placeholder="graph TD;&#10;  A-->B;&#10;  A-->C;"
-                className="w-full h-48 bg-background border border-border rounded-lg p-3 text-sm font-mono focus:outline-none focus:border-foreground focus:ring-1 focus:ring-foreground resize-none"
-              />
-              <div className="flex justify-end">
-                <button
-                  onClick={() => { if (input) onSubmit(input); }}
-                  disabled={!input}
-                  className="bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all"
-                >
-                  <Code2 className="w-4 h-4" />
-                  Render Diagram
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

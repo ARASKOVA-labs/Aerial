@@ -1,10 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tokio::sync::Mutex;
 use tauri::{State, Window};
-use rustama_engine::{InferenceConfig, InferenceEngine, HuggingFaceHub, ModelRegistry, ModelEntry, featured_models};
-use rustama_engine::FeaturedModel;
 
 use redb::{Database, TableDefinition};
 use std::sync::Arc;
@@ -109,7 +106,6 @@ async fn openrouter_generate(
 const BOARDS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("boards_v2");
 
 struct AppState {
-    engine: Mutex<Option<InferenceEngine>>,
     db: Arc<Database>,
     app_data_dir: PathBuf,
 }
@@ -155,83 +151,7 @@ fn load_asset(state: State<'_, AppState>, id: String) -> Result<String, String> 
     std::fs::read_to_string(file_path).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn rustama_get_featured_models() -> Vec<FeaturedModel> {
-    featured_models()
-}
-
-#[tauri::command]
-fn rustama_list_models() -> Result<Vec<ModelEntry>, String> {
-    let registry = ModelRegistry::load().map_err(|e| e.to_string())?;
-    Ok(registry.all().to_vec())
-}
-
-#[tauri::command]
-fn rustama_delete_model(name: String) -> Result<bool, String> {
-    let mut registry = ModelRegistry::load().map_err(|e| e.to_string())?;
-    let deleted = registry.remove(&name).map_err(|e| e.to_string())?;
-    registry.save().map_err(|e| e.to_string())?;
-    Ok(deleted)
-}
-
-#[derive(Clone, serde::Serialize)]
-struct ProgressPayload {
-    downloaded: u64,
-    total: u64,
-    pct: u8,
-}
-
-#[tauri::command]
-async fn rustama_pull_model(window: Window, name: String, quant: String) -> Result<String, String> {
-    let hub = HuggingFaceHub::new();
-    let (repo, filename) = hub.resolve_model(&name, &quant).map_err(|e| e.to_string())?;
-    
-    let path = hub.download(&repo, &filename, |downloaded, total| {
-        let pct = if total > 0 { ((downloaded as f64 / total as f64) * 100.0) as u8 } else { 0 };
-        let _ = window.emit("rustama://pull-progress", ProgressPayload { downloaded, total, pct });
-    }).await.map_err(|e| e.to_string())?;
-
-    let mut registry = ModelRegistry::load().map_err(|e| e.to_string())?;
-    registry.register(&name, path.clone()).map_err(|e| e.to_string())?;
-    registry.save().map_err(|e| e.to_string())?;
-    
-    Ok(path.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-async fn rustama_generate(
-    window: Window,
-    state: State<'_, AppState>,
-    model: String,
-    prompt: String
-) -> Result<String, String> {
-    let registry = ModelRegistry::load().map_err(|e| e.to_string())?;
-    let model_path = registry.resolve(&model).ok_or("Model not found in registry")?;
-
-    let mut engine_guard = state.engine.lock().await;
-    if engine_guard.is_none() {
-        let config = InferenceConfig {
-            model_path,
-            system_prompt: Some(ARAS_SYSTEM_PROMPT.to_string()),
-            // NOTE: GBNF grammar is disabled — llama-cpp-2 v0.1.150 has a known
-            // bug where certain grammar patterns cause an abort() in llama-grammar.cpp:940.
-            // Re-enable this once we upgrade to a llama-cpp-2 version >= 0.2 which has the fix.
-            // grammar_str: Some(include_str!("aras.gbnf").to_string()),
-            ..Default::default()
-        };
-        let engine = InferenceEngine::load(config).await.map_err(|e| e.to_string())?;
-        *engine_guard = Some(engine);
-    }
-    
-    let engine = engine_guard.as_mut().unwrap();
-    engine.clear_context();
-    
-    let response = engine.generate_streaming(&prompt, |token| {
-        let _ = window.emit("rustama://token", token);
-    }).await.map_err(|e| e.to_string())?;
-
-    Ok(response)
-}
+// Removed rustama commands
 
 use tauri::Manager;
 
@@ -250,7 +170,6 @@ fn main() {
             write_txn.commit().expect("Failed to commit txn");
             
             app.manage(AppState {
-                engine: Mutex::new(None),
                 db: Arc::new(db),
                 app_data_dir,
             });
@@ -261,11 +180,6 @@ fn main() {
             load_board,
             save_asset,
             load_asset,
-            rustama_get_featured_models,
-            rustama_list_models,
-            rustama_delete_model,
-            rustama_pull_model,
-            rustama_generate,
             openrouter_generate,
             diagram::render_diagram,
             diagram::update_diagram_node

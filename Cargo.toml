@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "aerial-core/aerial-engine",
-    "araskova-labs/rustama-engine",
     "araskova-labs/collab-server",
     "src-tauri"
 , "aerial-core/aras-dsl", "aerial-core/aras-layout"]

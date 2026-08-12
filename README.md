@@ -1,57 +1,52 @@
 <div align="center">
-  <h1>🚀 Aerial Engine</h1>
-  <p><strong>A bare-metal, zero-copy CRDT canvas engine built in pure Rust.</strong></p>
-  <p>120 FPS • Local-First • Offline Capable • Built for Scale</p>
+  <h1>🚀 Aerial Canvas</h1>
+  <p><strong>Open-Source High-Performance Canvas & Offline Classroom Platform</strong></p>
+  <p>120 FPS • Local-First • Zero-Copy CRDTs • Built for Scale</p>
 </div>
 
 ---
 
-## ⚡ Why Aerial Engine?
+## ⚡ What is Aerial Canvas?
 
-Most web-based whiteboard and canvas applications hit a hard memory and garbage collection ceiling after a few thousand strokes. To scale beyond that, you can't just write faster JavaScript. You need a different architecture.
+Aerial Canvas is an open-source, high-performance digital whiteboard and classroom tool built natively in Rust and WebAssembly, wrapped in a lightweight Tauri desktop app.
 
-**Aerial Engine** is the open-source (AGPL-3.0) core of the Aerial desktop app. It completely bypasses V8 garbage collection by managing all layout, strokes, and scene structures in a pure Rust WebAssembly (`wasm32-unknown-unknown`) environment.
+It manages layout, strokes, and scene structures in a pure Rust WebAssembly (`wasm32-unknown-unknown`) engine, ensuring ultra-smooth 120 FPS performance even with thousands of interactive strokes.
 
-### 🏗️ Architecture
-
-- **Zero-Copy CRDTs**: Powered by `yrs` (Yjs Rust port). The entire canvas state is a reactive CRDT. There is no "syncing" step—drawing on the board intrinsically modifies the binary state vector, which can instantly compute missing deltas to beam over the wire.
-- **Bare-Metal Storage**: Instead of IndexedDB wrapping JSON, we persist the canvas straight to disk using `redb`. High-throughput, local NVMe storage speeds with zero serialization lag.
-- **Tauri Integration**: Built seamlessly for Tauri. Binary vectors are sent straight over the IPC bridge as raw `Uint8Array`s without expensive base64 JSON stringification.
-
-## 📦 What's Included (The `aerial-core` workspace)
-
-- **`aerial-engine`**: The Rust-compiled WASM module. Exposes our strict graphics bindings (`export_delta_update`, `apply_remote_delta`, `get_local_state_vector`) that can be embedded into any TypeScript frontend.
-- **`src-tauri`**: The desktop bridge that wires the engine directly to the native OS file system.
-
-*Note: The proprietary multi-room WebSocket relay and Local AI runtime (`rustama-engine`) are not included in this open-source release.*
+### ✨ Features
+- **Zero-Copy CRDTs**: Powered by `yrs` (Yjs Rust port) for instantaneous local state tracking.
+- **Bare-Metal Storage**: High-throughput, local storage speeds using `redb`.
+- **Interactive Tools**: Full suite of vector tools, calligraphy pen, highlighter, text, diagram parsing, and image support.
+- **Cross-Platform**: Built on Tauri for Windows, macOS, and Linux support.
 
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js & npm
+- Node.js & `bun`
 - Rust (`rustup default stable`)
-- `wasm-pack`
+- `wasm-pack` (`cargo install wasm-pack`)
 
-### Build the Engine
-Compile the WASM core for the web target:
-```bash
-cd aerial-core/aerial-engine
-wasm-pack build --target web
-```
+### Build & Run
+1. Install dependencies:
+   ```bash
+   bun install
+   ```
+2. Build the WASM engine:
+   ```bash
+   cd aerial-core/aerial-engine
+   wasm-pack build --target web
+   cp -r pkg/* ../../public/aerial-engine/
+   cd ../..
+   ```
+3. Run the desktop app:
+   ```bash
+   bun run tauri dev
+   ```
 
-Copy the output `pkg` folder to your public frontend directory (e.g., `public/aerial-engine`).
-
-### Run the App
-```bash
-npm install
-npm run tauri dev
-```
+## 🤝 Contributing
+Contributions are what make the open source community such an amazing place to learn, inspire, and create. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.
 
 ## 📜 License
-
-This core engine is licensed under the **AGPL-3.0 License**.
-
-We believe in open-source infrastructure. If you're building an EdTech tool, a Notion clone, or a new productivity app, you can embed `aerial-engine` as your high-performance canvas layer, provided you open-source your modifications to the engine under the same terms.
+Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
-*Built by Araskova Labs.*
+*Built with ❤️ by [Araskova Labs](https://github.com/ARASKOVA-labs).*

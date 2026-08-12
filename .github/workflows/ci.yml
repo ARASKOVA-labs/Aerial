@@ -14,15 +14,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
 
       - name: Install dependencies
+        shell: bash
         run: bun install
 
       - name: Build frontend
+        shell: bash
         run: bun run build
 
   check-rust:
@@ -33,6 +40,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Linux dependencies
+        shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
@@ -46,9 +54,12 @@ jobs:
           version: 'latest'
 
       - name: Build WASM engine
+        shell: bash
         run: |
+          mkdir -p public/aerial-engine
           cd aerial-core/aerial-engine
           wasm-pack build --target web --out-dir ../../public/aerial-engine
 
       - name: Cargo Check
+        shell: bash
         run: cargo check --all

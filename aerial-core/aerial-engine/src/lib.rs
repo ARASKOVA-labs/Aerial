@@ -139,19 +139,28 @@ impl AerialCanvas {
     }
 
     // ── Tool Selectors ────────────────────────────────────────────────────────
-    pub fn set_tool_freedraw(&mut self) { self.tool = Tool::FreeDraw; }
-    pub fn set_tool_rectangle(&mut self) { self.tool = Tool::Rectangle; }
-    pub fn set_tool_ellipse(&mut self) { self.tool = Tool::Ellipse; }
-    pub fn set_tool_line(&mut self) { self.tool = Tool::Line; }
-    pub fn set_tool_select(&mut self) { self.tool = Tool::Select; }
-    pub fn set_tool_hand(&mut self) { self.tool = Tool::Hand; }
-    pub fn set_tool_arrow(&mut self) { self.tool = Tool::Arrow; }
-    pub fn set_tool_fountain_pen(&mut self) { self.tool = Tool::FountainPen; }
-    pub fn set_tool_highlighter(&mut self) { self.tool = Tool::Highlighter; }
-    pub fn set_tool_text(&mut self) { self.tool = Tool::Text; }
-    pub fn set_tool_eraser(&mut self) { self.tool = Tool::Eraser; }
-    pub fn set_tool_magic_pen(&mut self) { self.tool = Tool::MagicPen; }
-    pub fn set_tool_laser_pen(&mut self) { self.tool = Tool::LaserPen; }
+    // Each setter resets all in-flight interaction state so switching tools
+    // never leaves dangling strokes, selections, or drag operations behind.
+    fn reset_interaction_state(&mut self) {
+        self.active_stroke = None;
+        self.is_drawing = false;
+        self.is_panning = false;
+        self.is_dragging = false;
+    }
+
+    pub fn set_tool_freedraw(&mut self)    { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::FreeDraw; }
+    pub fn set_tool_rectangle(&mut self)   { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Rectangle; }
+    pub fn set_tool_ellipse(&mut self)     { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Ellipse; }
+    pub fn set_tool_line(&mut self)        { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Line; }
+    pub fn set_tool_select(&mut self)      { self.reset_interaction_state(); self.tool = Tool::Select; }
+    pub fn set_tool_hand(&mut self)        { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Hand; }
+    pub fn set_tool_arrow(&mut self)       { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Arrow; }
+    pub fn set_tool_fountain_pen(&mut self){ self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::FountainPen; }
+    pub fn set_tool_highlighter(&mut self) { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Highlighter; }
+    pub fn set_tool_text(&mut self)        { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Text; }
+    pub fn set_tool_eraser(&mut self)      { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Eraser; }
+    pub fn set_tool_magic_pen(&mut self)   { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::MagicPen; }
+    pub fn set_tool_laser_pen(&mut self)   { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::LaserPen; }
 
     // ── Text & Selection ──────────────────────────────────────────────────────
     pub fn get_selected_text(&self) -> Option<String> {
@@ -461,19 +470,81 @@ impl AerialCanvas {
     pub fn screen_to_world_y(&self, sy: f64) -> f64 {
         (sy - self.offset_y) / self.zoom
     }
+    // ── Gesture Detection ────────────────────────────────────────────────────
+    fn is_scratch_gesture(&self, stroke: &Element) -> bool {
+        // A scratch needs a decent amount of points
+        if stroke.points.len() < 20 {
+            return false;
+        }
+        
+        let mut path_length = 0.0;
+        let mut reversals_x = 0;
+        let mut reversals_y = 0;
+        
+        let mut last_dx: f64 = 0.0;
+        let mut last_dy: f64 = 0.0;
+
+        for i in 1..stroke.points.len() {
+            let p1 = stroke.points[i - 1];
+            let p2 = stroke.points[i];
+            
+            let dx = p2.0 - p1.0;
+            let dy = p2.1 - p1.1;
+            
+            path_length += (dx * dx + dy * dy).sqrt();
+            
+            // Track direction changes, ignoring tiny jitters
+            if dx.abs() > 1.0 {
+                if last_dx != 0.0 && dx.signum() != last_dx.signum() {
+                    reversals_x += 1;
+                }
+                last_dx = dx;
+            }
+            if dy.abs() > 1.0 {
+                if last_dy != 0.0 && dy.signum() != last_dy.signum() {
+                    reversals_y += 1;
+                }
+                last_dy = dy;
+            }
+        }
+        
+        let bb_diag = (stroke.w * stroke.w + stroke.h * stroke.h).sqrt().max(1.0);
+        
+        // Cursive writing creates a wide bounding box, so path_length / bb_diag is low (1.5 - 3.0).
+        // A scribble concentrates a huge path length into a small bounding box.
+        let density = path_length / bb_diag;
+        
+        // A true scratch has high density AND many back-and-forth strokes.
+        let is_dense = density > 5.0;
+        let has_many_reversals = reversals_x > 7 || reversals_y > 7;
+        
+        is_dense && has_many_reversals
+    }
 
     // ── Mouse & Interaction Events ───────────────────────────────────────────
     pub fn on_mouse_down(&mut self, raw_x: f64, raw_y: f64) {
-        // Safety: If a previous stroke was not committed via on_mouse_up (e.g. lost pointerUp event), commit it now!
+        // Safety: If a previous stroke was not committed via on_mouse_up (e.g. lost
+        // pointerUp event from tablet driver double-fire or stylus leaving active area),
+        // commit it now — but ONLY if the stroke is substantial (≥2 points and a
+        // bounding box of at least 2×2 world-px). Degenerate micro-strokes caused by
+        // synthetic events or accidental taps must be silently discarded; committing
+        // them creates phantom elements that get selected and connected to the next
+        // stroke, producing the erratic triangular artifacts seen with Wacom/Gaemon tablets.
         if let Some(old_stroke) = self.active_stroke.take() {
-            if old_stroke.kind == "LaserPen" {
-                self.laser_strokes.push(old_stroke);
-            } else if old_stroke.kind == "MagicPen" {
-                self.magic_strokes.push(old_stroke);
-            } else {
-                self.save_state();
-                self.elements.push(old_stroke);
+            let is_substantial = old_stroke.points.len() >= 2
+                && old_stroke.w >= 2.0
+                && old_stroke.h >= 2.0;
+            if is_substantial {
+                if old_stroke.kind == "LaserPen" {
+                    self.laser_strokes.push(old_stroke);
+                } else if old_stroke.kind == "MagicPen" {
+                    self.magic_strokes.push(old_stroke);
+                } else {
+                    self.save_state();
+                    self.elements.push(old_stroke);
+                }
             }
+            // else: degenerate stub — discard silently
         }
 
         let wx = self.screen_to_world_x(raw_x);
@@ -678,15 +749,44 @@ impl AerialCanvas {
         self.is_dragging = false;
 
         if let Some(stroke) = self.active_stroke.take() {
-            if stroke.kind == "LaserPen" {
-                self.laser_strokes.push(stroke);
-            } else if stroke.kind == "MagicPen" {
-                self.magic_strokes.push(stroke);
-            } else {
-                self.save_state();
-                self.elements.push(stroke);
+            // Only commit strokes that are substantial — at least 2 points with a
+            // bounding box ≥2×2. This prevents phantom single-point elements from
+            // accidental taps or synthetic stylus events.
+            let is_substantial = stroke.points.len() >= 2
+                && stroke.w >= 2.0
+                && stroke.h >= 2.0;
+            if is_substantial {
+                // ── Scratch-to-erase detection ────────────────────────────────
+                // If this is a FreeDraw stroke with rapid back-and-forth motion
+                // (high direction reversal count relative to its bounding area),
+                // treat it as a "scratch" erase gesture instead of a normal stroke.
+                if stroke.kind == "FreeDraw" && self.is_scratch_gesture(&stroke) {
+                    self.save_state();
+                    // Erase all elements that overlap the scratch bounding box
+                    let sx = stroke.x;
+                    let sy = stroke.y;
+                    let sw = stroke.w;
+                    let sh = stroke.h;
+                    self.elements.retain(|el| {
+                        // AABB overlap test
+                        let overlaps = el.x < sx + sw
+                            && el.x + el.w > sx
+                            && el.y < sy + sh
+                            && el.y + el.h > sy;
+                        !overlaps
+                    });
+                    self.dirty = true;
+                    // Scratch stroke itself is NOT committed — it disappears
+                } else if stroke.kind == "LaserPen" {
+                    self.laser_strokes.push(stroke);
+                } else if stroke.kind == "MagicPen" {
+                    self.magic_strokes.push(stroke);
+                } else {
+                    self.save_state();
+                    self.elements.push(stroke);
+                }
+                self.dirty = true;
             }
-            self.dirty = true;
         }
     }
 
@@ -823,12 +923,14 @@ impl AerialCanvas {
             self.render_element(stroke);
         }
 
-        // Draw selection box
-        if let Some(id) = self.selected_id {
-            if let Some(el) = self.elements.iter().find(|e| e.id == id) {
-                self.ctx.set_stroke_style_str("#3b82f6");
-                self.ctx.set_line_width(1.5 / self.zoom);
-                let _ = self.ctx.stroke_rect(el.x - 4.0, el.y - 4.0, el.w + 8.0, el.h + 8.0);
+        // Draw selection box — only visible when the Select tool is active
+        if self.tool == Tool::Select {
+            if let Some(id) = self.selected_id {
+                if let Some(el) = self.elements.iter().find(|e| e.id == id) {
+                    self.ctx.set_stroke_style_str("#3b82f6");
+                    self.ctx.set_line_width(1.5 / self.zoom);
+                    let _ = self.ctx.stroke_rect(el.x - 4.0, el.y - 4.0, el.w + 8.0, el.h + 8.0);
+                }
             }
         }
 

@@ -1,4 +1,7 @@
-use aras_dsl::{parser, printer, ast::{Stmt, NodeId}};
+use aras_dsl::{
+    ast::{NodeId, Stmt},
+    parser, printer,
+};
 use aras_layout::render_svg;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -12,8 +15,7 @@ pub struct RenderResult {
 #[tauri::command]
 pub async fn render_diagram(code: String) -> Result<RenderResult, String> {
     tokio::task::spawn_blocking(move || {
-        let ast = parser::parse(&code)
-            .map_err(|e| format!("Failed to parse diagram: {}", e))?;
+        let ast = parser::parse(&code).map_err(|e| format!("Failed to parse diagram: {}", e))?;
 
         let (svg, hit_map) = render_svg(&ast);
 
@@ -24,10 +26,14 @@ pub async fn render_diagram(code: String) -> Result<RenderResult, String> {
 }
 
 #[tauri::command]
-pub async fn update_diagram_node(code: String, node_id: String, new_label: String) -> Result<String, String> {
+pub async fn update_diagram_node(
+    code: String,
+    node_id: String,
+    new_label: String,
+) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
-        let mut ast = parser::parse(&code)
-            .map_err(|e| format!("Failed to parse diagram: {}", e))?;
+        let mut ast =
+            parser::parse(&code).map_err(|e| format!("Failed to parse diagram: {}", e))?;
 
         let mut found = false;
 
@@ -67,7 +73,8 @@ pub async fn update_diagram_node(code: String, node_id: String, new_label: Strin
 
         // If it STILL wasn't found (implicitly defined in an edge), add it at the top
         if !found {
-            ast.stmts.insert(0, Stmt::NodeDecl(NodeId(node_id), new_label));
+            ast.stmts
+                .insert(0, Stmt::NodeDecl(NodeId(node_id), new_label));
         }
 
         Ok(printer::print(&ast))
@@ -75,4 +82,3 @@ pub async fn update_diagram_node(code: String, node_id: String, new_label: Strin
     .await
     .map_err(|e| e.to_string())?
 }
-

@@ -34,7 +34,7 @@ import {
   Redo,
   MessageSquare,
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 // import mermaid from 'mermaid';
 import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -143,6 +143,23 @@ export default function App() {
   const [feedbackSent, setFeedbackSent] = useState(false);
   const [engineReady, setEngineReady] = useState(false);
   const [eraserPos, setEraserPos] = useState<{x: number; y: number} | null>(null);
+  
+  const [palmRejection, setPalmRejectionState] = useState(true);
+  const palmRejectionRef = useRef<boolean>(true);
+  const setPalmRejection = useCallback((val: boolean | ((prev: boolean) => boolean)) => {
+    setPalmRejectionState((prev) => {
+      const next = typeof val === 'function' ? val(prev) : val;
+      palmRejectionRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const isDrawingRef = useRef<boolean>(false);
+  const activeDrawingPointerIdRef = useRef<number | null>(null);
+  const activeDrawingPointerTypeRef = useRef<string | null>(null);
+  const activeTouchesRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchStartDistRef = useRef<number | null>(null);
+  const lastTouchCenterRef = useRef<{ x: number; y: number } | null>(null);
   
   // Collaboration State
   const wsRef = useRef<WebSocket | null>(null);
@@ -427,7 +444,7 @@ export default function App() {
         if (dslCode) {
           const newLabel = window.prompt(`Rename diagram node [${nodeId}]:`);
           if (newLabel && newLabel.trim().length > 0) {
-            import('@tauri-apps/api/tauri').then(({ invoke }) => {
+            import('@tauri-apps/api/core').then(({ invoke }) => {
               invoke<string>('update_diagram_node', {
                 code: dslCode,
                 nodeId,
@@ -534,8 +551,8 @@ export default function App() {
     setIsFullscreen((prev) => {
       const next = !prev;
       import('@tauri-apps/api/window')
-        .then(({ appWindow }) => {
-          appWindow.setFullscreen(next).catch(() => {});
+        .then(({ getCurrentWindow }) => {
+          getCurrentWindow().setFullscreen(next).catch(() => {});
         })
         .catch(() => {
           // Fallback for web
@@ -664,9 +681,9 @@ export default function App() {
     }
     
     try {
-      const { fetch: tauriFetch } = await import('@tauri-apps/api/http');
+      const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
       const res = await tauriFetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`);
-      const data: any = res.data;
+      const data: any = await res.json();
       if (data && data[0]) {
         const translated = data[0].map((x: any) => x[0]).join('');
         engineRef.current.update_selected_text(translated);
@@ -775,29 +792,67 @@ export default function App() {
   // ── Canvas events ──────────────────────────────────────────────────────────
   // Using Pointer events ensures full support for Mouse, Touch, and Stylus/Pen.
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    if (!engineReady || !engineRef.current) return; // Bug #4 fix: guard against pre-load clicks
+    if (!engineReady || !engineRef.current) return;
 
-    // ── Stylus / Wacom fix ────────────────────────────────────────────────────
-    // Tablet drivers (Wacom, Gaemon, XP-Pen, etc.) fire BOTH a real 'pen' event
-    // AND a synthetic 'mouse' event for every physical pen action. Accepting both
-    // causes a double-fire: the Rust engine's safety-recovery block then commits
-    // the active stroke prematurely, creating erratic connecting lines and phantom
-    // selection boxes around each character. We only accept the canonical event.
+    // Track active touch contacts for multi-touch gestures (e.g. 2-finger zoom/pan)
+    if (e.pointerType === 'touch') {
+      activeTouchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      // If 2 touches are active, initiate 2-finger pinch-to-zoom / pan
+      if (activeTouchesRef.current.size === 2) {
+        const touches = Array.from(activeTouchesRef.current.values());
+        pinchStartDistRef.current = Math.hypot(touches[0].x - touches[1].x, touches[0].y - touches[1].y);
+        lastTouchCenterRef.current = {
+          x: (touches[0].x + touches[1].x) / 2,
+          y: (touches[0].y + touches[1].y) / 2,
+        };
+
+        // If a single touch had accidentally started a stroke before the 2nd finger landed, cancel it cleanly
+        if (activeDrawingPointerTypeRef.current === 'touch') {
+          activeDrawingPointerIdRef.current = null;
+          activeDrawingPointerTypeRef.current = null;
+          isDrawingRef.current = false;
+          if (engineRef.current) {
+            const rect = canvasRef.current!.getBoundingClientRect();
+            engineRef.current.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
+          }
+        }
+        return;
+      }
+    }
+
+    // ── STRICT PALM REJECTION ──────────────────────────────────────────────────
+    // When palmRejection is ON, touch/finger events are NEVER allowed to draw (only hand pan allowed)
+    if (palmRejectionRef.current && e.pointerType === 'touch' && activeTool !== 'hand') {
+      return;
+    }
+
+    // Stylus / Synthetic mouse filters
     if (e.pointerType === 'mouse' && (e.nativeEvent as any)._isStylusSynthetic) return;
-    // More reliable: if another pen pointer is already captured, reject mouse events
     if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
-    if (e.pointerType === 'pen') activePenIdRef.current = e.pointerId;
-    // ─────────────────────────────────────────────────────────────────────────
+    if (e.pointerType === 'pen') {
+      activePenIdRef.current = e.pointerId;
+    }
+
+    // If already actively drawing with another pointer (e.g. stylus is down, palm touches glass), drop the new pointer
+    if (activeDrawingPointerIdRef.current !== null) {
+      return;
+    }
+
+    activeDrawingPointerIdRef.current = e.pointerId;
+    activeDrawingPointerTypeRef.current = e.pointerType;
 
     if (showWelcome) setShowWelcome(false);
 
-    // Prevent default to stop browser generating synthetic touch/mouse events
     e.preventDefault();
 
-    // Capture pointer so move/up fire even if pointer leaves canvas bounds
     if (e.target instanceof Element && e.target.id === 'aerial-canvas') {
-      e.target.setPointerCapture(e.pointerId);
+      try {
+        e.target.setPointerCapture(e.pointerId);
+      } catch (_) {}
     }
+    
+    isDrawingRef.current = true;
     
     if (magicTimeoutRef.current) {
       clearTimeout(magicTimeoutRef.current);
@@ -825,8 +880,47 @@ export default function App() {
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     if (!engineReady || !engineRef.current) return;
+    
+    // Handle 2-finger pan & pinch-zoom gestures seamlessly
+    if (e.pointerType === 'touch') {
+      activeTouchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-    // Reject synthetic mouse events generated by tablet drivers when pen is in use
+      if (activeTouchesRef.current.size === 2) {
+        const touches = Array.from(activeTouchesRef.current.values());
+        const newDist = Math.hypot(touches[0].x - touches[1].x, touches[0].y - touches[1].y);
+        const newCenter = {
+          x: (touches[0].x + touches[1].x) / 2,
+          y: (touches[0].y + touches[1].y) / 2,
+        };
+
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const screenX = newCenter.x - rect.left;
+        const screenY = newCenter.y - rect.top;
+
+        if (lastTouchCenterRef.current) {
+          const dx = lastTouchCenterRef.current.x - newCenter.x;
+          const dy = lastTouchCenterRef.current.y - newCenter.y;
+          
+          if (pinchStartDistRef.current && Math.abs(newDist - pinchStartDistRef.current) > 3) {
+            const zoomDelta = (pinchStartDistRef.current - newDist) * 1.5;
+            const newZoom = engineRef.current.on_wheel(0, zoomDelta, true, screenX, screenY);
+            setZoomLevel(Math.round(newZoom * 100));
+            pinchStartDistRef.current = newDist;
+          } else if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+            engineRef.current.on_wheel(dx, dy, false, screenX, screenY);
+          }
+        }
+
+        lastTouchCenterRef.current = newCenter;
+        return;
+      }
+    }
+
+    // Strictly ignore moves from any pointer that is NOT the active drawing pointer
+    if (activeDrawingPointerIdRef.current !== e.pointerId) {
+      return;
+    }
+
     if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
     
     const rect = canvasRef.current!.getBoundingClientRect();
@@ -837,25 +931,42 @@ export default function App() {
       setEraserPos({ x, y });
     }
 
-    // Only forward to engine when button is held (ignore stylus proximity hover)
-    if (e.buttons > 0) {
+    // Forward to engine if drawing is active
+    if (isDrawingRef.current) {
       engineRef.current?.on_mouse_move(x, y);
     }
   }, [activeTool, engineReady]);
   
   const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!engineReady || !engineRef.current) return;
+    // Clean up active touch contacts
+    if (e.pointerType === 'touch') {
+      activeTouchesRef.current.delete(e.pointerId);
+      if (activeTouchesRef.current.size < 2) {
+        pinchStartDistRef.current = null;
+        lastTouchCenterRef.current = null;
+      }
+    }
 
-    // Reject synthetic mouse events generated by tablet drivers when pen is in use
-    if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
-    // Clear the tracked pen pointer when it lifts
     if (e.pointerType === 'pen' && e.pointerId === activePenIdRef.current) {
       activePenIdRef.current = null;
     }
+
+    // Only process pointer up for the active drawing pointer
+    if (activeDrawingPointerIdRef.current !== e.pointerId) {
+      return;
+    }
+
+    activeDrawingPointerIdRef.current = null;
+    activeDrawingPointerTypeRef.current = null;
     
     if (e.target instanceof Element) {
-      e.target.releasePointerCapture(e.pointerId);
+      try {
+        e.target.releasePointerCapture(e.pointerId);
+      } catch (_) {}
     }
+    
+    isDrawingRef.current = false;
+    if (!engineReady || !engineRef.current) return;
     
     const rect = canvasRef.current!.getBoundingClientRect();
     engineRef.current?.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
@@ -888,15 +999,15 @@ export default function App() {
           };
           
           // Import Tauri fetch dynamically to bypass CORS
-          const { fetch: tauriFetch, Body } = await import('@tauri-apps/api/http');
+          const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
           
           const res = await tauriFetch("https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8", {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: Body.json(payload)
+            body: JSON.stringify(payload)
           });
           
-          const data: any = res.data;
+          const data: any = await res.json();
           if (data[0] === 'SUCCESS' && data[1] && data[1][0] && data[1][0][1] && data[1][0][1][0]) {
             const recognized = data[1][0][1][0];
             // Pass the magic purple color explicitly
@@ -913,8 +1024,7 @@ export default function App() {
   }, [activeTool, magicLanguage, magicFont, engineReady]);
 
   const onPointerLeave = useCallback((e: React.PointerEvent) => {
-    // Only end the stroke if the pointer was actually down when leaving (prevents cutting strokes mid-draw)
-    if (e.buttons > 0) {
+    if (isDrawingRef.current && activeDrawingPointerIdRef.current === e.pointerId) {
       onPointerUp(e);
     }
     setEraserPos(null);
@@ -956,7 +1066,7 @@ export default function App() {
     'cursor-crosshair';
 
   return (
-    <div className="relative h-screen w-full bg-background text-foreground overflow-hidden font-brand select-none">
+    <div className="fixed inset-0 bg-background text-foreground overflow-hidden font-brand select-none">
       
       {/* ── Background Canvas ── */}
       <div className="absolute inset-0 z-0">
@@ -990,6 +1100,7 @@ export default function App() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
+          onPointerCancel={onPointerUp}
           onPointerLeave={onPointerLeave}
           onPointerEnter={onPointerEnter}
           onDoubleClick={onDoubleClick}
@@ -1115,6 +1226,16 @@ export default function App() {
                       </select>
                     </div>
                   </div>
+                </div>
+                
+                <div className="flex items-center justify-between px-1 mt-1">
+                  <span className="text-xs font-semibold text-muted-foreground">Pencil Only (Palm Rejection)</span>
+                  <button
+                    onClick={() => setPalmRejection(!palmRejection)}
+                    className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${palmRejection ? 'bg-[#6366f1]' : 'bg-muted'}`}
+                  >
+                    <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${palmRejection ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                  </button>
                 </div>
 
                 <div className="h-px w-full bg-border" />

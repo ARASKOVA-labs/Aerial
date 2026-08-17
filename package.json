@@ -4,14 +4,21 @@
   "version": "1.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "ios:build": "bun run build && cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --features custom-protocol --release --lib && mkdir -p src-tauri/gen/apple/Externals/arm64/Release && cp target/aarch64-apple-ios/release/libaerial.a src-tauri/gen/apple/Externals/arm64/Release/libapp.a && xcodebuild -project src-tauri/gen/apple/aerial.xcodeproj -scheme aerial_iOS -configuration release -destination \"id=$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" build",
+    "ios:install": "xcrun devicectl device install app --device \"$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" ~/Library/Developer/Xcode/DerivedData/aerial-*/Build/Products/release-iphoneos/Aerial.app",
+    "ios:launch": "xcrun devicectl device process launch --device \"$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" com.araskova.aerial"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.1",
-    "@tauri-apps/api": "^1",
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "~2",
+    "@tauri-apps/plugin-fs": "~2",
+    "@tauri-apps/plugin-http": "~2",
+    "@tauri-apps/plugin-shell": "~2",
     "lottie-web": "^5.13.0",
     "lucide-react": "^1.21.0",
     "mermaid": "^11.16.0",
@@ -22,7 +29,7 @@
     "tailwindcss": "^4.3.1"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^1",
+    "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",

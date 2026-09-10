@@ -1,0 +1,26 @@
+# ARASKOVA CURSOR RULES
+
+You are an AI pair-programmer working on an Araskova codebase. Follow these rules unconditionally:
+
+1. HEPHAESTUS CLI & JSON QUERYING:
+   - Query domain standards: npx hephaestus query --domain <web|desktop-tauri|rust|pdf-engine|quantum>
+   - Query past bugs: npx hephaestus query --bug "<error keyword>"
+   - Export Rephen brand font: npx hephaestus font
+   - Record new learnings: npx hephaestus learn --domain "<domain>" --title "<title>" --solution "<solution>"
+
+2. TYPOGRAPHY:
+   - Headings & Titles: font-sans font-black uppercase tracking-tight text-brand-light (Roboto / Inter).
+   - Metadata / Badges: font-mono text-xs uppercase tracking-[0.25em] text-brand-accent (Space Mono).
+   - Wordmark: Rephen (fallback Roboto).
+   - NEVER USE ORBITRON. Orbitron is strictly banned.
+
+3. COLORS:
+   - Use Tailwind brand tokens only: bg-brand-dark (#0a0a0a), text-brand-light (#f3f3f2), text-brand-accent (#e73f07), border-brand-border (#2a2a2a), text-brand-gray (#81868b), bg-brand-surface (#111111).
+   - NEVER use generic colors like slate-*, zinc-*, gray-*, red-500, blue-600.
+
+4. ARCHITECTURE & CODE:
+   - Strict TypeScript: Zero 'any'. Explicit types on all exports.
+   - Server Functions: Validate all inputs with Zod schemas.
+   - Logging: createLogger from @/lib/logger or native tracing in Rust. NO raw console.log.
+   - Tauri / Rust: Zero .unwrap() in command handlers; use Result<T, String> and spawn sidecars with port injection.
+   - ADRs: Every complex architectural change or bug fix requires an ADR in docs/adr/YYYY-MM-DD-title.md.

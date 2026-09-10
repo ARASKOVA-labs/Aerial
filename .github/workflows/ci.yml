@@ -53,12 +53,16 @@ jobs:
         with:
           version: 'latest'
 
-      - name: Build WASM engine
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install dependencies & build frontend
         shell: bash
         run: |
-          mkdir -p public/aerial-engine
-          cd aerial-core/aerial-engine
-          wasm-pack build --target web --out-dir ../../public/aerial-engine
+          bun install
+          bun run build
 
       - name: Cargo Check
         shell: bash

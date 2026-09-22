@@ -16,10 +16,11 @@ export type ToolId =
   | 'highlighter'
   | 'text'
   | 'eraser'
-  | 'laser_pen';
+  | 'laser_pen'
+  | 'magic_pen';
 
 /** Extended tools available only in the desktop app (Tauri-dependent) */
-export type DesktopToolId = ToolId | 'image' | 'pdf' | 'magic_pen';
+export type DesktopToolId = ToolId | 'image' | 'pdf';
 
 // ── WASM Engine Interface ───────────────────────────────────────────────────
 
@@ -128,6 +129,8 @@ export interface AerialCanvasProps {
   onChange?: (sceneJson: string) => void;
   /** Canvas color theme */
   theme?: 'dark' | 'light';
+  /** Custom background color override (e.g. #0a0a0a, #18181b, #0f172a, #ffffff, #fdfbf7) */
+  backgroundColor?: string;
   /** If true, user cannot draw or modify the board */
   readOnly?: boolean;
   /** Whether to show built-in minimal brutalist floating toolbar (defaults to true) */
@@ -162,7 +165,7 @@ export interface AerialCanvasRef {
   /** Add a diagram element to the canvas */
   addDiagram: (code: string, svg: string) => void;
   /** Add a text element at world coordinates */
-  addText: (text: string, x: number, y: number, size?: number, color?: string) => void;
+  addText: (text: string, x?: number, y?: number, size?: number, color?: string) => void;
   /** Export the visible canvas area as a PNG Blob */
   exportPngBlob: () => Promise<Blob>;
   /** Export the visible canvas area as an SVG string (canvas snapshot embedded) */

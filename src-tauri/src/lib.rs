@@ -111,9 +111,10 @@ struct AppState {
 }
 
 #[tauri::command]
-fn save_board(state: State<'_, AppState>, payload_b64: String) -> Result<(), String> {
+fn save_board(state: State<'_, AppState>, payload_b64: String, board_id: Option<String>) -> Result<(), String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let payload = STANDARD.decode(&payload_b64).map_err(|e| e.to_string())?;
+    let key = board_id.unwrap_or_else(|| "default_board".to_string());
 
     let write_txn = state.db.begin_write().map_err(|e| e.to_string())?;
     {
@@ -121,7 +122,7 @@ fn save_board(state: State<'_, AppState>, payload_b64: String) -> Result<(), Str
             .open_table(BOARDS_TABLE)
             .map_err(|e| e.to_string())?;
         table
-            .insert("default_board", payload.as_slice())
+            .insert(key.as_str(), payload.as_slice())
             .map_err(|e| e.to_string())?;
     }
     write_txn.commit().map_err(|e| e.to_string())?;
@@ -129,13 +130,14 @@ fn save_board(state: State<'_, AppState>, payload_b64: String) -> Result<(), Str
 }
 
 #[tauri::command]
-fn load_board(state: State<'_, AppState>) -> Result<Option<Vec<u8>>, String> {
+fn load_board(state: State<'_, AppState>, board_id: Option<String>) -> Result<Option<Vec<u8>>, String> {
+    let key = board_id.unwrap_or_else(|| "default_board".to_string());
     let read_txn = state.db.begin_read().map_err(|e| e.to_string())?;
     let table = read_txn
         .open_table(BOARDS_TABLE)
         .map_err(|e| e.to_string())?;
 
-    match table.get("default_board").map_err(|e| e.to_string())? {
+    match table.get(key.as_str()).map_err(|e| e.to_string())? {
         Some(guard) => Ok(Some(guard.value().to_vec())),
         None => Ok(None),
     }

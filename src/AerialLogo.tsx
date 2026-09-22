@@ -9,29 +9,31 @@ interface AerialMarkProps {
 }
 
 /**
- * Premium 'L' Monogram
- * A single 'L' in Rephen font on an Apple-style white squircle background.
+ * Iconic 'A' Monogram
+ * A bold 'A' in Rephen font on a vibrant yellow squircle background.
  */
-function MonogramL() {
+function MonogramA() {
   return (
     <>
       <defs>
         <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
       </defs>
       
-      {/* Dynamic background with Apple-like squircle curves */}
-      <rect width="44" height="44" rx="10" fill="currentColor" />
+      {/* Araskova Orange Squircle Background */}
+      <rect width="44" height="44" rx="11" fill="#e73f07" />
       
-      {/* 'L' in Rephen */}
+      {/* White 'A' Monogram in Rephen */}
       <text
         x="22"
-        y="32"
-        fontFamily="Rephen, serif"
-        fontSize="30"
-        fill="var(--background)"
+        y="23"
+        fontFamily="Rephen, -apple-system, sans-serif"
+        fontSize="27"
+        fontWeight="900"
+        fill="#ffffff"
         textAnchor="middle"
-        style={{ fontFamily: 'Rephen, serif' }}
-      >L</text>
+        dominantBaseline="central"
+        style={{ fontFamily: 'Rephen, -apple-system, sans-serif', fontWeight: 900 }}
+      >A</text>
     </>
   );
 }
@@ -50,7 +52,7 @@ export function AerialMark({ size = 32, className = '' }: AerialMarkProps) {
       className={className}
       aria-label="Aerial"
     >
-      <MonogramL />
+      <MonogramA />
     </svg>
   );
 }
@@ -89,7 +91,7 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md' }
     >
       {showMark && (
         <svg x="0" y={(h - s.markSize) / 2} width={s.markSize} height={s.markSize} viewBox="0 0 44 44">
-          <MonogramL />
+          <MonogramA />
         </svg>
       )}
 
@@ -129,7 +131,7 @@ export function AerialLogoStack({ className = '' }: { className?: string }) {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <MonogramL />
+        <MonogramA />
       </svg>
 
       {/* AERIAL wordmark below */}

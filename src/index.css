@@ -1,19 +1,20 @@
-@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400..700&family=Kalam:wght@300;400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400..700&family=Kalam:wght@300;400;700&family=Roboto:wght@400;500;700;900&family=Inter:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap');
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Design system definition from araskova-crm-suite
+ * Araskova Design System — Military-Grade Brutalist Tokens
+ * Source: araskova-stylebook/tokens/tokens.css
  */
 
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+  --radius-4xl: 2rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -48,75 +49,86 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
+/* ── Daylight Light Mode ────────────────────────────────────────────────── */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.984 0.003 247.858);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(0.208 0.042 265.755);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
-  --sidebar-ring: oklch(0.704 0.04 256.788);
+  --radius: 0.75rem;
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #f9f9f8;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #e73f07;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f0ee;
+  --secondary-foreground: #0a0a0a;
+  --muted: #f4f4f2;
+  --muted-foreground: #666666;
+  --accent: #f0f0ee;
+  --accent-foreground: #0a0a0a;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #e2e2e0;
+  --input: #e2e2e0;
+  --ring: #e73f07;
+  --chart-1: #e73f07;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #6366f1;
+  --chart-5: #0ea5e9;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --sidebar: #f9f9f8;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #e73f07;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f0f0ee;
+  --sidebar-accent-foreground: #0a0a0a;
+  --sidebar-border: #e2e2e0;
+  --sidebar-ring: #e73f07;
+
+  /* Typography */
+  --font-sans: 'Roboto', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Space Mono', SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-wordmark: 'Rephen', 'Roboto', sans-serif;
 }
 
+/* ── Pitch Black Dark Mode (Default Araskova Experience) ───────────────── */
 .dark {
-  --background: #000000;
-  --foreground: #f8fafc;
-  --card: #0a0a0a;
-  --card-foreground: #f8fafc;
-  --popover: #0a0a0a;
-  --popover-foreground: #f8fafc;
-  --primary: #f8fafc;
-  --primary-foreground: #0f172a;
-  --secondary: #171717;
-  --secondary-foreground: #f8fafc;
-  --muted: #171717;
-  --muted-foreground: #94a3b8;
-  --accent: #171717;
-  --accent-foreground: #f8fafc;
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.98 0 0);
-  --border: oklch(1 0 0 / 15%);
-  --input: oklch(1 0 0 / 20%);
-  --ring: oklch(0.4 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0 0 0);
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.279 0.041 260.031);
-  --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.551 0.027 264.364);
+  --background: #0a0a0a;
+  --foreground: #f3f3f2;
+  --card: #111111;
+  --card-foreground: #f3f3f2;
+  --popover: #111111;
+  --popover-foreground: #f3f3f2;
+  --primary: #e73f07;
+  --primary-foreground: #ffffff;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #f3f3f2;
+  --muted: #1a1a1a;
+  --muted-foreground: #81868b;
+  --accent: #1c1c1c;
+  --accent-foreground: #f3f3f2;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #2a2a2a;
+  --input: #2a2a2a;
+  --ring: #e73f07;
+  --chart-1: #e73f07;
+  --chart-2: #10b981;
+  --chart-3: #f59e0b;
+  --chart-4: #6366f1;
+  --chart-5: #0ea5e9;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #f3f3f2;
+  --sidebar-primary: #e73f07;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1c1c1c;
+  --sidebar-accent-foreground: #f3f3f2;
+  --sidebar-border: #2a2a2a;
+  --sidebar-ring: #e73f07;
 }
 
 @layer base {
@@ -131,40 +143,19 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
+    font-family: var(--font-sans);
     overscroll-behavior: none;
     overflow: hidden;
   }
 
   .font-brand {
-    font-family: "Space Grotesk", "Inter", sans-serif;
+    font-family: var(--font-sans);
   }
 
   @font-face {
     font-family: 'Rephen';
     src: url('/fonts/rephen.ttf') format('truetype');
     font-weight: normal;
-    font-style: normal;
-  }
-  
-  @font-face {
-    font-family: 'Space Grotesk';
-    src: url('/fonts/SpaceGrotesk-Medium.ttf') format('truetype');
-    font-weight: 500;
-    font-style: normal;
-  }
-  
-  @font-face {
-    font-family: 'Space Grotesk';
-    src: url('/fonts/SpaceGrotesk-Bold.ttf') format('truetype');
-    font-weight: 700;
-    font-style: normal;
-  }
-  
-  @font-face {
-    font-family: 'Inter';
-    src: url('/fonts/Inter-Medium.ttf') format('truetype');
-    font-weight: 500;
     font-style: normal;
   }
 
@@ -176,3 +167,4 @@
     font-family: "Caveat", cursive;
   }
 }
+

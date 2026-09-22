@@ -51,6 +51,7 @@ pub struct SceneState {
 
 #[wasm_bindgen]
 pub struct AerialCanvas {
+    #[allow(dead_code)]
     canvas_id: String,
     canvas: HtmlCanvasElement,
     ctx: CanvasRenderingContext2d,
@@ -470,72 +471,134 @@ impl AerialCanvas {
     pub fn screen_to_world_y(&self, sy: f64) -> f64 {
         (sy - self.offset_y) / self.zoom
     }
-    // ── Gesture Detection ────────────────────────────────────────────────────
-    fn is_scratch_gesture(&self, stroke: &Element) -> bool {
-        // A scratch needs a decent amount of points
-        if stroke.points.len() < 20 {
-            return false;
-        }
-        
-        let mut path_length = 0.0;
-        let mut reversals_x = 0;
-        let mut reversals_y = 0;
-        
-        let mut last_dx: f64 = 0.0;
-        let mut last_dy: f64 = 0.0;
 
-        for i in 1..stroke.points.len() {
-            let p1 = stroke.points[i - 1];
-            let p2 = stroke.points[i];
-            
-            let dx = p2.0 - p1.0;
-            let dy = p2.1 - p1.1;
-            
-            path_length += (dx * dx + dy * dy).sqrt();
-            
-            // Track direction changes, ignoring tiny jitters
-            if dx.abs() > 1.0 {
-                if last_dx != 0.0 && dx.signum() != last_dx.signum() {
-                    reversals_x += 1;
-                }
-                last_dx = dx;
+    // ── Gesture Detection & Erasing ──────────────────────────────────────────
+    /// Detects if a stroke is an intentional "scratch-out" scribble to erase.
+    /// Uses hysteresis-based macro-reversals to prevent normal handwriting, straight lines
+    /// (such as '=', crossbars of 't', hyphens), and cursive from triggering false positives.
+    fn is_scratch_gesture(&self, stroke: &Element) -> bool {
+        check_is_scratch_gesture(stroke, self.zoom)
+    }
+
+    /// Erases elements scratched over by a scratch gesture.
+    /// Returns true if at least one element was erased.
+    fn erase_by_scratch(&mut self, stroke: &Element) -> bool {
+        let pad = (self.eraser_radius / self.zoom.max(0.1)).clamp(16.0, 48.0);
+        let r2 = pad * pad;
+        let sx = stroke.x;
+        let sy = stroke.y;
+        let sw = stroke.w;
+        let sh = stroke.h;
+
+        let initial_count = self.elements.len();
+        let selected_id = self.selected_id;
+        let mut cleared_selection = false;
+
+        self.elements.retain(|el| {
+            // 1. AABB quick rejection
+            if el.x > sx + sw + pad
+                || el.x + el.w < sx - pad
+                || el.y > sy + sh + pad
+                || el.y + el.h < sy - pad
+            {
+                return true;
             }
-            if dy.abs() > 1.0 {
-                if last_dy != 0.0 && dy.signum() != last_dy.signum() {
-                    reversals_y += 1;
+
+            // 2. Shapes, Text, Image: erase if any scratch point touches or enters its bounds
+            if matches!(el.kind.as_str(), "Image" | "Text" | "Rectangle" | "Ellipse") {
+                let touches = stroke.points.iter().any(|sp| {
+                    sp.0 >= el.x - pad && sp.0 <= el.x + el.w + pad
+                        && sp.1 >= el.y - pad && sp.1 <= el.y + el.h + pad
+                });
+                if touches {
+                    if Some(el.id) == selected_id {
+                        cleared_selection = true;
+                    }
+                    return false;
                 }
-                last_dy = dy;
+                return true;
             }
+
+            // 3. Line or Arrow: check point-to-segment distance for every scratch point
+            if matches!(el.kind.as_str(), "Line" | "Arrow") {
+                if el.points.len() >= 2 {
+                    let ax = el.points[0].0;
+                    let ay = el.points[0].1;
+                    let bx = el.points[1].0;
+                    let by = el.points[1].1;
+                    let touches = stroke.points.iter().any(|sp| {
+                        point_to_segment_dist_sq(sp.0, sp.1, ax, ay, bx, by) <= r2
+                    });
+                    if touches {
+                        if Some(el.id) == selected_id {
+                            cleared_selection = true;
+                        }
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            // 4. Freehand strokes (FreeDraw, FountainPen, Highlighter):
+            // Check if any scratch point is close to any point or segment of this element
+            let touches = if el.points.len() <= 1 {
+                el.points.iter().any(|ep| {
+                    stroke.points.iter().any(|sp| {
+                        let dx = ep.0 - sp.0;
+                        let dy = ep.1 - sp.1;
+                        dx * dx + dy * dy <= r2
+                    })
+                })
+            } else {
+                stroke.points.iter().any(|sp| {
+                    el.points.windows(2).any(|w| {
+                        point_to_segment_dist_sq(sp.0, sp.1, w[0].0, w[0].1, w[1].0, w[1].1) <= r2
+                    })
+                })
+            };
+
+            if touches {
+                if Some(el.id) == selected_id {
+                    cleared_selection = true;
+                }
+                false
+            } else {
+                true
+            }
+        });
+
+        if cleared_selection {
+            self.selected_id = None;
         }
-        
-        let bb_diag = (stroke.w * stroke.w + stroke.h * stroke.h).sqrt().max(1.0);
-        
-        // Cursive writing creates a wide bounding box, so path_length / bb_diag is low (1.5 - 3.0).
-        // A scribble concentrates a huge path length into a small bounding box.
-        let density = path_length / bb_diag;
-        
-        // A true scratch has high density AND many back-and-forth strokes.
-        let is_dense = density > 5.0;
-        let has_many_reversals = reversals_x > 7 || reversals_y > 7;
-        
-        is_dense && has_many_reversals
+
+        let erased_any = self.elements.len() != initial_count;
+        if erased_any {
+            self.dirty = true;
+        }
+        erased_any
     }
 
     // ── Mouse & Interaction Events ───────────────────────────────────────────
     pub fn on_mouse_down(&mut self, raw_x: f64, raw_y: f64) {
         // Safety: If a previous stroke was not committed via on_mouse_up (e.g. lost
         // pointerUp event from tablet driver double-fire or stylus leaving active area),
-        // commit it now — but ONLY if the stroke is substantial (≥2 points and a
-        // bounding box of at least 2×2 world-px). Degenerate micro-strokes caused by
-        // synthetic events or accidental taps must be silently discarded; committing
-        // them creates phantom elements that get selected and connected to the next
-        // stroke, producing the erratic triangular artifacts seen with Wacom/Gaemon tablets.
+        // commit it now. A stroke is substantial if it has traveled at least 1px in
+        // either dimension or is a single-tap dot. This prevents horizontal lines ('=',
+        // cross of 't') or vertical lines from being discarded due to small bounding-box dimensions.
         if let Some(old_stroke) = self.active_stroke.take() {
-            let is_substantial = old_stroke.points.len() >= 2
-                && old_stroke.w >= 2.0
-                && old_stroke.h >= 2.0;
+            let is_substantial = old_stroke.points.len() == 1
+                || old_stroke.w >= 1.0
+                || old_stroke.h >= 1.0;
             if is_substantial {
-                if old_stroke.kind == "LaserPen" {
+                let is_freehand_pen = old_stroke.kind == "FreeDraw" || old_stroke.kind == "FountainPen";
+                if is_freehand_pen && self.is_scratch_gesture(&old_stroke) {
+                    self.save_state();
+                    let erased = self.erase_by_scratch(&old_stroke);
+                    if !erased {
+                        self.undo_stack.pop_back();
+                    }
+                    self.dirty = true;
+                } else if old_stroke.kind == "LaserPen" {
                     self.laser_strokes.push(old_stroke);
                 } else if old_stroke.kind == "MagicPen" {
                     self.magic_strokes.push(old_stroke);
@@ -544,7 +607,7 @@ impl AerialCanvas {
                     self.elements.push(old_stroke);
                 }
             }
-            // else: degenerate stub — discard silently
+            // else: degenerate 0-distance jitter — discard silently
         }
 
         let wx = self.screen_to_world_x(raw_x);
@@ -749,34 +812,23 @@ impl AerialCanvas {
         self.is_dragging = false;
 
         if let Some(stroke) = self.active_stroke.take() {
-            // Only commit strokes that are substantial — at least 2 points with a
-            // bounding box ≥2×2. This prevents phantom single-point elements from
-            // accidental taps or synthetic stylus events.
-            let is_substantial = stroke.points.len() >= 2
-                && stroke.w >= 2.0
-                && stroke.h >= 2.0;
+            // A stroke is substantial if it has traveled at least 1px in either dimension
+            // or is a single-tap dot. This prevents horizontal lines ('=', cross of 't')
+            // or vertical lines from being discarded due to small bounding-box dimensions.
+            let is_substantial = stroke.points.len() == 1
+                || stroke.w >= 1.0
+                || stroke.h >= 1.0;
             if is_substantial {
-                // ── Scratch-to-erase detection ────────────────────────────────
-                // If this is a FreeDraw stroke with rapid back-and-forth motion
-                // (high direction reversal count relative to its bounding area),
-                // treat it as a "scratch" erase gesture instead of a normal stroke.
-                if stroke.kind == "FreeDraw" && self.is_scratch_gesture(&stroke) {
+                let is_freehand_pen = stroke.kind == "FreeDraw" || stroke.kind == "FountainPen";
+                if is_freehand_pen && self.is_scratch_gesture(&stroke) {
                     self.save_state();
-                    // Erase all elements that overlap the scratch bounding box
-                    let sx = stroke.x;
-                    let sy = stroke.y;
-                    let sw = stroke.w;
-                    let sh = stroke.h;
-                    self.elements.retain(|el| {
-                        // AABB overlap test
-                        let overlaps = el.x < sx + sw
-                            && el.x + el.w > sx
-                            && el.y < sy + sh
-                            && el.y + el.h > sy;
-                        !overlaps
-                    });
+                    let erased = self.erase_by_scratch(&stroke);
+                    if !erased {
+                        // If nothing was erased under the scribble, remove redundant undo snapshot
+                        self.undo_stack.pop_back();
+                    }
                     self.dirty = true;
-                    // Scratch stroke itself is NOT committed — it disappears
+                    // Scratch gesture stroke is discarded — never committed to canvas
                 } else if stroke.kind == "LaserPen" {
                     self.laser_strokes.push(stroke);
                 } else if stroke.kind == "MagicPen" {
@@ -1148,5 +1200,278 @@ impl AerialCanvas {
         self.ctx.set_shadow_blur(0.0);
         
         self.ctx.restore(); // matches save() at top of this function
+    }
+}
+
+// ── Geometry & Gesture Helpers ───────────────────────────────────────────────
+
+/// Squared perpendicular distance from point P to line segment AB.
+fn point_to_segment_dist_sq(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let abx = bx - ax;
+    let aby = by - ay;
+    let ab_len_sq = abx * abx + aby * aby;
+    if ab_len_sq <= 1e-6 {
+        let dx = px - ax;
+        let dy = py - ay;
+        return dx * dx + dy * dy;
+    }
+    let apx = px - ax;
+    let apy = py - ay;
+    let t = ((apx * abx + apy * aby) / ab_len_sq).clamp(0.0, 1.0);
+    let proj_x = ax + t * abx;
+    let proj_y = ay + t * aby;
+    let dx = px - proj_x;
+    let dy = py - proj_y;
+    dx * dx + dy * dy
+}
+
+/// Standalone scratch gesture detector.
+/// Uses hysteresis-based macro-reversals to ensure handwriting, straight lines ('=', 't'),
+/// and cursive letters NEVER trigger false-positive erasures.
+pub fn check_is_scratch_gesture(stroke: &Element, zoom: f64) -> bool {
+    // A genuine scratchout requires multiple points (at least 10)
+    if stroke.points.len() < 10 {
+        return false;
+    }
+
+    let mut path_length = 0.0;
+    let mut min_x = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for p in &stroke.points {
+        if p.0 < min_x { min_x = p.0; }
+        if p.0 > max_x { max_x = p.0; }
+        if p.1 < min_y { min_y = p.1; }
+        if p.1 > max_y { max_y = p.1; }
+    }
+
+    let span_x = (max_x - min_x).max(1.0);
+    let span_y = (max_y - min_y).max(1.0);
+    let bb_diag = (span_x * span_x + span_y * span_y).sqrt();
+
+    for i in 1..stroke.points.len() {
+        let dx = stroke.points[i].0 - stroke.points[i - 1].0;
+        let dy = stroke.points[i].1 - stroke.points[i - 1].1;
+        path_length += (dx * dx + dy * dy).sqrt();
+    }
+
+    // Density check: scribble packs a lot of stroke length into a compact area.
+    // Straight lines ('=', cross of 't', hyphens) and letters have density 1.0 - 2.5.
+    // A real scratch has density >= 2.8.
+    let density = path_length / bb_diag;
+    if density < 2.8 {
+        return false;
+    }
+
+    // Hysteresis-based reversal counting:
+    // Only count reversals that travel at least threshold in one direction before reversing.
+    let threshold = (6.0 / zoom.max(0.1)).clamp(3.0, 15.0);
+
+    let mut reversals_x = 0;
+    let mut dir_x: i32 = 0; // 0 = unknown, 1 = right, -1 = left
+    let mut extremum_x = stroke.points[0].0;
+
+    for p in stroke.points.iter().skip(1) {
+        let x = p.0;
+        if dir_x == 0 {
+            if x - extremum_x >= threshold {
+                dir_x = 1;
+                extremum_x = x;
+            } else if extremum_x - x >= threshold {
+                dir_x = -1;
+                extremum_x = x;
+            }
+        } else if dir_x == 1 {
+            if x > extremum_x {
+                extremum_x = x;
+            } else if extremum_x - x >= threshold {
+                reversals_x += 1;
+                dir_x = -1;
+                extremum_x = x;
+            }
+        } else {
+            if x < extremum_x {
+                extremum_x = x;
+            } else if x - extremum_x >= threshold {
+                reversals_x += 1;
+                dir_x = 1;
+                extremum_x = x;
+            }
+        }
+    }
+
+    let mut reversals_y = 0;
+    let mut dir_y: i32 = 0; // 0 = unknown, 1 = down, -1 = up
+    let mut extremum_y = stroke.points[0].1;
+
+    for p in stroke.points.iter().skip(1) {
+        let y = p.1;
+        if dir_y == 0 {
+            if y - extremum_y >= threshold {
+                dir_y = 1;
+                extremum_y = y;
+            } else if extremum_y - y >= threshold {
+                dir_y = -1;
+                extremum_y = y;
+            }
+        } else if dir_y == 1 {
+            if y > extremum_y {
+                extremum_y = y;
+            } else if extremum_y - y >= threshold {
+                reversals_y += 1;
+                dir_y = -1;
+                extremum_y = y;
+            }
+        } else {
+            if y < extremum_y {
+                extremum_y = y;
+            } else if y - extremum_y >= threshold {
+                reversals_y += 1;
+                dir_y = 1;
+                extremum_y = y;
+            }
+        }
+    }
+
+    // Must have at least 3 reversals in X or Y, or at least 2 in both directions (diagonal scratch)
+    let has_reversals = reversals_x >= 3 || reversals_y >= 3 || (reversals_x >= 2 && reversals_y >= 2);
+    has_reversals && density >= 2.8
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_stroke(points: Vec<(f64, f64)>) -> Element {
+        let min_x = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+        let max_x = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let max_y = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        Element {
+            id: 1,
+            kind: "FreeDraw".to_string(),
+            points,
+            x: min_x,
+            y: min_y,
+            w: (max_x - min_x).max(1.0),
+            h: (max_y - min_y).max(1.0),
+            stroke_color: "#000000".to_string(),
+            fill_color: "transparent".to_string(),
+            stroke_width: 2.0,
+            text: String::new(),
+            font_size: 14.0,
+            font_family: "sans-serif".to_string(),
+            asset_id: None,
+            code: None,
+            svg: None,
+            hit_map_json: None,
+            is_rough: false,
+            is_curved: false,
+        }
+    }
+
+    #[test]
+    fn test_horizontal_line_not_scratch() {
+        // Flat horizontal line like '=' or the crossbar of 't'
+        let mut points = Vec::new();
+        for x in (0..=50).step_by(2) {
+            points.push((x as f64, 10.0));
+        }
+        let stroke = make_test_stroke(points);
+        assert!(!check_is_scratch_gesture(&stroke, 1.0), "Horizontal line must NEVER trigger scratch to erase");
+    }
+
+    #[test]
+    fn test_vertical_line_not_scratch() {
+        // Vertical stem of 't' or '|'
+        let mut points = Vec::new();
+        for y in (0..=50).step_by(2) {
+            points.push((10.0, y as f64));
+        }
+        let stroke = make_test_stroke(points);
+        assert!(!check_is_scratch_gesture(&stroke, 1.0), "Vertical line must NEVER trigger scratch to erase");
+    }
+
+    #[test]
+    fn test_horizontal_zigzag_scribble_is_scratch() {
+        // Intentional scribble: left to right, right to left, 5 passes of 30px
+        let mut points = Vec::new();
+        // Pass 1: 0 -> 30
+        for x in (0..=30).step_by(3) { points.push((x as f64, 5.0)); }
+        // Pass 2: 30 -> 0
+        for x in (0..=30).rev().step_by(3) { points.push((x as f64, 8.0)); }
+        // Pass 3: 0 -> 30
+        for x in (0..=30).step_by(3) { points.push((x as f64, 11.0)); }
+        // Pass 4: 30 -> 0
+        for x in (0..=30).rev().step_by(3) { points.push((x as f64, 14.0)); }
+        // Pass 5: 0 -> 30
+        for x in (0..=30).step_by(3) { points.push((x as f64, 17.0)); }
+
+        let stroke = make_test_stroke(points);
+        assert!(check_is_scratch_gesture(&stroke, 1.0), "Horizontal zigzag scribble MUST be detected as scratch to erase");
+    }
+
+    #[test]
+    fn test_vertical_zigzag_scribble_is_scratch() {
+        // Intentional vertical scribble: up and down 5 passes
+        let mut points = Vec::new();
+        for y in (0..=30).step_by(3) { points.push((5.0, y as f64)); }
+        for y in (0..=30).rev().step_by(3) { points.push((8.0, y as f64)); }
+        for y in (0..=30).step_by(3) { points.push((11.0, y as f64)); }
+        for y in (0..=30).rev().step_by(3) { points.push((14.0, y as f64)); }
+        for y in (0..=30).step_by(3) { points.push((17.0, y as f64)); }
+
+        let stroke = make_test_stroke(points);
+        assert!(check_is_scratch_gesture(&stroke, 1.0), "Vertical zigzag scribble MUST be detected as scratch to erase");
+    }
+
+    #[test]
+    fn test_point_to_segment_distance() {
+        // Segment from (0, 0) to (10, 0)
+        // Point at (5, 5) -> dist = 5 -> dist_sq = 25
+        let d2 = point_to_segment_dist_sq(5.0, 5.0, 0.0, 0.0, 10.0, 0.0);
+        assert!((d2 - 25.0).abs() < 1e-6);
+
+        // Point at (15, 0) -> clamped to (10, 0) -> dist = 5 -> dist_sq = 25
+        let d2_end = point_to_segment_dist_sq(15.0, 0.0, 0.0, 0.0, 10.0, 0.0);
+        assert!((d2_end - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_letter_w_not_scratch() {
+        // Handwritten 'w': down, up, down, up (only 2 reversals in Y, 0 in X)
+        let mut points = Vec::new();
+        // down from (0, 0) to (10, 30)
+        for i in 0..=5 { points.push((i as f64 * 2.0, i as f64 * 6.0)); }
+        // up from (10, 30) to (20, 5)
+        for i in 0..=5 { points.push((10.0 + i as f64 * 2.0, 30.0 - i as f64 * 5.0)); }
+        // down from (20, 5) to (30, 30)
+        for i in 0..=5 { points.push((20.0 + i as f64 * 2.0, 5.0 + i as f64 * 5.0)); }
+        // up from (30, 30) to (40, 0)
+        for i in 0..=5 { points.push((30.0 + i as f64 * 2.0, 30.0 - i as f64 * 6.0)); }
+
+        let stroke = make_test_stroke(points);
+        assert!(!check_is_scratch_gesture(&stroke, 1.0), "Letter 'w' must NEVER trigger scratch to erase");
+    }
+
+    #[test]
+    fn test_diagonal_zigzag_scribble_is_scratch() {
+        // Diagonal scribble: back and forth diagonally (2 reversals in X, 2 reversals in Y, high density)
+        let mut points = Vec::new();
+        // Pass 1: (0, 0) -> (25, 25)
+        for i in (0..=25).step_by(3) { points.push((i as f64, i as f64)); }
+        // Pass 2: (25, 25) -> (0, 5)
+        for i in (0..=25).rev().step_by(3) { points.push((i as f64, i as f64 * 0.8 + 5.0)); }
+        // Pass 3: (0, 5) -> (25, 30)
+        for i in (0..=25).step_by(3) { points.push((i as f64, i as f64 + 5.0)); }
+        // Pass 4: (25, 30) -> (0, 10)
+        for i in (0..=25).rev().step_by(3) { points.push((i as f64, i as f64 * 0.8 + 10.0)); }
+        // Pass 5: (0, 10) -> (25, 35)
+        for i in (0..=25).step_by(3) { points.push((i as f64, i as f64 + 10.0)); }
+
+        let stroke = make_test_stroke(points);
+        assert!(check_is_scratch_gesture(&stroke, 1.0), "Diagonal zigzag scribble MUST be detected as scratch to erase");
     }
 }

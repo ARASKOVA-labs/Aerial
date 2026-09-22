@@ -128,10 +128,10 @@ export function ToolBtn({
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`group w-8 h-8 rounded-md flex items-center justify-center transition-all duration-200 hover:scale-110 active:scale-95 ${
+      className={`group w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 ${
         active
-          ? 'bg-foreground text-background shadow-sm scale-110'
-          : 'text-foreground hover:bg-foreground/10'
+          ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30 font-bold'
+          : 'text-[var(--foreground)]/80 hover:text-[var(--foreground)] hover:bg-[var(--accent)] border border-transparent'
       }`}
     >
       <AnimatedToolIcon icon={icon} title={title} isHovered={isHovered} className="w-4 h-4" />
@@ -157,7 +157,7 @@ export function DropdownToolBtn({
   const [isHovered, setIsHovered] = useState(false);
   return (
     <button
-      className={`group flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 transition-all duration-200 hover:scale-105 active:scale-95 ${active ? 'bg-foreground/10 text-primary' : ''} ${className || ''}`}
+      className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-mono uppercase tracking-wider hover:bg-[var(--accent)] transition-all duration-150 active:scale-98 ${active ? 'bg-[#e73f07]/15 text-[#e73f07] font-bold border border-[#e73f07]/30' : 'text-[var(--foreground)]'} ${className || ''}`}
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -180,24 +180,24 @@ export function AerialToolbar({
 
   return (
     <div
-      className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-2xl px-2 py-2 w-max max-w-[calc(100vw-2rem)] transition-all duration-500 ease-in-out ${
+      className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-2 w-max max-w-[calc(100vw-2rem)] transition-all duration-500 ease-in-out ${
         isHidden ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
       }`}
     >
-      <ToolBtn icon={MousePointer2} title="Select" active={activeTool === 'select'} onClick={() => onSelectTool('select')} />
-      <ToolBtn icon={Hand} title="Pan (Hand)" active={activeTool === 'hand'} onClick={() => onSelectTool('hand')} />
-      <div className="w-px h-5 bg-foreground/15 mx-1 hidden sm:block" />
+      <ToolBtn icon={MousePointer2} title="Select (V / 1)" active={activeTool === 'select'} onClick={() => onSelectTool('select')} />
+      <ToolBtn icon={Hand} title="Pan (H / 2)" active={activeTool === 'hand'} onClick={() => onSelectTool('hand')} />
+      <div className="w-px h-5 bg-[var(--border)] mx-1 hidden sm:block" />
       <div className="hidden sm:flex items-center gap-1">
-        <ToolBtn icon={Square} title="Rectangle" active={activeTool === 'rectangle'} onClick={() => onSelectTool('rectangle')} />
-        <ToolBtn icon={Circle} title="Ellipse" active={activeTool === 'ellipse'} onClick={() => onSelectTool('ellipse')} />
-        <ToolBtn icon={Minus} title="Line" active={activeTool === 'line'} onClick={() => onSelectTool('line')} />
-        <ToolBtn icon={ArrowUpRight} title="Arrow" active={activeTool === 'arrow'} onClick={() => onSelectTool('arrow')} />
+        <ToolBtn icon={Square} title="Rectangle (R / 3)" active={activeTool === 'rectangle'} onClick={() => onSelectTool('rectangle')} />
+        <ToolBtn icon={Circle} title="Ellipse (O / 4)" active={activeTool === 'ellipse'} onClick={() => onSelectTool('ellipse')} />
+        <ToolBtn icon={Minus} title="Line (L / 5)" active={activeTool === 'line'} onClick={() => onSelectTool('line')} />
+        <ToolBtn icon={ArrowUpRight} title="Arrow (A / 6)" active={activeTool === 'arrow'} onClick={() => onSelectTool('arrow')} />
       </div>
-      <div className="w-px h-5 bg-foreground/15 mx-1 hidden sm:block" />
-      <ToolBtn icon={Pen} title="Draw (Pen)" active={activeTool === 'freedraw'} onClick={() => onSelectTool('freedraw')} />
-      <ToolBtn icon={Type} title="Text" active={activeTool === 'text'} onClick={() => onSelectTool('text')} />
-      <ToolBtn icon={Eraser} title="Eraser" active={activeTool === 'eraser'} onClick={() => onSelectTool('eraser')} />
-      <div className="w-px h-5 bg-foreground/15 mx-1" />
+      <div className="w-px h-5 bg-[var(--border)] mx-1 hidden sm:block" />
+      <ToolBtn icon={Pen} title="Draw (P / 7)" active={activeTool === 'freedraw'} onClick={() => onSelectTool('freedraw')} />
+      <ToolBtn icon={Type} title="Text (T / 8)" active={activeTool === 'text'} onClick={() => onSelectTool('text')} />
+      <ToolBtn icon={Eraser} title="Eraser (E / 9)" active={activeTool === 'eraser'} onClick={() => onSelectTool('eraser')} />
+      <div className="w-px h-5 bg-[var(--border)] mx-1" />
       <div className="relative">
         <ToolBtn
           icon={MoreHorizontal}
@@ -206,17 +206,17 @@ export function AerialToolbar({
           onClick={() => setShowMoreTools(!showMoreTools)}
         />
         {showMoreTools && (
-          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-background/80 backdrop-blur-2xl border border-foreground/10 shadow-2xl rounded-xl p-2 w-48 flex flex-col gap-1 z-50">
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold px-2 py-1">Special Pens</p>
-            <DropdownToolBtn icon={Pen} title="Calligraphy Pen" active={activeTool === 'fountain'} onClick={() => { onSelectTool('fountain'); setShowMoreTools(false); }} />
-            <DropdownToolBtn icon={Highlighter} title="Highlighter" active={activeTool === 'highlighter'} onClick={() => { onSelectTool('highlighter'); setShowMoreTools(false); }} />
-            <DropdownToolBtn icon={Zap} title="Laser Pen" active={activeTool === 'laser_pen'} className="text-red-500" onClick={() => { onSelectTool('laser_pen'); setShowMoreTools(false); }} />
+          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-52 flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-2.5 py-1">Special Pens</p>
+            <DropdownToolBtn icon={Pen} title="Calligraphy Pen (F)" active={activeTool === 'fountain'} onClick={() => { onSelectTool('fountain'); setShowMoreTools(false); }} />
+            <DropdownToolBtn icon={Highlighter} title="Highlighter (M)" active={activeTool === 'highlighter'} onClick={() => { onSelectTool('highlighter'); setShowMoreTools(false); }} />
+            <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} className="text-[#dc2626]" onClick={() => { onSelectTool('laser_pen'); setShowMoreTools(false); }} />
             {onMoreAction && (
               <>
-                <div className="h-px bg-foreground/10 my-1" />
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold px-2 py-1">More</p>
+                <div className="h-px bg-[var(--border)] my-1" />
+                <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-2.5 py-1">More</p>
                 <button
-                  className="group flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs hover:bg-foreground/5 transition-all"
+                  className="group flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-mono uppercase tracking-wider hover:bg-[var(--accent)] transition-all active:scale-98"
                   onClick={() => { onMoreAction('overflow'); setShowMoreTools(false); }}
                 >
                   <MoreHorizontal className="w-4 h-4" />
@@ -244,7 +244,7 @@ export function AerialZoomBar({
 }: AerialZoomBarProps) {
   return (
     <div
-      className={`pointer-events-auto absolute bottom-6 left-4 flex items-center gap-1 bg-background/40 backdrop-blur-xl border border-foreground/10 shadow-lg rounded-2xl px-2 py-2 transition-all duration-500 ease-in-out ${
+      className={`pointer-events-auto absolute bottom-6 left-4 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-1.5 transition-all duration-500 ease-in-out ${
         isHidden ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
       }`}
     >
@@ -252,12 +252,12 @@ export function AerialZoomBar({
       <button
         onClick={onResetView}
         title="Reset View"
-        className="text-center font-bold text-[10px] select-none text-muted-foreground hover:text-foreground transition-colors w-10 px-1 rounded-sm cursor-pointer hover:bg-muted"
+        className="text-center font-mono font-bold text-[11px] select-none text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors w-12 px-1.5 py-1 rounded-lg cursor-pointer hover:bg-[var(--accent)]"
       >
         {zoomLevel}%
       </button>
       <ToolBtn icon={ZoomIn} title="Zoom In" onClick={onZoomIn} />
-      <div className="w-px h-5 bg-foreground/15 mx-1" />
+      <div className="w-px h-5 bg-[var(--border)] mx-1" />
       <ToolBtn icon={Undo} title="Undo (Cmd+Z)" onClick={onUndo} />
       <ToolBtn icon={Redo} title="Redo (Cmd+Shift+Z)" onClick={onRedo} />
     </div>
@@ -282,41 +282,41 @@ export function AerialSettingsPopover({
   onChangeCurved,
 }: AerialSettingsPopoverProps) {
   return (
-    <div className="pointer-events-auto absolute top-20 left-1/2 -translate-x-1/2 bg-background/60 backdrop-blur-2xl border border-foreground/10 shadow-2xl rounded-xl p-4 w-64 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2">
+    <div className="pointer-events-auto absolute top-20 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-5 w-72 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
       {activeTool === 'eraser' ? (
         <>
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2 flex justify-between">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
               <span>Eraser Size</span>
-              <span className="text-foreground">{eraserSize}px</span>
+              <span className="text-[var(--foreground)]">{eraserSize}px</span>
             </p>
             <input
               type="range" min="8" max="80" step="2"
               value={eraserSize}
               onChange={e => onChangeEraserSize(parseInt(e.target.value))}
-              className="w-full accent-foreground"
+              className="w-full accent-[#e73f07] cursor-pointer"
             />
           </div>
         </>
       ) : (
         <>
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2">Color Palette</p>
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2">Color Palette</p>
             <div className="flex items-center gap-2 flex-wrap">
               {STROKE_COLORS.map(c => (
                 <button
                   key={c}
                   onClick={() => onChangeColor(c)}
-                  className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 ${strokeColor === c ? 'border-foreground scale-110' : 'border-transparent'}`}
+                  className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 ${strokeColor === c ? 'border-[#e73f07] scale-110 shadow-sm ring-2 ring-[#e73f07]/25' : 'border-transparent'}`}
                   style={{ backgroundColor: c }}
                 />
               ))}
-              <div className="relative w-6 h-6 rounded-full border-2 border-border overflow-hidden cursor-pointer hover:scale-110 transition-transform">
+              <div className="relative w-7 h-7 rounded-full border-2 border-[var(--border)] overflow-hidden cursor-pointer hover:scale-110 transition-transform">
                 <input
                   type="color"
                   value={strokeColor}
                   onChange={(e) => onChangeColor(e.target.value)}
-                  className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer"
+                  className="absolute -top-2 -left-2 w-11 h-11 cursor-pointer"
                   title="Custom Color"
                 />
               </div>
@@ -324,29 +324,29 @@ export function AerialSettingsPopover({
           </div>
 
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2 flex justify-between">
+            <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
               <span>Stroke Size</span>
-              <span className="text-foreground">{strokeWidth}px</span>
+              <span className="text-[var(--foreground)]">{strokeWidth}px</span>
             </p>
             <input
               type="range" min="1" max="24" step="0.5"
               value={strokeWidth}
               onChange={e => onChangeWidth(parseFloat(e.target.value))}
-              className="w-full accent-foreground"
+              className="w-full accent-[#e73f07] cursor-pointer"
             />
           </div>
 
           {activeTool === 'fountain' && (
             <div>
-              <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-2 flex justify-between">
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
                 <span>Nib Sharpness</span>
-                <span className="text-foreground">{fountainSharpness}</span>
+                <span className="text-[var(--foreground)]">{fountainSharpness}</span>
               </p>
               <input
                 type="range" min="0.1" max="2.0" step="0.1"
                 value={fountainSharpness}
                 onChange={e => onChangeSharpness(parseFloat(e.target.value))}
-                className="w-full accent-foreground"
+                className="w-full accent-[#e73f07] cursor-pointer"
               />
             </div>
           )}
@@ -356,11 +356,11 @@ export function AerialSettingsPopover({
               <input
                 type="checkbox"
                 id="roughShapeToggle"
-                className="accent-foreground"
+                className="w-4 h-4 rounded-md accent-[#e73f07] cursor-pointer"
                 checked={isRough}
                 onChange={(e) => onChangeRough(e.target.checked)}
               />
-              <label htmlFor="roughShapeToggle" className="text-[11px] font-semibold text-muted-foreground cursor-pointer select-none hover:text-foreground">Scribble Style</label>
+              <label htmlFor="roughShapeToggle" className="text-[11px] font-mono uppercase tracking-wider font-semibold text-[var(--muted-foreground)] cursor-pointer select-none hover:text-[var(--foreground)]">Scribble Style</label>
             </div>
           )}
 
@@ -369,11 +369,11 @@ export function AerialSettingsPopover({
               <input
                 type="checkbox"
                 id="curvedArrowToggle"
-                className="accent-foreground"
+                className="w-4 h-4 rounded-md accent-[#e73f07] cursor-pointer"
                 checked={isCurved}
                 onChange={(e) => onChangeCurved(e.target.checked)}
               />
-              <label htmlFor="curvedArrowToggle" className="text-[11px] font-semibold text-muted-foreground cursor-pointer select-none hover:text-foreground">Curved Arrow</label>
+              <label htmlFor="curvedArrowToggle" className="text-[11px] font-mono uppercase tracking-wider font-semibold text-[var(--muted-foreground)] cursor-pointer select-none hover:text-[var(--foreground)]">Curved Arrow</label>
             </div>
           )}
         </>

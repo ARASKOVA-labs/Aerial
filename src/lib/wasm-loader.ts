@@ -34,10 +34,18 @@ export async function loadAerialEngine(
 ): Promise<AerialEngine> {
   const timestamp = Date.now();
 
-  // Determine base path for WASM assets
-  const base = options?.basePath
-    ? options.basePath.replace(/\/+$/, '')
-    : new URL('/aerial-engine', import.meta.url).href.replace(/\/+$/, '');
+  // Determine base path for WASM assets without triggering Vite's new URL() AST transform
+  let base: string;
+  if (options?.basePath) {
+    base = options.basePath.replace(/\/+$/, '');
+    if (base.startsWith('/') && typeof window !== 'undefined') {
+      base = `${window.location.origin}${base}`;
+    }
+  } else if (typeof window !== 'undefined') {
+    base = `${window.location.origin}/aerial-engine`;
+  } else {
+    base = '/aerial-engine';
+  }
 
   const glueUrl = `${base}/aerial_engine.js?v=${timestamp}`;
   const wasmUrl = `${base}/aerial_engine_bg.wasm?v=${timestamp}`;

@@ -39,6 +39,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       initialState,
       onChange,
       theme,
+      backgroundColor,
       readOnly = false,
       showToolbar = true,
       className = '',
@@ -260,6 +261,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           case 'highlighter': e.set_tool_highlighter(); break;
           case 'eraser':    e.set_tool_eraser();      break;
           case 'laser_pen': e.set_tool_laser_pen();   break;
+          case 'magic_pen': e.set_tool_magic_pen();   break;
           case 'text':      e.set_tool_text();        break;
         }
         return id;
@@ -546,7 +548,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         };
         img.src = imgSrc;
       },
-      addText: (text: string, x: number, y: number, size = 28, color?: string) => {
+      addText: (text: string, x = 250, y = 250, size = 28, color?: string) => {
         engineRef.current?.add_text(text, x, y, size, fontFamily, color);
         engineRef.current?.render();
       },
@@ -610,7 +612,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     return (
       <div
         className={`relative w-full h-full overflow-hidden select-none ${isDarkMode ? 'dark' : ''} ${className}`}
-        style={{ background: 'var(--background, #fff)' }}
+        style={{ background: backgroundColor || 'var(--background, #fff)' }}
       >
         {/* Loading overlay */}
         {!engineReady && !loadError && (
@@ -679,40 +681,46 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
               left: typingText.screenX,
               top: typingText.screenY,
               transform: 'translateY(-14px)',
-              fontFamily: 'Caveat',
+              fontFamily: 'Inter, Roboto, -apple-system, sans-serif',
               fontSize: '28px',
-              color: isDarkMode ? '#fff' : '#000000',
+              fontWeight: 600,
+              color: strokeColor || (isDarkMode ? '#ffffff' : '#0a0a0a'),
               background: 'transparent',
-              border: '1px dashed #6366f1',
+              border: '1.5px dashed #e73f07',
+              borderRadius: '6px',
               outline: 'none',
               resize: 'none',
               overflow: 'hidden',
-              minWidth: '40px',
-              minHeight: '40px',
+              minWidth: '60px',
+              minHeight: '36px',
               zIndex: 40,
-              padding: 0,
+              padding: '2px 6px',
               margin: 0,
-              lineHeight: 1,
+              lineHeight: 1.2,
             }}
             value={typingText.value}
             onChange={(e) => {
               e.target.style.height = 'auto';
               e.target.style.height = e.target.scrollHeight + 'px';
               e.target.style.width = 'auto';
-              e.target.style.width = Math.max(40, e.target.scrollWidth) + 'px';
+              e.target.style.width = Math.max(60, e.target.scrollWidth) + 'px';
               setTypingText({ ...typingText, value: e.target.value });
             }}
             onBlur={() => {
               if (typingText.value.trim() && engineRef.current) {
-                engineRef.current.add_text(typingText.value, typingText.worldX, typingText.worldY, 28, fontFamily, undefined);
+                engineRef.current.add_text(typingText.value, typingText.worldX, typingText.worldY, 28, 'Inter, Roboto, sans-serif', strokeColor);
+                engineRef.current.render();
                 selectTool('select');
               }
               setTypingText(null);
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Escape') {
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 e.currentTarget.blur();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setTypingText(null);
               }
             }}
           />

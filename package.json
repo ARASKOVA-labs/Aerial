@@ -24,6 +24,7 @@
     "./dist/*": "./dist/*"
   },
   "scripts": {
+    "prepare": "vite build --mode lib",
     "dev": "vite --host",
     "build": "tsc && vite build",
     "build:lib": "vite build --mode lib",

@@ -1,7 +1,34 @@
 {
-  "name": "aerial",
-  "private": true,
+  "name": "@araskova/aerial",
   "version": "1.1.0",
+  "description": "Ultra-high performance 120 FPS infinite canvas and ideation framework powered by Rust, WebAssembly, and Yrs CRDTs.",
+  "private": false,
+  "license": "MIT",
+  "author": "Araskova Labs <dev@araskova.com>",
+  "homepage": "https://github.com/ARASKOVA-labs/Aerial#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ARASKOVA-labs/Aerial.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "canvas",
+    "whiteboard",
+    "infinite-canvas",
+    "drawing",
+    "ideation",
+    "diagram",
+    "excalidraw",
+    "tldraw",
+    "rust",
+    "webassembly",
+    "wasm",
+    "crdt",
+    "yrs",
+    "react"
+  ],
   "type": "module",
   "main": "./dist/aerial.umd.cjs",
   "module": "./dist/aerial.js",
@@ -12,6 +39,10 @@
   ],
   "bin": {
     "aerial-copy-wasm": "./scripts/copy-assets.js"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
   },
   "exports": {
     ".": {

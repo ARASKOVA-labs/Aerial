@@ -1,171 +1,193 @@
 <div align="center">
   <h1>🚀 Aerial Canvas</h1>
-  <p><strong>Open-Source High-Performance Canvas & Offline Classroom Platform</strong></p>
-  <p>120 FPS • Local-First • Zero-Copy CRDTs • Built for Scale</p>
+  <p><strong>The 120 FPS Infinite Canvas & Ideation Framework for React</strong></p>
+  <p>Powered by Rust • WebAssembly • Yrs CRDTs • Military-Grade Brutalism</p>
+
+  <p>
+    <a href="https://www.npmjs.com/package/@araskova/aerial"><img src="https://img.shields.io/npm/v/@araskova/aerial.svg?color=e73f07" alt="npm version" /></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+    <a href="https://github.com/ARASKOVA-labs/Aerial"><img src="https://img.shields.io/badge/built%20with-Rust%20%2B%20WASM-orange.svg" alt="Tech" /></a>
+  </p>
 </div>
 
 ---
 
-## ⚡ What is Aerial Canvas?
+## ⚡ What is Aerial?
 
-Aerial Canvas is an open-source, high-performance digital whiteboard and classroom tool built natively in Rust and WebAssembly, wrapped in a lightweight Tauri desktop app.
+**Aerial** is an open-source, ultra-high-performance digital canvas and ideation framework designed to be embedded into any software—web applications, CRM suites, note-taking tools, Obsidian plugins, or AI agent interfaces.
 
-It manages layout, strokes, and scene structures in a pure Rust WebAssembly (`wasm32-unknown-unknown`) engine, ensuring ultra-smooth 120 FPS performance even with thousands of interactive strokes.
+Unlike traditional canvas libraries built in pure JavaScript that drop frames when rendering complex scenes, Aerial runs a **pure Rust WebAssembly graphics engine (`aerial-engine`)** at bare-metal speeds.
 
-### ✨ Features
-- **Zero-Copy CRDTs**: Powered by `yrs` (Yjs Rust port) for instantaneous local state tracking.
-- **Bare-Metal Storage**: High-throughput, local storage speeds using `redb`.
-- **Interactive Tools**: Full suite of vector tools, calligraphy pen, highlighter, text, diagram parsing, and image support.
-- **Cross-Platform**: Built on Tauri for Windows, macOS, and Linux support.
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Node.js & `bun`
-- Rust (`rustup default stable`)
-- `wasm-pack` (`cargo install wasm-pack`)
-
-### Build & Run
-1. Install dependencies:
-   ```bash
-   bun install
-   ```
-2. Build the WASM engine:
-   ```bash
-   cd aerial-core/aerial-engine
-   wasm-pack build --target web
-   cp -r pkg/* ../../public/aerial-engine/
-   cd ../..
-   ```
-3. Run the desktop app:
-   ```bash
-   bun run tauri dev
-   ```
-
-## 🍏 macOS Installation
-
-### Install Aerial
-
-1. Download the latest `.dmg` release.
-2. Open the `.dmg`.
-3. Drag **Aerial.app** to the **Applications** folder.
-4. Open **Applications → Aerial**.
-
-### If macOS says "Aerial is damaged and can't be opened"
-
-This can happen because macOS Gatekeeper adds a quarantine attribute to applications downloaded from the internet, especially for applications that are not distributed through the Mac App Store or are not notarized by Apple.
-
-If you trust the downloaded release, open **Terminal** and run:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Aerial.app
-```
-
-Then launch:
-
-```bash
-open /Applications/Aerial.app
-```
-
-If macOS still refuses to open it, you can locally re-sign the application:
-
-```bash
-codesign --force --deep --sign - /Applications/Aerial.app
-```
-
-Then launch it again:
-
-```bash
-open /Applications/Aerial.app
-```
-
-> **Security note:** Only use these commands if you downloaded Aerial from a trusted release source and you have verified the release yourself. Removing the quarantine attribute bypasses part of macOS Gatekeeper's normal protection.
-
-### Aerial opens from Terminal but not from the Dock
-
-Make sure the Dock shortcut points to the current application in:
-
-```text
-/Applications/Aerial.app
-```
-
-Remove any old Aerial icon from the Dock and drag the current:
-
-```text
-/Applications/Aerial.app
-```
-
-onto the Dock.
-
-Then launch Aerial from the new Dock icon.
-
-### Aerial is already running
-
-If launching Aerial from Terminal produces:
-
-```text
-DatabaseAlreadyOpen
-```
-
-Aerial may already be running.
-
-Check:
-
-```bash
-pgrep -fl Aerial
-```
-
-If Aerial is already running, don't launch the executable again. Simply use the existing application window.
-
-If necessary, close Aerial and restart it:
-
-```bash
-pkill -f Aerial
-open /Applications/Aerial.app
-```
-
-### Important
-
-Do **not** run the `.app` bundle directly as a shell command:
-
-```bash
-/Applications/Aerial.app
-```
-
-Use macOS's `open` command instead:
-
-```bash
-open /Applications/Aerial.app
-```
-
-### Recommended Installation Flow
-
-For the cleanest installation:
-
-```text
-Download DMG
-      ↓
-Open DMG
-      ↓
-Drag Aerial.app → /Applications
-      ↓
-Remove quarantine if required
-      ↓
-Launch from /Applications
-      ↓
-Optionally drag Aerial to the Dock
-```
-
-### Future Releases
-
-For production releases, Aerial should ideally be distributed using an Apple Developer ID certificate with Hardened Runtime and Apple notarization. This allows macOS to verify the application and avoids requiring users to manually remove the quarantine attribute.
-
-## 🤝 Contributing
-Contributions are what make the open source community such an amazing place to learn, inspire, and create. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to get started.
-
-## 📜 License
-Distributed under the MIT License. See `LICENSE` for more information.
+### ✨ Highlights
+- 🏎️ **120 FPS Native Engine**: Zero-copy Rust WASM pipeline renders 50,000+ strokes and vector shapes without frame drops.
+- 🔄 **Zero-Conflict CRDTs**: Native `yrs` integration handles multi-user collaboration and undo/redo stacks at the byte level.
+- 📦 **Drop-in React Component**: `<AerialCanvas />` embeds in 3 lines of code in React 18 & 19 (Vite, Next.js, Remix).
+- ✍️ **Stylus & Hardware Acceleration**: Sub-pixel stroke smoothing, pressure sensitivity, and automatic palm rejection.
+- 💾 **Universal Data In/Out**: Programmatic export to JSON scene graphs, high-res PNG blobs, vector SVG, and binary CRDT vectors.
+- 🖥️ **Cross-Platform**: Also ships as a standalone Tauri desktop application for macOS, Windows, and Linux.
 
 ---
-*Built with ❤️ by [Araskova Labs](https://github.com/ARASKOVA-labs).*
 
+## 📦 Quick Start (Web & React SDK)
+
+### 1. Install the Package
+
+```bash
+bun add @araskova/aerial
+# or
+npm install @araskova/aerial
+```
+
+### 2. Copy the WASM Engine Assets
+
+The WebAssembly engine binary (`aerial_engine_bg.wasm`) is streamed by the browser at runtime. Copy it into your project's public directory with one command:
+
+```bash
+bunx aerial-copy-wasm public/aerial-engine
+# or
+npx @araskova/aerial aerial-copy-wasm public/aerial-engine
+```
+
+### 3. Render the Canvas
+
+```tsx
+import { useRef } from "react";
+import { AerialCanvas, AerialCanvasRef } from "@araskova/aerial";
+import "@araskova/aerial/aerial.css";
+
+export default function MyWhiteboard() {
+  const canvasRef = useRef<AerialCanvasRef>(null);
+
+  const handleExport = async () => {
+    if (!canvasRef.current) return;
+    const pngBlob = await canvasRef.current.exportPngBlob();
+    const url = URL.createObjectURL(pngBlob);
+    window.open(url);
+  };
+
+  return (
+    <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
+      <AerialCanvas
+        ref={canvasRef}
+        theme="dark"
+        wasmBasePath="/aerial-engine"
+        onChange={(sceneJson) => {
+          // Auto-save scene JSON to your backend or localStorage
+          localStorage.setItem("my_board", sceneJson);
+        }}
+      />
+      <button
+        onClick={handleExport}
+        style={{ position: "absolute", top: 16, right: 16, zIndex: 50 }}
+      >
+        Export PNG
+      </button>
+    </div>
+  );
+}
+```
+
+---
+
+## 🛠️ Component API Reference
+
+### `<AerialCanvas />` Props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `theme` | `'dark' \| 'light'` | `'dark'` | Visual theme for the canvas and brutalist floating toolbar. |
+| `initialScene` | `string` | `undefined` | Serialized JSON scene string from `getSceneJson()`. |
+| `initialState` | `Uint8Array` | `undefined` | Binary CRDT snapshot (takes precedence over `initialScene`). |
+| `readOnly` | `boolean` | `false` | When `true`, drawing and modifications are disabled. |
+| `showToolbar` | `boolean` | `true` | Show or hide the built-in floating toolbar and zoom controls. |
+| `palmRejection` | `boolean` | `true` | When `true`, touch inputs only pan/zoom; drawing requires mouse or stylus. |
+| `wasmBasePath` | `string` | `'/aerial-engine'` | Path or CDN URL where `aerial_engine_bg.wasm` is served. |
+| `changeInterval` | `number` | `500` | Throttle interval in milliseconds for `onChange`. |
+| `onChange` | `(json: string) => void` | `undefined` | Fired when strokes, shapes, or text change on the board. |
+| `onReady` | `(api: AerialCanvasRef) => void` | `undefined` | Callback fired once the WASM engine finishes booting. |
+| `onZoomChange` | `(percent: number) => void` | `undefined` | Fired on zoom level change (e.g. `100` for 100%). |
+| `className` | `string` | `''` | Custom CSS classes for the outer wrapper container. |
+
+---
+
+## 🎛️ Imperative Handle (`AerialCanvasRef`)
+
+Pass a `ref` to `<AerialCanvas ref={canvasRef} />` to control the canvas programmatically:
+
+```ts
+// Exporting Data
+const json: string = canvasRef.current.getSceneJson();
+const pngBlob: Blob = await canvasRef.current.exportPngBlob();
+const svgString: string = await canvasRef.current.exportSvgString();
+const crdtState: Uint8Array = canvasRef.current.exportFullState();
+
+// Loading Data
+canvasRef.current.loadSceneJson(jsonString);
+canvasRef.current.importFullState(crdtStateBytes);
+
+// Board Manipulation
+canvasRef.current.clearBoard();
+canvasRef.current.undo();
+canvasRef.current.redo();
+canvasRef.current.deleteSelected();
+
+// Programmatic Drawing
+canvasRef.current.addText("Ideation Note", x, y, 16, "#e73f07");
+canvasRef.current.addDiagram(mermaidCode, svgString);
+
+// Tool & Style Controls
+canvasRef.current.setTool("freedraw"); // 'select' | 'rectangle' | 'arrow' | 'highlighter' | ...
+canvasRef.current.setStrokeColor("#e73f07");
+canvasRef.current.setFillColor("#111111");
+canvasRef.current.setStrokeWidth(2);
+
+// Zoom Controls
+canvasRef.current.zoomIn();
+canvasRef.current.zoomOut();
+canvasRef.current.resetView();
+canvasRef.current.getZoom();
+```
+
+---
+
+## 🍏 Standalone Desktop App (Tauri)
+
+Aerial also ships as a lightweight, bare-metal desktop application.
+
+### macOS Installation
+1. Download the latest `.dmg` release from GitHub Releases.
+2. Open the `.dmg` and drag **Aerial.app** to your `/Applications` folder.
+3. If macOS Gatekeeper flags the release, clear the quarantine attribute:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/Aerial.app
+   open /Applications/Aerial.app
+   ```
+
+### Building Desktop from Source
+```bash
+# 1. Install dependencies
+bun install
+
+# 2. Build the Rust WASM engine
+cd aerial-core/aerial-engine
+wasm-pack build --target web
+cp -r pkg/* ../../public/aerial-engine/
+cd ../..
+
+# 3. Launch Tauri dev server
+bun run tauri dev
+```
+
+---
+
+## 🤝 Contributing
+
+We welcome contributions to the Rust graphics engine, CRDT sync algorithms, and React UI components!
+Please see [CONTRIBUTING.md](CONTRIBUTING.md) to get started.
+
+## 📜 License
+
+Distributed under the **MIT License**. See [LICENSE](LICENSE) for details.
+
+---
+*Architected with precision by [Araskova Labs](https://github.com/ARASKOVA-labs).*

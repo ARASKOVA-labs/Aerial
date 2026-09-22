@@ -1,1 +1,27 @@
-[]
+[
+  {
+    "domain": "web",
+    "category": "Vector & Canvas Export",
+    "title": "HTML-to-Image Cross-Origin Font Taint",
+    "symptom": "DOM-to-PNG export fails with security error or blank text when custom fonts are loaded from external origins",
+    "root_cause": "html-to-image tries to serialize stylesheets; cross-origin external font files without CORS cause security canvas tainting",
+    "solution": "Use baseOptions with fontEmbedCSS: '' and embed all critical fonts as inline base64 data URIs",
+    "correct": "const dataUrl = await toPng(node, { ...baseOptions, fontEmbedCSS: '' });",
+    "id": "LEARN-001",
+    "timestamp": "2026-09-10T07:46:55.982Z",
+    "learned": true,
+    "source_project": "card-creator"
+  },
+  {
+    "domain": "web",
+    "category": "General",
+    "title": "React 19 motion useAnimate icon ref typing",
+    "symptom": "TS2769: Property 'ref' does not exist on type IntrinsicAttributes when using motion.create(Icon) with useAnimate scope in React 19",
+    "root_cause": "Unspecified root cause.",
+    "solution": "Wrap the icon in a span with ref={scope} instead of using motion.create(Icon) with ref",
+    "id": "LEARN-002",
+    "timestamp": "2026-09-22T01:04:58.918Z",
+    "learned": true,
+    "source_project": "Aerial"
+  }
+]

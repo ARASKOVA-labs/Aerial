@@ -2,10 +2,24 @@
   "name": "aerial",
   "private": true,
   "version": "1.1.0",
-  "type": "module",
+  "main": "./dist/aerial.umd.cjs",
+  "module": "./dist/aerial.js",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./dist/aerial.js",
+      "require": "./dist/aerial.umd.cjs"
+    },
+    "./canvas": {
+      "import": "./src/components/AerialCanvas.tsx"
+    },
+    "./engine/*": "./public/aerial-engine/*"
+  },
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
+    "build:lib": "vite build --mode lib",
     "preview": "vite preview",
     "tauri": "tauri",
     "ios:build": "bun run build && cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --features custom-protocol --release --lib && mkdir -p src-tauri/gen/apple/Externals/arm64/Release && cp target/aarch64-apple-ios/release/libaerial.a src-tauri/gen/apple/Externals/arm64/Release/libapp.a && xcodebuild -project src-tauri/gen/apple/aerial.xcodeproj -scheme aerial_iOS -configuration release -destination \"id=$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" build",

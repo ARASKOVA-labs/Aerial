@@ -1,0 +1,15 @@
+{
+  "name": "aerial-engine",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "aerial_engine_bg.wasm",
+    "aerial_engine.js",
+    "aerial_engine.d.ts"
+  ],
+  "main": "aerial_engine.js",
+  "types": "aerial_engine.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

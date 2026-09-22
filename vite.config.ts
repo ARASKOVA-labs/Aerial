@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import dts from "vite-plugin-dts";
 import { resolve } from "path";
 
 // https://vite.dev/config/
@@ -8,9 +9,17 @@ export default defineConfig(async ({ mode }) => {
   // Library build mode
   if (mode === "lib") {
     return {
-      plugins: [react(), tailwindcss()],
+      plugins: [
+        react(),
+        tailwindcss(),
+        dts({
+          tsconfigPath: "./tsconfig.json",
+          insertTypesEntry: true,
+        }),
+      ],
       assetsInclude: ["**/*.wasm"],
       build: {
+        copyPublicDir: true,
         lib: {
           entry: resolve(__dirname, "src/index.ts"),
           name: "Aerial",

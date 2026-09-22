@@ -2,19 +2,26 @@
   "name": "aerial",
   "private": true,
   "version": "1.1.0",
+  "type": "module",
   "main": "./dist/aerial.umd.cjs",
   "module": "./dist/aerial.js",
-  "types": "./src/index.ts",
+  "types": "./dist/aerial.d.ts",
+  "files": [
+    "dist",
+    "scripts"
+  ],
+  "bin": {
+    "aerial-copy-wasm": "./scripts/copy-assets.js"
+  },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/aerial.d.ts",
       "import": "./dist/aerial.js",
       "require": "./dist/aerial.umd.cjs"
     },
-    "./canvas": {
-      "import": "./src/components/AerialCanvas.tsx"
-    },
-    "./engine/*": "./public/aerial-engine/*"
+    "./aerial.css": "./dist/aerial.css",
+    "./engine/*": "./dist/aerial-engine/*",
+    "./dist/*": "./dist/*"
   },
   "scripts": {
     "dev": "vite --host",
@@ -50,6 +57,7 @@
     "eslint-plugin-tailwindcss": "^4.0.4",
     "puppeteer": "^25.5.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vite-plugin-dts": "^5.1.1"
   }
 }

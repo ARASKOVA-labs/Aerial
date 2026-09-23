@@ -57,14 +57,19 @@ import type {
   ToolId,
 } from './lib/types';
 import { createLogger } from './lib/logger';
+import {
+  getAraskovaMermaidConfig,
+  applyAraskovaDiagramAesthetics,
+  ARASKOVA_DIAGRAM_TEMPLATES,
+  type AraskovaDiagramStyle,
+} from './lib/diagram-theme';
 
 const logger = createLogger('App');
 
 mermaid.initialize({
+  ...getAraskovaMermaidConfig(true, 'brutalist'),
   startOnLoad: false,
-  theme: 'dark',
   securityLevel: 'loose',
-  fontFamily: 'Inter, Roboto, sans-serif',
 });
 
 export const CANVAS_BG_PRESETS = [
@@ -409,13 +414,14 @@ export default function App() {
         newLabel,
       }).then(newCode => {
         invoke<{ svg: string; hit_map: unknown }>('render_diagram', { code: newCode }).then(res => {
-          canvasRef.current?.addDiagram(newCode, res.svg);
+          const enhanced = applyAraskovaDiagramAesthetics(res.svg, isDarkMode);
+          canvasRef.current?.addDiagram(newCode, enhanced);
         });
       }).catch(err => {
         logger.error('Failed to update diagram node:', err);
       });
     }
-  }, []);
+  }, [isDarkMode]);
 
   // ── Image Upload ──────────────────────────────────────────────────────────
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1638,6 +1644,7 @@ export default function App() {
       {/* ── Diagram & Mermaid Studio Modal ── */}
       {showDiagramModal && (
         <DiagramStudioModal
+          isDarkMode={isDarkMode}
           onClose={() => setShowDiagramModal(false)}
           onInsertDiagram={(code, svg) => {
             canvasRef.current?.addDiagram(code, svg);
@@ -1768,104 +1775,65 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
 
 // ── Mermaid & Diagram Studio Modal ─────────────────────────────────────────
 
-const DIAGRAM_TEMPLATES = [
-  {
-    name: 'Architecture',
-    desc: 'System components & communication flow',
-    code: `graph TD
-    Client[Aerial Client] --> API[Rust Tauri IPC]
-    API --> Engine[Aerial WASM Engine]
-    Engine --> Canvas[Hardware Canvas]
-    Engine --> Sync[CRDT DecSync]`,
-  },
-  {
-    name: 'Sequence',
-    desc: 'Event sequence between user and core engine',
-    code: `sequenceDiagram
-    actor User
-    User->>Canvas: Draw Stroke
-    Canvas->>Engine: Append Points
-    Engine->>Sync: Broadcast Delta
-    Sync-->>User: Render Feedback`,
-  },
-  {
-    name: 'Flowchart',
-    desc: 'Decision process diagram',
-    code: `flowchart LR
-    A[Raw Input] --> B{Valid Stroke?}
-    B -- Yes --> C[Add to Engine]
-    B -- No --> D[Discard]
-    C --> E[Hardware Render]`,
-  },
-  {
-    name: 'State Machine',
-    desc: 'Interactive state transitions',
-    code: `stateDiagram-v2
-    [*] --> Idle
-    Idle --> Drawing : Pointer Down
-    Drawing --> Drawing : Pointer Move
-    Drawing --> Idle : Pointer Up
-    Idle --> Translating : Request Translate`,
-  },
-  {
-    name: 'Aras DSL Flow',
-    desc: 'Native Araskova Diagram DSL format',
-    code: `node A "Frontend Layer"
-node B "Tauri IPC Bridge"
-node C "Rust Core Engine"
-A -> B
-B -> C`,
-  },
-];
+const DIAGRAM_TEMPLATES = ARASKOVA_DIAGRAM_TEMPLATES;
 
 function DiagramStudioModal({
+  isDarkMode,
   onClose,
   onInsertDiagram,
 }: {
+  isDarkMode: boolean;
   onClose: () => void;
   onInsertDiagram: (code: string, svg: string) => void;
 }) {
   const [code, setCode] = useState(DIAGRAM_TEMPLATES[0].code);
+  const [diagramStyle, setDiagramStyle] = useState<AraskovaDiagramStyle>('brutalist');
   const [svgOutput, setSvgOutput] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [copied, setCopied] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
 
-  const renderCurrentDiagram = useCallback(async (srcCode: string) => {
-    setIsRendering(true);
-    setError(null);
-    try {
-      const trimmed = srcCode.trim();
-      if (trimmed.startsWith('node ') || trimmed.startsWith('group ')) {
-        // Aras DSL format
-        try {
-          const res = await invoke<{ svg: string }>('render_diagram', { code: trimmed });
-          if (res?.svg) {
-            setSvgOutput(res.svg);
-            setIsRendering(false);
-            return;
+  const renderCurrentDiagram = useCallback(
+    async (srcCode: string, style: AraskovaDiagramStyle) => {
+      setIsRendering(true);
+      setError(null);
+      try {
+        const trimmed = srcCode.trim();
+        if (trimmed.startsWith('node ') || trimmed.startsWith('group ')) {
+          // Aras DSL format
+          try {
+            const res = await invoke<{ svg: string }>('render_diagram', { code: trimmed });
+            if (res?.svg) {
+              const styledSvg = applyAraskovaDiagramAesthetics(res.svg, isDarkMode, style);
+              setSvgOutput(styledSvg);
+              setIsRendering(false);
+              return;
+            }
+          } catch {
+            // If not running in Tauri or Aras DSL fails, fall back to mermaid
           }
-        } catch {
-          // If not running in Tauri or Aras DSL fails, fall back to mermaid
         }
-      }
 
-      // Default: Mermaid format
-      const id = 'mermaid-preview-' + Math.random().toString(36).substring(2, 9);
-      const { svg } = await mermaid.render(id, trimmed);
-      setSvgOutput(svg);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setError(msg);
-    } finally {
-      setIsRendering(false);
-    }
-  }, []);
+        // Initialize Mermaid with Araskova design system configuration
+        mermaid.initialize(getAraskovaMermaidConfig(isDarkMode, style));
+        const id = 'mermaid-preview-' + Math.random().toString(36).substring(2, 9);
+        const { svg } = await mermaid.render(id, trimmed);
+        const styledSvg = applyAraskovaDiagramAesthetics(svg, isDarkMode, style);
+        setSvgOutput(styledSvg);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setError(msg);
+      } finally {
+        setIsRendering(false);
+      }
+    },
+    [isDarkMode]
+  );
 
   useEffect(() => {
-    renderCurrentDiagram(code);
-  }, [code, renderCurrentDiagram]);
+    renderCurrentDiagram(code, diagramStyle);
+  }, [code, diagramStyle, renderCurrentDiagram]);
 
   const handleCopySvg = async () => {
     if (!svgOutput) return;
@@ -1879,35 +1847,67 @@ function DiagramStudioModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150">
-      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/85 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150 p-4">
+      <div className="bg-[#111111] border border-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden text-[#f3f3f2]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[var(--secondary)]/40">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2a2a] bg-[#0a0a0a]/80">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/10 flex items-center justify-center text-[#e73f07]">
+            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/15 border border-[#e73f07]/30 flex items-center justify-center text-[#e73f07] shadow-inner">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-sm font-sans font-black uppercase tracking-wider text-[var(--foreground)]">
-                Diagram & Mermaid Studio
-              </h2>
-              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">
-                Generate, preview, and embed live architecture charts directly onto the canvas
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-sans font-black uppercase tracking-wider text-[#f3f3f2]">
+                  Architecture & Mermaid Studio
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-widest bg-[#e73f07]/20 text-[#e73f07] border border-[#e73f07]/30">
+                  Araskova Brutalist
+                </span>
+              </div>
+              <p className="text-[10px] font-mono text-[#81868b] uppercase tracking-wider">
+                Machinery vector aesthetics · Hardware HUD Reticles · Embedded Font Kerns
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--accent)] transition-colors cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-          >
-            <X className="w-4 h-4" />
-          </button>
+
+          {/* Aesthetic Style Selector */}
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-[#81868b] uppercase tracking-wider mr-1 hidden sm:inline">
+              Aesthetic:
+            </span>
+            {(
+              [
+                { id: 'brutalist', label: 'Brutalist' },
+                { id: 'blueprint', label: 'Blueprint' },
+                { id: 'industrial_light', label: 'Industrial' },
+              ] as const
+            ).map((st) => (
+              <button
+                key={st.id}
+                onClick={() => setDiagramStyle(st.id)}
+                className={`px-2.5 py-1 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                  diagramStyle === st.id
+                    ? 'bg-[#e73f07] text-white shadow-xs'
+                    : 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                }`}
+              >
+                {st.label}
+              </button>
+            ))}
+
+            <button
+              onClick={onClose}
+              className="ml-2 w-8 h-8 rounded-full flex items-center justify-center hover:bg-[#2a2a2a] transition-colors cursor-pointer text-[#81868b] hover:text-[#f3f3f2]"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Template Selector */}
-        <div className="px-6 py-2.5 bg-[var(--secondary)]/20 border-b border-[var(--border)] flex items-center gap-2 overflow-x-auto">
-          <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold whitespace-nowrap mr-2">
-            Templates:
+        <div className="px-6 py-2.5 bg-[#0a0a0a]/50 border-b border-[#2a2a2a] flex items-center gap-2 overflow-x-auto scrollbar-none">
+          <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold whitespace-nowrap mr-2">
+            Presets:
           </span>
           {DIAGRAM_TEMPLATES.map((tmpl) => (
             <button
@@ -1916,7 +1916,7 @@ function DiagramStudioModal({
               className={`px-3 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap cursor-pointer ${
                 code === tmpl.code
                   ? 'bg-[#e73f07] text-white shadow-xs'
-                  : 'bg-[var(--secondary)]/80 text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)]'
+                  : 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
               }`}
             >
               {tmpl.name}
@@ -1925,16 +1925,16 @@ function DiagramStudioModal({
         </div>
 
         {/* Body (Editor + Preview) */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-[var(--border)]">
+        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-[#2a2a2a]">
           {/* Editor Side */}
-          <div className="flex flex-col h-full bg-[var(--card)] p-4">
+          <div className="flex flex-col h-full bg-[#111111] p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center gap-1.5">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] flex items-center gap-1.5">
                 <Code className="w-3.5 h-3.5 text-[#e73f07]" />
                 Diagram Definition (Mermaid / Aras DSL)
               </span>
               <button
-                onClick={() => renderCurrentDiagram(code)}
+                onClick={() => renderCurrentDiagram(code, diagramStyle)}
                 disabled={isRendering}
                 className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#e73f07] hover:underline cursor-pointer"
               >
@@ -1946,7 +1946,7 @@ function DiagramStudioModal({
               onChange={(e) => setCode(e.target.value)}
               placeholder="Enter Mermaid or Aras DSL code..."
               spellCheck={false}
-              className="flex-1 w-full bg-[#0a0a0a] text-[var(--foreground)] font-mono text-xs p-3.5 rounded-2xl border border-[var(--border)] outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner"
+              className="flex-1 w-full bg-[#0a0a0a] text-[#f3f3f2] font-mono text-xs p-3.5 rounded-2xl border border-[#2a2a2a] outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner"
             />
             {error && (
               <div className="mt-2.5 p-2.5 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 font-mono text-[10px] leading-tight">
@@ -1959,13 +1959,13 @@ function DiagramStudioModal({
           {/* Preview Side */}
           <div className="flex flex-col h-full bg-[#0a0a0a] p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Rendered Preview
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b]">
+                Rendered Preview (Araskova Machinery Engine)
               </span>
               {svgOutput && (
                 <button
                   onClick={handleCopySvg}
-                  className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--muted-foreground)] hover:text-[var(--foreground)] flex items-center gap-1 cursor-pointer"
+                  className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] hover:text-[#f3f3f2] flex items-center gap-1 cursor-pointer"
                 >
                   {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
                   {copied ? 'Copied SVG' : 'Copy SVG'}
@@ -1974,15 +1974,21 @@ function DiagramStudioModal({
             </div>
             <div
               ref={previewRef}
-              className="flex-1 w-full rounded-2xl border border-[var(--border)] bg-[#111111] overflow-auto p-4 flex items-center justify-center min-h-[220px]"
+              className="flex-1 w-full rounded-2xl border border-[#2a2a2a] bg-[#111111] overflow-auto p-4 flex items-center justify-center min-h-[260px] relative"
             >
+              {/* Tactical Corner Marks on Preview Box */}
+              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-[#e73f07]/40 pointer-events-none" />
+              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-[#e73f07]/40 pointer-events-none" />
+              <div className="absolute bottom-2 left-2 w-2 h-2 border-b-2 border-l-2 border-[#e73f07]/40 pointer-events-none" />
+              <div className="absolute bottom-2 right-2 w-2 h-2 border-b-2 border-r-2 border-[#e73f07]/40 pointer-events-none" />
+
               {svgOutput ? (
                 <div
                   className="w-full h-full flex items-center justify-center [&_svg]:max-w-full [&_svg]:max-h-full [&_svg]:h-auto"
                   dangerouslySetInnerHTML={{ __html: svgOutput }}
                 />
               ) : (
-                <p className="text-xs font-mono text-[var(--muted-foreground)]">
+                <p className="text-xs font-mono text-[#81868b]">
                   {error ? 'Unable to render preview' : 'Enter valid diagram code to preview'}
                 </p>
               )}
@@ -1991,14 +1997,14 @@ function DiagramStudioModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-[var(--border)] bg-[var(--secondary)]/30 flex items-center justify-between">
-          <p className="text-[10px] font-mono text-[var(--muted-foreground)]">
-            Double-click diagram nodes on canvas to rename or modify connections.
+        <div className="px-6 py-4 border-t border-[#2a2a2a] bg-[#0a0a0a]/80 flex items-center justify-between">
+          <p className="text-[10px] font-mono text-[#81868b]">
+            Embedded Google Fonts & tactical vector reticles. Fully zoomable and exportable.
           </p>
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--accent)] transition-all cursor-pointer"
+              className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border border-[#2a2a2a] text-[#f3f3f2] hover:bg-[#1a1a1a] transition-all cursor-pointer"
             >
               Cancel
             </button>

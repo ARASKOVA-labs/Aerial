@@ -94,9 +94,14 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {:.0} {:.0}\" width=\"{:.0}\" height=\"{:.0}\">",
         max_x, max_y, max_x, max_y
     ));
-    svg.push_str("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"6\" refY=\"5\" markerWidth=\"6\" markerHeight=\"6\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#64748b\"/></marker></defs>");
+    svg.push_str("<defs>");
+    svg.push_str("<style>");
+    svg.push_str("@import url('https://fonts.googleapis.com/css2?family=Inter:wght@600;700;900&family=Space+Mono:wght@700&display=swap');");
+    svg.push_str("</style>");
+    svg.push_str("<marker id=\"araskova-arrow\" viewBox=\"0 0 10 10\" refX=\"7\" refY=\"5\" markerWidth=\"6\" markerHeight=\"6\" orient=\"auto-start-reverse\"><path d=\"M 0 1.5 L 8 5 L 0 8.5 L 2 5 Z\" fill=\"#e73f07\"/></marker>");
+    svg.push_str("</defs>");
 
-    // Draw Groups background
+    // Draw Groups background (Tactical Wireframe Enclosure)
     for group in &groups {
         let mut group_nodes = Vec::new();
         for stmt in &group.stmts {
@@ -115,12 +120,16 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
             let gh = max_gy - min_gy;
 
             svg.push_str(&format!(
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"12\" fill=\"#f8fafc\" stroke=\"#cbd5e1\" stroke-width=\"1.5\" stroke-dasharray=\"4 4\"/>",
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"8\" fill=\"#0d0d0d\" fill-opacity=\"0.7\" stroke=\"#2a2a2a\" stroke-width=\"1.5\" stroke-dasharray=\"6 3\"/>",
                 min_gx, min_gy, gw, gh
             ));
             svg.push_str(&format!(
-                "<text x=\"{:.1}\" y=\"{:.1}\" font-family=\"sans-serif\" font-size=\"12\" font-weight=\"600\" fill=\"#475569\">{}</text>",
-                min_gx + 12.0, min_gy + 20.0, group.name
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"3\" rx=\"1.5\" fill=\"#e73f07\"/>",
+                min_gx + 8.0, min_gy, gw.min(90.0)
+            ));
+            svg.push_str(&format!(
+                "<text x=\"{:.1}\" y=\"{:.1}\" font-family=\"'Space Mono', monospace\" font-size=\"10\" font-weight=\"700\" letter-spacing=\"0.15em\" text-transform=\"uppercase\" fill=\"#e73f07\">// SYS.{}</text>",
+                min_gx + 12.0, min_gy + 20.0, group.name.to_uppercase()
             ));
         }
     }
@@ -134,7 +143,7 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
             let t_cy = ty + node_height / 2.0;
 
             svg.push_str(&format!(
-                "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#64748b\" stroke-width=\"2\" marker-end=\"url(#arrow)\"/>",
+                "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#81868b\" stroke-width=\"1.5\" stroke-linecap=\"square\" marker-end=\"url(#araskova-arrow)\"/>",
                 f_cx, f_cy, t_cx, t_cy
             ));
 
@@ -142,27 +151,60 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
                 let mid_x = (f_cx + t_cx) / 2.0;
                 let mid_y = (f_cy + t_cy) / 2.0 - 6.0;
                 svg.push_str(&format!(
-                    "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"11\" fill=\"#334155\" bg-color=\"#ffffff\">{}</text>",
+                    "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"16\" rx=\"3\" fill=\"#141414\" stroke=\"#2a2a2a\" stroke-width=\"1\"/>",
+                    mid_x - 30.0, mid_y - 11.0, 60.0
+                ));
+                svg.push_str(&format!(
+                    "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" font-family=\"'Space Mono', monospace\" font-size=\"9\" font-weight=\"700\" letter-spacing=\"0.1em\" text-transform=\"uppercase\" fill=\"#e73f07\">{}</text>",
                     mid_x, mid_y, lbl
                 ));
             }
         }
     }
 
-    // Draw Nodes
-    for (id, label) in &unique_nodes {
+    // Draw Nodes (Machinery Surfaces with Tactical Corner Reticles)
+    let tick = 6.0;
+    for (idx, (id, label)) in unique_nodes.iter().enumerate() {
         if let Some(&(x, y)) = node_positions.get(id) {
             let style_map = styles.get(id);
-            let fill = style_map.and_then(|m| m.get("fill")).map(|s| s.as_str()).unwrap_or("#ffffff");
-            let stroke = style_map.and_then(|m| m.get("stroke")).map(|s| s.as_str()).unwrap_or("#3b82f6");
+            let fill = style_map.and_then(|m| m.get("fill")).map(|s| s.as_str()).unwrap_or("#111111");
+            let stroke = style_map.and_then(|m| m.get("stroke")).map(|s| s.as_str()).unwrap_or("#2a2a2a");
 
+            // Main node card
             svg.push_str(&format!(
-                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"8\" fill=\"{}\" stroke=\"{}\" stroke-width=\"2\" filter=\"drop-shadow(0 2px 4px rgba(0,0,0,0.05))\"/>",
+                "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"4\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1.5\" filter=\"drop-shadow(0 2px 6px rgba(0,0,0,0.5))\"/>",
                 x, y, node_width, node_height, fill, stroke
             ));
 
+            // Tactical Corner Reticles (L-bracket ticks)
             svg.push_str(&format!(
-                "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" font-family=\"sans-serif\" font-size=\"13\" font-weight=\"500\" fill=\"#1e293b\">{}</text>",
+                "<path d=\"M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1}\" fill=\"none\" stroke=\"#e73f07\" stroke-width=\"1.5\" stroke-linecap=\"square\"/>",
+                x, y + tick, x, y, x + tick, y
+            ));
+            svg.push_str(&format!(
+                "<path d=\"M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1}\" fill=\"none\" stroke=\"#e73f07\" stroke-width=\"1.5\" stroke-linecap=\"square\"/>",
+                x + node_width - tick, y, x + node_width, y, x + node_width, y + tick
+            ));
+            svg.push_str(&format!(
+                "<path d=\"M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1}\" fill=\"none\" stroke=\"#e73f07\" stroke-width=\"1.5\" stroke-linecap=\"square\"/>",
+                x, y + node_height - tick, x, y + node_height, x + tick, y + node_height
+            ));
+            svg.push_str(&format!(
+                "<path d=\"M {:.1} {:.1} L {:.1} {:.1} L {:.1} {:.1}\" fill=\"none\" stroke=\"#e73f07\" stroke-width=\"1.5\" stroke-linecap=\"square\"/>",
+                x + node_width - tick, y + node_height, x + node_width, y + node_height, x + node_width, y + node_height - tick
+            ));
+
+            // Status indicator dot
+            if idx == 0 || idx % 2 == 0 {
+                svg.push_str(&format!(
+                    "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"2\" fill=\"#e73f07\"/>",
+                    x + 6.0, y + 6.0
+                ));
+            }
+
+            // Node title text
+            svg.push_str(&format!(
+                "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" font-family=\"'Inter', 'Roboto', sans-serif\" font-size=\"12\" font-weight=\"700\" letter-spacing=\"-0.01em\" fill=\"#f3f3f2\">{}</text>",
                 x + node_width / 2.0, y + node_height / 2.0 + 4.0, label
             ));
         }

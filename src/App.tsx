@@ -123,7 +123,10 @@ export default function App() {
   const [isRenamingBoard, setIsRenamingBoard] = useState(false);
   const [renameInput, setRenameInput] = useState('');
   const [canvasBgColor, setCanvasBgColor] = useState<string>(() => {
-    return localStorage.getItem('aerial_canvas_bg') || '#0a0a0a';
+    const saved = localStorage.getItem('aerial_canvas_bg');
+    if (saved) return saved;
+    const isDark = localStorage.getItem('aerial_dark_mode') === 'true';
+    return isDark ? '#0a0a0a' : '#ffffff';
   });
 
   // UI Panels / Modals
@@ -148,6 +151,7 @@ export default function App() {
     return localStorage.getItem('aerial_dark_mode') === 'true';
   });
 
+  const isFirstMount = useRef(true);
   useEffect(() => {
     localStorage.setItem('aerial_dark_mode', isDarkMode.toString());
     if (isDarkMode) {
@@ -156,7 +160,27 @@ export default function App() {
       document.documentElement.classList.remove('dark');
     }
     canvasRef.current?.setDarkMode(isDarkMode);
+
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
+
+    // When theme switches, reset canvas background back to default: #0a0a0a for dark mode, #ffffff for light mode
+    const defaultBg = isDarkMode ? '#0a0a0a' : '#ffffff';
+    setCanvasBgColor(defaultBg);
+    localStorage.setItem('aerial_canvas_bg', defaultBg);
+    canvasRef.current?.setBackgroundColor(defaultBg);
   }, [isDarkMode]);
+
+  // ── Theme Switcher: Reverts canvas background to default dark/light canvas ───
+  const handleThemeChange = useCallback((dark: boolean) => {
+    setIsDarkMode(dark);
+    const defaultBg = dark ? '#0a0a0a' : '#ffffff';
+    setCanvasBgColor(defaultBg);
+    localStorage.setItem('aerial_canvas_bg', defaultBg);
+    canvasRef.current?.setBackgroundColor(defaultBg);
+  }, []);
 
   // ── Canvas onReady: Hydrate board and pre-load assets ───────────────────────
   const handleCanvasReady = useCallback(async (api: AerialCanvasRef) => {
@@ -1055,7 +1079,7 @@ export default function App() {
                     </span>
                     <div className="flex items-center bg-[var(--secondary)] p-0.5 rounded-lg border border-[var(--border)]">
                       <button
-                        onClick={() => setIsDarkMode(false)}
+                        onClick={() => handleThemeChange(false)}
                         className={`px-2 py-1 rounded-md text-[11px] font-medium transition-all flex items-center gap-1 cursor-pointer ${
                           !isDarkMode ? 'bg-[var(--card)] text-[var(--foreground)] shadow-xs font-semibold' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                         }`}
@@ -1064,7 +1088,7 @@ export default function App() {
                         Light
                       </button>
                       <button
-                        onClick={() => setIsDarkMode(true)}
+                        onClick={() => handleThemeChange(true)}
                         className={`px-2 py-1 rounded-md text-[11px] font-medium transition-all flex items-center gap-1 cursor-pointer ${
                           isDarkMode ? 'bg-[var(--card)] text-[var(--foreground)] shadow-xs font-semibold' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                         }`}

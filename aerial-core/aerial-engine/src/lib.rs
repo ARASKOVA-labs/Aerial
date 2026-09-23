@@ -427,6 +427,7 @@ impl AerialCanvas {
     // ── Appearance & Viewport ─────────────────────────────────────────────────
     pub fn set_dark_mode(&mut self, is_dark: bool) {
         self.is_dark_mode = is_dark;
+        self.bg_color = None;
         self.dirty = true;
     }
 

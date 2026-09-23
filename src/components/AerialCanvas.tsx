@@ -914,17 +914,95 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engineRef.current?.import_full_state(bytes);
         engineRef.current?.render();
       },
-      addDiagram: (code: string, svg: string) => {
+      addDiagram: (code: string, rawSvg: string) => {
         if (!engineRef.current) return;
-        const svg64 = btoa(unescape(encodeURIComponent(svg)));
-        const imgSrc = 'data:image/svg+xml;base64,' + svg64;
-        const img = new Image();
-        img.onload = () => {
-          const scale = 2.0;
-          engineRef.current?.add_diagram(img, 100, 100, img.width * scale, img.height * scale, code, imgSrc, '{}');
-          engineRef.current?.render();
-        };
-        img.src = imgSrc;
+
+        try {
+          // 1. Sanitize SVG: strip any external network @import (which WebKit strictly blocks in Image data URLs)
+          let cleanSvg = rawSvg.replace(/@import\s+url\([^)]+\);?/gi, '');
+
+          // 2. Parse SVG to extract or enforce explicit width/height from viewBox
+          let svgW = 600;
+          let svgH = 400;
+          if (typeof DOMParser !== 'undefined') {
+            try {
+              const parser = new DOMParser();
+              const doc = parser.parseFromString(cleanSvg, 'image/svg+xml');
+              const svgEl = doc.querySelector('svg');
+              if (svgEl) {
+                const vb = svgEl.getAttribute('viewBox');
+                if (vb) {
+                  const parts = vb.trim().split(/[\s,]+/).map(parseFloat);
+                  if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+                    svgW = Math.round(parts[2]);
+                    svgH = Math.round(parts[3]);
+                  }
+                } else {
+                  const wAttr = parseFloat(svgEl.getAttribute('width') || '0');
+                  const hAttr = parseFloat(svgEl.getAttribute('height') || '0');
+                  if (wAttr > 0 && hAttr > 0) {
+                    svgW = Math.round(wAttr);
+                    svgH = Math.round(hAttr);
+                  }
+                }
+
+                // Explicitly set width & height attributes on SVG root for guaranteed Image rasterization
+                svgEl.setAttribute('width', String(svgW));
+                svgEl.setAttribute('height', String(svgH));
+                cleanSvg = new XMLSerializer().serializeToString(doc);
+              }
+            } catch (e) {
+              logger.warn('SVG parse error in addDiagram:', e);
+            }
+          }
+
+          // 3. Prepare Image and position centered in the current visible viewport
+          const blob = new Blob([cleanSvg], { type: 'image/svg+xml;charset=utf-8' });
+          const blobUrl = URL.createObjectURL(blob);
+          const img = new Image();
+
+          img.onload = () => {
+            const w = svgW || img.naturalWidth || img.width || 500;
+            const h = svgH || img.naturalHeight || img.height || 350;
+
+            // Position at the visible center of the screen
+            const cx = window.innerWidth / 2;
+            const cy = window.innerHeight / 2;
+            const wx = engineRef.current ? engineRef.current.screen_to_world_x(cx - w / 2) : 100;
+            const wy = engineRef.current ? engineRef.current.screen_to_world_y(cy - h / 2) : 100;
+
+            const svg64 = btoa(unescape(encodeURIComponent(cleanSvg)));
+            const dataUrl = 'data:image/svg+xml;base64,' + svg64;
+
+            engineRef.current?.add_diagram(img, wx, wy, w, h, code, dataUrl, '{}');
+            engineRef.current?.render();
+            URL.revokeObjectURL(blobUrl);
+            logger.info(`Inserted diagram at (${wx.toFixed(1)}, ${wy.toFixed(1)}) size (${w}x${h})`);
+          };
+
+          img.onerror = (e) => {
+            logger.error('Failed to load diagram SVG image into canvas:', e);
+            URL.revokeObjectURL(blobUrl);
+
+            // Fallback: try base64 data url directly
+            const svg64 = btoa(unescape(encodeURIComponent(cleanSvg)));
+            const fallbackSrc = 'data:image/svg+xml;base64,' + svg64;
+            const fallbackImg = new Image();
+            fallbackImg.onload = () => {
+              const cx = window.innerWidth / 2;
+              const cy = window.innerHeight / 2;
+              const wx = engineRef.current ? engineRef.current.screen_to_world_x(cx - svgW / 2) : 100;
+              const wy = engineRef.current ? engineRef.current.screen_to_world_y(cy - svgH / 2) : 100;
+              engineRef.current?.add_diagram(fallbackImg, wx, wy, svgW, svgH, code, fallbackSrc, '{}');
+              engineRef.current?.render();
+            };
+            fallbackImg.src = fallbackSrc;
+          };
+
+          img.src = blobUrl;
+        } catch (err) {
+          logger.error('Error in addDiagram:', err);
+        }
       },
       addText: (text: string, x = 250, y = 250, size = 28, color?: string, fontFamily?: string) => {
         engineRef.current?.add_text(text, x, y, size, fontFamily || "'Inter', sans-serif", color);

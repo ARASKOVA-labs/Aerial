@@ -94,7 +94,7 @@ export default function App() {
   const [strokeColor, setStrokeColor] = useState('#000000');
   const [strokeWidth, setStrokeWidth] = useState(2.5);
   const [eraserSize, setEraserSize] = useState(24);
-  const [eraserMode, setEraserMode] = useState<'stroke' | 'element'>('stroke');
+  const [eraserMode, setEraserMode] = useState<'stroke' | 'precision' | 'element'>('precision');
   const [fountainSharpness, setFountainSharpness] = useState(0.5);
   const [magicLanguage, setMagicLanguage] = useState<'en' | 'ml' | 'ta' | 'te'>('en');
   const [magicFont, setMagicFont] = useState("'Space Grotesk', sans-serif");
@@ -353,7 +353,14 @@ export default function App() {
   // ── Tool Selection ────────────────────────────────────────────────────────
   const selectTool = useCallback((id: DesktopToolId) => {
     if (activeTool === id) {
-      if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'eraser', 'magic_pen'].includes(id)) {
+      if (id === 'eraser') {
+        const nextMode: 'stroke' | 'precision' | 'element' =
+          eraserMode === 'stroke' ? 'precision' : eraserMode === 'precision' ? 'element' : 'stroke';
+        setEraserMode(nextMode);
+        canvasRef.current?.setEraserType(nextMode);
+        return;
+      }
+      if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'magic_pen'].includes(id)) {
         setShowSettings(s => !s);
       }
       return;
@@ -366,7 +373,7 @@ export default function App() {
     }
 
     canvasRef.current?.setTool(id as ToolId);
-  }, [activeTool]);
+  }, [activeTool, eraserMode]);
 
   // ── Color & Stroke Changes ────────────────────────────────────────────────
   const changeColor = useCallback((color: string) => {
@@ -671,7 +678,14 @@ export default function App() {
           break;
         case '9':
         case 'e':
-          selectTool('eraser');
+          if (activeTool === 'eraser') {
+            const nextMode: 'stroke' | 'precision' | 'element' =
+              eraserMode === 'stroke' ? 'precision' : eraserMode === 'precision' ? 'element' : 'stroke';
+            setEraserMode(nextMode);
+            canvasRef.current?.setEraserType(nextMode);
+          } else {
+            selectTool('eraser');
+          }
           break;
         case 'f':
           selectTool('fountain');
@@ -692,7 +706,7 @@ export default function App() {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleExportImage, selectTool]);
+  }, [handleExportImage, selectTool, activeTool, eraserMode]);
 
   return (
     <div
@@ -712,6 +726,9 @@ export default function App() {
           palmRejection={palmRejection}
           magicLanguage={magicLanguage}
           magicFont={magicFont}
+          eraserType={eraserMode}
+          eraserSize={eraserSize}
+          onEraserTypeChange={(t) => setEraserMode(t)}
           showToolbar={false}
           onReady={handleCanvasReady}
           onZoomChange={setZoomLevel}
@@ -1283,20 +1300,27 @@ export default function App() {
                   <div>
                     <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2">Eraser Type</p>
                     <div className="flex gap-1">
-                      {(['stroke', 'element'] as const).map(mode => (
+                      {(['stroke', 'precision', 'element'] as const).map(mode => (
                         <button
                           key={mode}
-                          onClick={() => setEraserMode(mode)}
-                          className={`flex-1 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all ${
+                          onClick={() => {
+                            setEraserMode(mode);
+                            canvasRef.current?.setEraserType(mode);
+                          }}
+                          className={`flex-1 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all cursor-pointer ${
                             eraserMode === mode ? 'bg-[#e73f07] text-white shadow-sm' : 'bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                           }`}
                         >
-                          {mode === 'stroke' ? 'Stroke' : 'Element'}
+                          {mode === 'stroke' ? 'Stroke' : mode === 'precision' ? 'Precision' : 'Object'}
                         </button>
                       ))}
                     </div>
                     <p className="text-[9px] font-mono text-[var(--muted-foreground)] mt-2">
-                      {eraserMode === 'stroke' ? 'Erases individual strokes you touch' : 'Erases entire elements you touch (faster)'}
+                      {eraserMode === 'stroke'
+                        ? 'Erases entire stroke upon touch'
+                        : eraserMode === 'precision'
+                        ? 'Surgically trims exact points inside circle'
+                        : 'Erases whole objects (shapes, text, diagram, images) upon touch'}
                     </p>
                   </div>
                   <div>
@@ -1310,7 +1334,7 @@ export default function App() {
                       onChange={e => {
                         const s = parseInt(e.target.value);
                         setEraserSize(s);
-                        canvasRef.current?.getEngine()?.set_stroke_width(s / 4);
+                        canvasRef.current?.setEraserSize(s);
                       }}
                       className="w-full accent-[#e73f07]"
                     />

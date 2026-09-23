@@ -116,6 +116,9 @@ export interface AerialEngine {
 
   // Eraser
   set_eraser_radius: (r: number) => void;
+  set_eraser_size?: (s: number) => void;
+  set_eraser_type?: (t: string) => void;
+  get_eraser_type?: () => string;
 
   // DPR
   set_dpr: (dpr: number) => void;
@@ -159,8 +162,14 @@ export interface AerialCanvasProps {
   magicLanguage?: string;
   /** Font family for converted Magic Pen text */
   magicFont?: string;
+  /** Eraser type: 'stroke' | 'precision' | 'element' */
+  eraserType?: 'stroke' | 'precision' | 'element';
+  /** Eraser size in px */
+  eraserSize?: number;
   /** Callback when active tool changes programmatically or via shortcut */
   onToolChange?: (tool: ToolId) => void;
+  /** Callback when eraser type changes */
+  onEraserTypeChange?: (type: 'stroke' | 'precision' | 'element') => void;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
 }
@@ -202,6 +211,10 @@ export interface AerialCanvasRef {
   setStrokeColor: (color: string) => void;
   /** Set stroke width */
   setStrokeWidth: (width: number) => void;
+  /** Set eraser type */
+  setEraserType: (type: 'stroke' | 'precision' | 'element') => void;
+  /** Set eraser size */
+  setEraserSize: (size: number) => void;
   /** Undo last action */
   undo: () => void;
   /** Redo last undone action */

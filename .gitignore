@@ -26,7 +26,6 @@ dist-ssr
 # Rust build artifacts
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Tauri specific
 src-tauri/target/

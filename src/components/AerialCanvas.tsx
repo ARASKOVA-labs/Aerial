@@ -53,6 +53,9 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       onChangeBackgroundColor,
       magicLanguage = 'en',
       magicFont = "'Space Grotesk', sans-serif",
+      eraserType: propEraserType = 'precision',
+      eraserSize: propEraserSize = 24,
+      onEraserTypeChange,
       onToolChange,
       onNodeDoubleClick,
     } = props;
@@ -60,6 +63,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     // ── Refs ──────────────────────────────────────────────────────────────
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const engineRef = useRef<AerialEngine | null>(null);
+    const eraserCursorRef = useRef<HTMLDivElement | null>(null);
     const initStarted = useRef(false);
     const [canvasId] = useState(() => `aerial-canvas-${canvasIdCounter++}`);
 
@@ -70,13 +74,13 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     const [strokeColor, setStrokeColor] = useState('#000000');
     const [fillColor] = useState('transparent');
     const [strokeWidth, setStrokeWidth] = useState(2.5);
-    const [eraserSize, setEraserSize] = useState(24);
+    const [eraserSize, setEraserSize] = useState(propEraserSize);
+    const [eraserType, setEraserTypeState] = useState<'stroke' | 'precision' | 'element'>(propEraserType);
     const [fountainSharpness, setFountainSharpness] = useState(0.5);
     const [isRough, setIsRough] = useState(true);
     const [isCurved, setIsCurved] = useState(true);
     const [zoomLevel, setZoomLevel] = useState(100);
     const [showSettings, setShowSettings] = useState(false);
-    const [eraserPos, setEraserPos] = useState<{ x: number; y: number } | null>(null);
     const [typingText, setTypingText] = useState<{
       elementId?: bigint | null;
       screenX: number;
@@ -168,6 +172,14 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           engine.set_stroke_width(strokeWidth);
           engine.set_is_rough(isRough);
           engine.set_is_curved(isCurved);
+          if (typeof engine.set_eraser_type === 'function') {
+            engine.set_eraser_type(eraserType);
+          }
+          if (typeof engine.set_eraser_radius === 'function') {
+            engine.set_eraser_radius(eraserSize / 2);
+          } else if (typeof engine.set_eraser_size === 'function') {
+            engine.set_eraser_size(eraserSize);
+          }
           engine.set_tool_freedraw();
 
           engine.render();
@@ -277,19 +289,66 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       return () => canvas.removeEventListener('wheel', preventScroll);
     }, [engineReady]);
 
+    // ── Eraser prop sync ──────────────────────────────────────────────────
+    useEffect(() => {
+      if (propEraserType && propEraserType !== eraserType) {
+        setEraserTypeState(propEraserType);
+        engineRef.current?.set_eraser_type?.(propEraserType);
+      }
+    }, [propEraserType]);
+
+    useEffect(() => {
+      if (propEraserSize && propEraserSize !== eraserSize) {
+        setEraserSize(propEraserSize);
+        if (engineRef.current) {
+          if (typeof engineRef.current.set_eraser_radius === 'function') {
+            engineRef.current.set_eraser_radius(propEraserSize / 2);
+          } else if (typeof engineRef.current.set_eraser_size === 'function') {
+            engineRef.current.set_eraser_size(propEraserSize);
+          }
+        }
+      }
+    }, [propEraserSize]);
+
+    const changeEraserType = useCallback((t: 'stroke' | 'precision' | 'element') => {
+      setEraserTypeState(t);
+      engineRef.current?.set_eraser_type?.(t);
+      onEraserTypeChange?.(t);
+    }, [onEraserTypeChange]);
+
+    const changeEraserSize = useCallback((s: number) => {
+      setEraserSize(s);
+      if (engineRef.current) {
+        if (typeof engineRef.current.set_eraser_radius === 'function') {
+          engineRef.current.set_eraser_radius(s / 2);
+        } else if (typeof engineRef.current.set_eraser_size === 'function') {
+          engineRef.current.set_eraser_size(s);
+        }
+      }
+    }, []);
+
+    const cycleEraserType = useCallback(() => {
+      const nextType: 'stroke' | 'precision' | 'element' =
+        eraserType === 'stroke' ? 'precision' : eraserType === 'precision' ? 'element' : 'stroke';
+      changeEraserType(nextType);
+    }, [eraserType, changeEraserType]);
+
     // ── Tool selection ────────────────────────────────────────────────────
-    const selectTool = useCallback((id: ToolId) => {
+    const applyTool = useCallback((id: ToolId, notifyParent: boolean = true) => {
       if (readOnly) return;
-      onToolChange?.(id);
+      if (notifyParent) {
+        onToolChange?.(id);
+      }
       setActiveTool((prev) => {
         if (prev === id) {
-          if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'eraser'].includes(id)) {
+          if (id === 'eraser') {
+            cycleEraserType();
+          } else if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow'].includes(id)) {
             setShowSettings(s => !s);
           }
           return prev;
         }
         setShowSettings(false);
-        setEraserPos(null);
         if (id !== 'magic_pen' && magicDebounceTimerRef.current) {
           clearTimeout(magicDebounceTimerRef.current);
           magicDebounceTimerRef.current = null;
@@ -313,7 +372,11 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         }
         return id;
       });
-    }, [readOnly]);
+    }, [readOnly, onToolChange, cycleEraserType]);
+
+    const selectTool = useCallback((id: ToolId) => {
+      applyTool(id, true);
+    }, [applyTool]);
 
     // ── Color / width helpers ─────────────────────────────────────────────
     const changeColor = useCallback((color: string) => {
@@ -502,11 +565,21 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       }
 
       engineRef.current?.on_mouse_down(e.clientX - rect.left, e.clientY - rect.top);
-    }, [activeTool, typingText, engineReady, readOnly, canvasId, strokeColor]);
+    }, [activeTool, typingText, engineReady, readOnly, canvasId, strokeColor, eraserSize]);
 
     const onPointerMove = useCallback((e: React.PointerEvent) => {
       e.preventDefault();
       if (!engineReady || !engineRef.current) return;
+
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Always update custom eraser cursor directly on DOM element - zero lag, never gets stuck
+      if (activeTool === 'eraser' && eraserCursorRef.current) {
+        eraserCursorRef.current.style.transform = `translate3d(${x - eraserSize / 2}px, ${y - eraserSize / 2}px, 0)`;
+        eraserCursorRef.current.style.display = 'block';
+      }
 
       // 2-finger pinch/pan
       if (e.pointerType === 'touch') {
@@ -518,7 +591,6 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
             x: (touches[0].x + touches[1].x) / 2,
             y: (touches[0].y + touches[1].y) / 2,
           };
-          const rect = canvasRef.current!.getBoundingClientRect();
           const screenX = newCenter.x - rect.left;
           const screenY = newCenter.y - rect.top;
           if (lastTouchCenterRef.current) {
@@ -541,13 +613,8 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       if (activeDrawingPointerIdRef.current !== e.pointerId) return;
       if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
 
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      if (activeTool === 'eraser') setEraserPos({ x, y });
       if (isDrawingRef.current) engineRef.current?.on_mouse_move(x, y);
-    }, [activeTool, engineReady, updateZoom]);
+    }, [activeTool, engineReady, updateZoom, eraserSize]);
 
     const onPointerUp = useCallback((e: React.PointerEvent) => {
       if (e.pointerType === 'touch') {
@@ -621,15 +688,20 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       if (isDrawingRef.current && activeDrawingPointerIdRef.current === e.pointerId) {
         onPointerUp(e);
       }
-      setEraserPos(null);
+      if (eraserCursorRef.current) {
+        eraserCursorRef.current.style.display = 'none';
+      }
     }, [onPointerUp]);
 
     const onPointerEnter = useCallback((e: React.PointerEvent) => {
-      if (activeTool === 'eraser') {
-        const rect = canvasRef.current!.getBoundingClientRect();
-        setEraserPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      if (activeTool === 'eraser' && eraserCursorRef.current && canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        eraserCursorRef.current.style.transform = `translate3d(${x - eraserSize / 2}px, ${y - eraserSize / 2}px, 0)`;
+        eraserCursorRef.current.style.display = 'block';
       }
-    }, [activeTool]);
+    }, [activeTool, eraserSize]);
 
     const onDoubleClick = useCallback((e: React.MouseEvent) => {
       if (!engineRef.current || readOnly) return;
@@ -791,6 +863,12 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
             engineRef.current?.set_tool_hand();
           }
         }
+        if (e.key.toLowerCase() === 'e' || e.key === '9') {
+          if (activeTool === 'eraser') {
+            e.preventDefault();
+            cycleEraserType();
+          }
+        }
         if (e.key === 'Escape') {
           setShowSettings(false);
           setSelectedTextEl(null);
@@ -801,7 +879,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           const prev = prevToolRef.current;
           if (prev) {
             setActiveTool(prev);
-            selectTool(prev);
+            applyTool(prev, true);
             prevToolRef.current = null;
           }
         }
@@ -813,7 +891,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         document.removeEventListener('keyup', handleKeyUp);
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [readOnly, activeTool, selectedTextEl, strokeColor]);
+    }, [readOnly, activeTool, selectedTextEl, strokeColor, cycleEraserType]);
 
     // ── Cursor class ──────────────────────────────────────────────────────
     const cursorClass =
@@ -889,9 +967,11 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         if (!engineRef.current) return zoomLevel;
         return Math.round(engineRef.current.get_zoom() * 100);
       },
-      setTool: (tool: ToolId) => selectTool(tool),
+      setTool: (tool: ToolId) => applyTool(tool, false),
       setStrokeColor: (color: string) => changeColor(color),
       setStrokeWidth: (width: number) => changeWidth(width),
+      setEraserType: (type: 'stroke' | 'precision' | 'element') => changeEraserType(type),
+      setEraserSize: (size: number) => changeEraserSize(size),
       undo: () => { engineRef.current?.undo(); },
       redo: () => { engineRef.current?.redo(); },
       deleteSelected: () => { engineRef.current?.delete_selected(); },
@@ -964,20 +1044,42 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         />
 
         {/* Eraser cursor */}
-        {activeTool === 'eraser' && eraserPos && (
+        {activeTool === 'eraser' && (
           <div
-            className="pointer-events-none absolute z-20"
+            ref={eraserCursorRef}
+            className="pointer-events-none absolute top-0 left-0 z-30 will-change-transform"
             style={{
-              left: eraserPos.x - eraserSize / 2,
-              top: eraserPos.y - eraserSize / 2,
               width: eraserSize,
               height: eraserSize,
+              display: 'none',
             }}
           >
-            <svg viewBox="0 0 40 40" width={eraserSize} height={eraserSize}>
-              <circle cx="20" cy="20" r="18" fill={isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'} stroke={isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)'} strokeWidth="1.5" strokeDasharray="3 2" />
-              <line x1="12" y1="20" x2="28" y2="20" stroke={isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)'} strokeWidth="1.5" strokeLinecap="round" />
-              <line x1="20" y1="12" x2="20" y2="28" stroke={isDarkMode ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.4)'} strokeWidth="1.5" strokeLinecap="round" />
+            <svg viewBox="0 0 40 40" width={eraserSize} height={eraserSize} className="overflow-visible">
+              <circle
+                cx="20"
+                cy="20"
+                r="18"
+                fill={isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'}
+                stroke={eraserType === 'precision' ? '#e73f07' : isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'}
+                strokeWidth={eraserType === 'precision' ? '2' : '1.5'}
+                strokeDasharray={eraserType === 'stroke' ? '4 2' : eraserType === 'precision' ? undefined : '2 2'}
+              />
+              {eraserType === 'precision' ? (
+                <>
+                  <line x1="15" y1="20" x2="25" y2="20" stroke="#e73f07" strokeWidth="1.5" strokeLinecap="round" />
+                  <line x1="20" y1="15" x2="20" y2="25" stroke="#e73f07" strokeWidth="1.5" strokeLinecap="round" />
+                  <circle cx="20" cy="20" r="1.5" fill="#e73f07" />
+                </>
+              ) : eraserType === 'element' ? (
+                <>
+                  <rect x="14" y="14" width="12" height="12" rx="2" fill="none" stroke={isDarkMode ? '#ffffff' : '#000000'} strokeWidth="1.5" />
+                </>
+              ) : (
+                <>
+                  <line x1="14" y1="20" x2="26" y2="20" stroke={isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'} strokeWidth="1.5" strokeLinecap="round" />
+                  <line x1="20" y1="14" x2="20" y2="26" stroke={isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'} strokeWidth="1.5" strokeLinecap="round" />
+                </>
+              )}
             </svg>
           </div>
         )}
@@ -1074,6 +1176,76 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
               {isConvertingMagic
                 ? 'Converting handwriting to text…'
                 : `Magic Pen · ${magicLanguage?.toUpperCase() || 'EN'} · Straight-Line Guide`}
+            </span>
+          </div>
+        )}
+
+        {/* Eraser Mode & Size HUD */}
+        {activeTool === 'eraser' && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl animate-in fade-in slide-in-from-bottom-3 duration-200 pointer-events-auto">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-1 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#e73f07] animate-pulse" />
+              Eraser
+            </span>
+            <div className="w-px h-4 bg-[var(--border)]" />
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => changeEraserType('stroke')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase font-bold tracking-wider transition-all cursor-pointer ${
+                  eraserType === 'stroke'
+                    ? 'bg-[#e73f07] text-white shadow-sm'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
+                }`}
+                title="Whole Stroke: Erases the entire stroke upon touch"
+              >
+                Stroke
+              </button>
+              <button
+                type="button"
+                onClick={() => changeEraserType('precision')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase font-bold tracking-wider transition-all cursor-pointer ${
+                  eraserType === 'precision'
+                    ? 'bg-[#e73f07] text-white shadow-sm'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
+                }`}
+                title="Precision: Surgically cuts and trims exact points inside the circle"
+              >
+                Precision
+              </button>
+              <button
+                type="button"
+                onClick={() => changeEraserType('element')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase font-bold tracking-wider transition-all cursor-pointer ${
+                  eraserType === 'element'
+                    ? 'bg-[#e73f07] text-white shadow-sm'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
+                }`}
+                title="Object: Erases entire shapes, text, diagram or images upon touch"
+              >
+                Object
+              </button>
+            </div>
+            <div className="w-px h-4 bg-[var(--border)]" />
+            <div className="flex items-center gap-1">
+              {[14, 24, 40, 64].map((sz) => (
+                <button
+                  key={sz}
+                  type="button"
+                  onClick={() => changeEraserSize(sz)}
+                  className={`w-6 h-6 rounded-md text-[10px] font-mono font-bold flex items-center justify-center transition-all cursor-pointer ${
+                    eraserSize === sz
+                      ? 'bg-[var(--foreground)] text-[var(--background)] font-black'
+                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
+                  }`}
+                  title={`${sz}px size`}
+                >
+                  {sz === 14 ? 'S' : sz === 24 ? 'M' : sz === 40 ? 'L' : 'XL'}
+                </button>
+              ))}
+            </div>
+            <span className="hidden sm:inline-block text-[9px] font-mono text-[var(--muted-foreground)]/80 pl-1">
+              (Tap E to cycle)
             </span>
           </div>
         )}

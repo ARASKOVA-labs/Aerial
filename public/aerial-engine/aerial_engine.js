@@ -151,6 +151,21 @@ export class AerialCanvas {
         return v1;
     }
     /**
+     * @returns {string}
+     */
+    get_eraser_type() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_eraser_type(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @returns {Uint8Array}
      */
     get_local_state_vector() {
@@ -365,6 +380,14 @@ export class AerialCanvas {
      */
     set_eraser_radius(r) {
         wasm.aerialcanvas_set_eraser_radius(this.__wbg_ptr, r);
+    }
+    /**
+     * @param {string} t
+     */
+    set_eraser_type(t) {
+        const ptr0 = passStringToWasm0(t, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_set_eraser_type(this.__wbg_ptr, ptr0, len0);
     }
     /**
      * @param {string} c

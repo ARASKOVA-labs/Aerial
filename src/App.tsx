@@ -39,6 +39,7 @@ import {
   Check,
   Copy,
   Bot,
+  Clipboard,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -566,43 +567,237 @@ export default function App() {
     }
   }, [boards, canvasBgColor, gridType, switchBoard]);
 
-  // ── Image Upload ──────────────────────────────────────────────────────────
-  const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    const engine = canvasRef.current?.getEngine();
-    if (!file || !engine) return;
+  // ── Mouse Position Tracking (for placing pasted screenshots right at the cursor) ──
+  const mousePosRef = useRef<{ x: number; y: number }>({
+    x: window.innerWidth / 2,
+    y: window.innerHeight / 2,
+  });
 
-    const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const dataUrl = ev.target?.result as string;
-      const assetId = crypto.randomUUID();
-      try {
-        await invoke('save_asset', { id: assetId, base64Data: dataUrl });
-      } catch (err) {
-        logger.error('Failed to save asset:', err);
-        return;
+  useEffect(() => {
+    const onPointerMove = (e: PointerEvent) => {
+      mousePosRef.current = { x: e.clientX, y: e.clientY };
+    };
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
+    return () => window.removeEventListener('pointermove', onPointerMove);
+  }, []);
+
+  // ── Toast Notification HUD ────────────────────────────────────────────────
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToastNotification = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((cur) => (cur === msg ? null : cur));
+    }, 2500);
+  }, []);
+
+  // ── Universal Image & Screenshot Insertion (Pastes, Drops, Files) ─────────
+  const insertImageFromDataUrl = useCallback(async (
+    dataUrl: string,
+    targetPos?: { x: number; y: number }
+  ) => {
+    const engine = canvasRef.current?.getEngine();
+    if (!engine) return;
+
+    const assetId = crypto.randomUUID();
+    try {
+      await invoke('save_asset', { id: assetId, base64Data: dataUrl });
+    } catch (err) {
+      logger.debug('save_asset fallback (web mode):', err);
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width;
+      let h = img.height;
+      const maxW = Math.min(850, window.innerWidth * 0.75);
+      const maxH = Math.min(650, window.innerHeight * 0.75);
+
+      if (w > maxW) {
+        h = (maxW / w) * h;
+        w = maxW;
+      }
+      if (h > maxH) {
+        w = (maxH / h) * w;
+        h = maxH;
       }
 
-      const img = new Image();
-      img.onload = () => {
-        let w = img.width;
-        let h = img.height;
-        const maxW = 800;
-        if (w > maxW) {
-          h = (maxW / w) * h;
-          w = maxW;
-        }
-        const cx = window.innerWidth / 2;
-        const cy = window.innerHeight / 2;
-        const wx = engine.screen_to_world_x(cx - w / 2);
-        const wy = engine.screen_to_world_y(cy - h / 2);
-        canvasRef.current?.addImage(img, wx, wy, w, h, assetId);
-      };
-      img.src = dataUrl;
+      const screenX = targetPos ? targetPos.x : (window.innerWidth / 2);
+      const screenY = targetPos ? targetPos.y : (window.innerHeight / 2);
+      const wx = engine.screen_to_world_x(screenX - w / 2);
+      const wy = engine.screen_to_world_y(screenY - h / 2);
+
+      canvasRef.current?.addImage(img, wx, wy, w, h, assetId);
+      showToastNotification('Screenshot inserted into canvas');
+    };
+    img.src = dataUrl;
+  }, [showToastNotification]);
+
+  const insertImageFile = useCallback((file: File | Blob, targetPos?: { x: number; y: number }) => {
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (dataUrl) {
+        insertImageFromDataUrl(dataUrl, targetPos);
+      }
     };
     reader.readAsDataURL(file);
+  }, [insertImageFromDataUrl]);
+
+  // ── Paste Screenshot / Image from Clipboard (⌘V / Button) ───────────────────
+  const handlePasteFromClipboard = useCallback(async (targetPos?: { x: number; y: number }) => {
+    try {
+      if (navigator.clipboard?.read) {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imageType = item.types.find((t) => t.startsWith('image/'));
+          if (imageType) {
+            const blob = await item.getType(imageType);
+            insertImageFile(blob, targetPos || mousePosRef.current);
+            return true;
+          }
+        }
+      }
+    } catch (err) {
+      logger.debug('Clipboard API read error, relying on paste event:', err);
+    }
+    return false;
+  }, [insertImageFile]);
+
+  // Global window paste listener for direct ⌘V screenshot insertion
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            e.stopPropagation();
+            insertImageFile(file, mousePosRef.current);
+            return;
+          }
+        }
+      }
+
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          if (f.type.startsWith('image/')) {
+            e.preventDefault();
+            e.stopPropagation();
+            insertImageFile(f, mousePosRef.current);
+            return;
+          }
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [insertImageFile]);
+
+  // ── Drag & Drop Screenshots & Image Files directly onto Canvas ─────────────
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
+
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types?.includes('Files')) {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDraggingFile(true);
+      }
+    };
+
+    const handleDragLeave = (e: DragEvent) => {
+      e.preventDefault();
+      if (
+        e.clientX <= 0 ||
+        e.clientY <= 0 ||
+        e.clientX >= window.innerWidth ||
+        e.clientY >= window.innerHeight
+      ) {
+        setIsDraggingFile(false);
+      }
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDraggingFile(false);
+
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      let offset = 0;
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.type.startsWith('image/')) {
+          const pos = {
+            x: e.clientX + offset,
+            y: e.clientY + offset,
+          };
+          insertImageFile(file, pos);
+          offset += 30;
+        }
+      }
+    };
+
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('dragleave', handleDragLeave);
+    window.addEventListener('drop', handleDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('dragleave', handleDragLeave);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, [insertImageFile]);
+
+  // Tauri Native File Drop Listener (Finder / Desktop Screenshots)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ paths: string[]; position: { x: number; y: number } }>('tauri://drag-drop', async (event) => {
+      if (!event.payload?.paths || event.payload.paths.length === 0) return;
+      let offset = 0;
+      for (const filePath of event.payload.paths) {
+        if (filePath.match(/\.(png|jpe?g|webp|gif|bmp|tiff|svg)$/i)) {
+          try {
+            const { readFile } = await import('@tauri-apps/plugin-fs');
+            const bytes = await readFile(filePath);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
+            const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+            const dataUrl = `data:${mime};base64,${btoa(binary)}`;
+            const pos = {
+              x: (event.payload.position?.x ?? window.innerWidth / 2) + offset,
+              y: (event.payload.position?.y ?? window.innerHeight / 2) + offset,
+            };
+            insertImageFromDataUrl(dataUrl, pos);
+            offset += 30;
+          } catch (err) {
+            logger.error('Failed to read dropped file in Tauri:', err);
+          }
+        }
+      }
+    }).then((fn) => { unlisten = fn; }).catch(() => {});
+    return () => { unlisten?.(); };
+  }, [insertImageFromDataUrl]);
+
+  // Image Upload input handler
+  const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      insertImageFile(file);
+    }
     if (imageInputRef.current) imageInputRef.current.value = '';
-  }, []);
+  }, [insertImageFile]);
 
   // ── PDF Upload ────────────────────────────────────────────────────────────
   const handlePdfUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -858,6 +1053,19 @@ export default function App() {
           const currIdx = boards.findIndex(b => b.id === activeBoardId);
           if (currIdx >= 0 && currIdx < boards.length - 1) switchBoard(boards[currIdx + 1].id);
           return;
+        }
+
+        // Cmd+V: Paste Screenshot / Image from clipboard
+        if (e.key.toLowerCase() === 'v') {
+          const activeEl = document.activeElement;
+          const isTextInput = activeEl && (
+            activeEl.tagName === 'INPUT' ||
+            activeEl.tagName === 'TEXTAREA' ||
+            (activeEl as HTMLElement).isContentEditable
+          );
+          if (!isTextInput) {
+            handlePasteFromClipboard();
+          }
         }
 
         // Cmd + 1..9 : Switch to board by index
@@ -1552,6 +1760,7 @@ export default function App() {
                     </div>
                     <DropdownToolBtn icon={Sparkles} title="Quick Canvas Note (⌘⇧N)" onClick={() => { setShowQuickCanvas(true); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={Command} title="Command Palette (⌘K)" onClick={() => { setShowCommandPalette(true); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Clipboard} title="Paste Screenshot (⌘V)" onClick={() => { handlePasteFromClipboard(); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={FileText} title="Insert PDF" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={ImageIcon} title="Insert Image" className="sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={Code} title="Mermaid Chart" onClick={() => { setShowDiagramModal(true); setShowMoreTools(false); }} />
@@ -2003,6 +2212,7 @@ export default function App() {
           onToggleTheme={() => setIsDarkMode(!isDarkMode)}
           onClearBoard={() => setShowClearConfirm(true)}
           onOpenShortcuts={() => setShowShortcutsModal(true)}
+          onPasteScreenshot={() => handlePasteFromClipboard()}
         />
       )}
 
@@ -2033,6 +2243,36 @@ export default function App() {
           }}
         />
       )}
+      {/* ── Drag & Drop Overlay Visual Reticle ── */}
+      {isDraggingFile && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-sm pointer-events-none animate-in fade-in duration-150">
+          <div className="relative border-2 border-dashed border-[#e73f07] bg-[#111111]/90 text-[#f3f3f2] rounded-3xl p-10 flex flex-col items-center gap-4 shadow-2xl max-w-md text-center">
+            <div className="absolute top-2 left-2 w-3 h-3 border-t-2 border-l-2 border-[#e73f07]" />
+            <div className="absolute top-2 right-2 w-3 h-3 border-t-2 border-r-2 border-[#e73f07]" />
+            <div className="absolute bottom-2 left-2 w-3 h-3 border-b-2 border-l-2 border-[#e73f07]" />
+            <div className="absolute bottom-2 right-2 w-3 h-3 border-b-2 border-r-2 border-[#e73f07]" />
+            <div className="w-14 h-14 rounded-2xl bg-[#e73f07]/20 border border-[#e73f07]/40 flex items-center justify-center text-[#e73f07] animate-pulse">
+              <ImageIcon className="w-7 h-7" />
+            </div>
+            <div>
+              <h3 className="text-sm font-mono font-black uppercase tracking-wider text-white">
+                Drop Screenshot or Image
+              </h3>
+              <p className="text-xs font-mono text-[#81868b] mt-1">
+                Release to insert directly onto Aerial Canvas
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Toast Notification HUD ── */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] px-4 py-2 rounded-xl bg-[#111111]/95 border border-[#2a2a2a] text-[#f3f3f2] font-mono text-xs shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-150 pointer-events-none">
+          <span className="w-2 h-2 rounded-full bg-[#e73f07] animate-pulse" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -2058,6 +2298,8 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
   ];
 
   const fileShortcuts = [
+    { name: 'Paste Screenshot from Clipboard', keys: ['⌘', 'V'] },
+    { name: 'Drag & Drop Screenshot / Image', keys: ['Drop', 'PNG'] },
     { name: 'Export PNG Image / Save', keys: ['⌘', 'S'] },
     { name: 'Export Vector SVG', keys: ['⌘', '⇧', 'S'] },
     { name: 'Import Image', keys: ['⌘', 'O'] },

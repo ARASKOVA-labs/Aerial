@@ -30,6 +30,7 @@ import {
   Keyboard,
   Sparkles,
   X,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { DesktopToolId } from '../lib/types';
 
@@ -58,6 +59,7 @@ export interface CommandPaletteModalProps {
   onToggleTheme: () => void;
   onClearBoard: () => void;
   onOpenShortcuts: () => void;
+  onPasteScreenshot: () => void;
 }
 
 export function CommandPaletteModal({
@@ -76,6 +78,7 @@ export function CommandPaletteModal({
   onToggleTheme,
   onClearBoard,
   onOpenShortcuts,
+  onPasteScreenshot,
 }: CommandPaletteModalProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -126,6 +129,7 @@ export function CommandPaletteModal({
       { id: 'tool-line', title: 'Line Shape', category: 'Tools', shortcut: 'L', icon: Minus, onSelect: () => { onClose(); onSelectTool('line'); } },
       { id: 'tool-arrow', title: 'Arrow Shape', category: 'Tools', shortcut: 'A', icon: ArrowUpRight, onSelect: () => { onClose(); onSelectTool('arrow'); } },
       // Actions
+      { id: 'action-paste-screenshot', title: 'Paste Screenshot from Clipboard', category: 'Actions', shortcut: '⌘V', icon: ImageIcon, onSelect: () => { onClose(); onPasteScreenshot(); } },
       { id: 'action-diagram', title: 'Insert Mermaid Architecture Diagram', category: 'Actions', icon: Code, onSelect: () => { onClose(); onOpenDiagramModal(); } },
       { id: 'action-translate', title: 'Translate Text (AI Indian Languages)', category: 'Actions', icon: Languages, onSelect: () => { onClose(); onOpenTranslatorModal(); } },
       { id: 'action-export-png', title: 'Export Canvas as PNG Image', category: 'Actions', shortcut: '⌘S', icon: Download, onSelect: () => { onClose(); onExportPng(); } },
@@ -136,7 +140,7 @@ export function CommandPaletteModal({
       { id: 'action-shortcuts', title: 'Show Keyboard Shortcuts Cheat Sheet', category: 'Actions', shortcut: '?', icon: Keyboard, onSelect: () => { onClose(); onOpenShortcuts(); } },
     ];
     return list;
-  }, [boards, isDarkMode, onClose, onOpenQuickCanvas, onNewBoard, onSwitchBoard, onSelectTool, onOpenDiagramModal, onOpenTranslatorModal, onExportPng, onExportSvg, onToggleFullscreen, onToggleTheme, onClearBoard, onOpenShortcuts]);
+  }, [boards, isDarkMode, onClose, onOpenQuickCanvas, onNewBoard, onSwitchBoard, onSelectTool, onPasteScreenshot, onOpenDiagramModal, onOpenTranslatorModal, onExportPng, onExportSvg, onToggleFullscreen, onToggleTheme, onClearBoard, onOpenShortcuts]);
 
   const filteredItems = useMemo(() => {
     if (!query.trim()) return allItems;

@@ -1,91 +1,60 @@
-# ADR 2026-09-23: Quick Canvas Instant Note Taking, Background Residency, Menu Bar Tray, and macOS Shortcut Suite
+# ADR 2026-09-23: Quick Canvas Instant Notes, Background Residency, Menu Bar Tray, and Direct Screenshot Paste/Drop
 
 ## Status
 Accepted
 
 ## Context
-As Aerial evolves into a primary ideation and deep-work workspace on macOS, users requested an ultra-fast, shortcut-driven note taking workflow tailored specifically for laptop users:
-> *"but right now it wont pop up like i think aerial has to run it the background without consuming a lot of memory to be able to act as a shortcut and also for people who are using laptop this will be hard as what they want is smthg that they cant type notes into quick and also that goes away so yeah can we tweak it so that it behaves like that"*
+As Aerial evolves into a primary ideation and deep-work workspace on macOS, users requested two essential capabilities:
+1. Low-memory background residency and laptop-optimized quick scratchpad that auto-dismisses ("goes away").
+2. Direct screenshot capture insertion:
+   > *"i cant add iumages from the screeshots i take direcoty to the app built this to it as well"*
 
-Desktop creative tools frequently suffer from modal friction: when working in other apps (browser, terminal, editor, Slack), users need a lightweight, frictionless capture tool that pops up on demand, autofocuses text input immediately, auto-saves their thoughts, and goes away without lingering or consuming heavy system memory.
+Users take screenshots across macOS via shortcuts (`⌘⌃⇧4` or `⌘⌃⇧3` to clipboard, or `⌘⇧4` / `⌘⇧5` to Desktop) and need to insert them directly into Aerial via `⌘V` (Paste) or drag-and-drop without manual file-picker roundtrips.
 
 ---
 
 ## Technical Architecture & Decisions
 
-### 1. Zero-Memory Background Residency & Window Close Intercept (`src-tauri/src/lib.rs`)
-- **Native macOS Close Intercept**:
-  - Attached `.on_window_event` listener in Tauri:
-    ```rust
-    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-        let _ = window.hide();
-        api.prevent_close();
-    }
-    ```
-  - Closing the window via `⌘W` or the red window button no longer terminates the process. Aerial remains resident in the background with near-zero CPU and RAM overhead (UI rendering halted, WASM engine idle).
-- **Global Hotkey Awakening**:
-  - When `alt+space` or `super+shift+a` is pressed anywhere in macOS, Aerial immediately unminimizes, shows the window, grabs focus, and emits `quick-canvas:open` with `isOpenedFromBackground = true`.
-- **Command `hide_window`**:
-  - Added safe IPC command `hide_window` allowing frontend modals to smoothly hide the window back to the background on dismiss.
+### 1. Direct Screenshot Paste (`⌘V`) & Cursor-Centric Placement (`src/App.tsx`)
+- **Global `paste` Event Listener**:
+  - Listens to clipboard `paste` events on `window`.
+  - Scans `e.clipboardData.items` and `files` for `image/*` MIME types (PNG, JPEG, WebP, etc.).
+  - Extracts the image `File` or `Blob`, converts to base64 Data URL, and persists it into the board asset store (`save_asset`).
+- **Cursor-Centric Placement Math**:
+  - Tracks live pointer coordinates (`mousePosRef`).
+  - When `⌘V` is triggered, converts screen coordinates at the mouse cursor into canvas world coordinates via `engine.screen_to_world_x` and `engine.screen_to_world_y`.
+  - Centers the pasted screenshot precisely where the user is hovering. If mouse is off-canvas, centers at viewport midpoint.
+- **Aspect-Preserving Scaling**:
+  - Automatically bounds large Retina screenshots to max dimensions (`850px` width / `650px` height) preserving natural aspect ratio so it does not drown out the existing whiteboard.
 
-### 2. macOS Menu Bar System Tray Integration (`src-tauri/src/lib.rs`)
-- Integrated `tauri` feature `tray-icon` with `TrayIconBuilder`:
-  - Adds an unobtrusive tray icon in the macOS menu bar (top right next to clock).
-  - Left-click or menu click opens **Quick Note** directly.
-  - Native menu items:
-    - `Quick Note (⌥Space / ⌘⇧N)`
-    - `Open Aerial Canvas`
-    - `Quit Aerial`
-  - Zero `unwrap()` calls; robust error handling throughout tray registration.
+### 2. Drag-and-Drop for Screenshot Files & Floating Thumbnails (`src/App.tsx`)
+- **HTML5 Drag & Drop**:
+  - Handles `dragover`, `dragleave`, and `drop` on window.
+  - Users can drag macOS screenshot floating thumbnails (from bottom right of screen) or Finder screenshot files directly onto the canvas.
+  - Automatically positions dropped images at the drop cursor coordinates.
+- **Tauri Native File Drop Listener**:
+  - Listens to `tauri://drag-drop` events for OS-level file drops.
+  - Reads dropped paths asynchronously via `@tauri-apps/plugin-fs` `readFile` and converts to image assets.
+- **Machinery CAD Drop Reticle HUD**:
+  - Renders a brutalist dashed border overlay with corner brackets and pulsing icon when files are hovered over Aerial.
 
-### 3. Laptop-First Quick Note Scratchpad (`src/components/QuickCanvasModal.tsx`)
-- **Laptop-First Defaults**:
-  - Defaults to **Text Note Mode** (`activeTab = 'text'`) for keyboard-first capture without requiring a stylus.
-  - **Instant Autofocus**: The textarea is automatically focused upon opening; the user hits the hotkey and begins typing immediately with zero mouse/trackpad interaction.
-  - **Sleek Floating Card Geometry**:
-    - Compact `max-w-2xl h-[520px]` in text mode, avoiding full-screen takeover.
-    - Smoothly expands to `max-w-4xl h-[78vh]` when user switches to Sketch mode (`⌘2`).
-- **"Goes Away" Auto-Dismiss Architecture**:
-  - `⎋ (Escape)` or clicking the backdrop: Dismisses the note and calls `onHideWindow()`, instantly tucking Aerial back into the background and returning focus to the user's previous app.
-  - `⌘↵ (Stamp & Hide)`: Stamps the note to the active board and immediately dismisses/hides.
-  - Dedicated on-screen `Dismiss (⎋)` and `Hide (⌘H)` buttons.
-- **Recent Quick Notes Archive Drawer**:
-  - Manages a recent scratchpad history (`aerial_quick_notes_archive`) so past transient thoughts are preserved across sessions.
-  - `⌘N` starts a fresh note, archiving the previous one automatically.
-- **Rapid Syntax Insertion Chips**:
-  - `[+ Todo]` (`- [ ] `)
-  - `[+ Idea]` (`💡 `)
-  - `[+ Link]` (`[title](url)`)
-  - `[+ Code]` (```` ``` ````)
-  - `[+ Time]` (`[HH:MM] `)
+### 3. Screenshot Support in Quick Canvas (`src/components/QuickCanvasModal.tsx`)
+- Inside the Quick Note modal, pressing `⌘V` with a screenshot in clipboard:
+  - If in **Sketch Mode**: Adds the image into the sketchpad.
+  - If in **Text Mode**: Automatically stamps the screenshot directly onto the main canvas, displays a confirmation toast, and dismisses the note!
 
-### 4. Mac Spotlight Command Palette (`src/components/CommandPaletteModal.tsx`)
-- **Omnibox Launcher (`⌘K`)**:
-  - Instant live fuzzy search across all application tools, boards, actions, and settings.
-  - Full keyboard navigation with `↑`/`↓`, `Enter`, and `Escape`.
+### 4. Zero-Memory Background Residency & Window Close Intercept (`src-tauri/src/lib.rs`)
+- Intercepts `WindowEvent::CloseRequested` to hide the window instead of quitting.
+- Low memory & zero CPU usage while dormant in background.
+- Global desktop hotkeys `⌥Space` and `⌘⇧A` awaken Aerial from anywhere on macOS.
 
-### 5. Comprehensive macOS Keyboard Shortcuts Suite (`src/App.tsx`)
-| Shortcut | Action | Description |
-|---|---|---|
-| `⌥Space` / `⌘⇧A` | System Global Hotkey | Pop up Quick Note from any app across macOS |
-| `⌘⇧N` / `⌘J` | Quick Note | Open instant scratchpad in-app |
-| `⌘K` | Command Palette | Open Spotlight-style command launcher |
-| `⌘1` / `⌘2` | Note Mode Switch | Switch between Text mode and Sketch mode |
-| `⌘↵` | Stamp & Dismiss | Stamp note to active canvas and dismiss/hide |
-| `⌘S` | Save as Board | Save note as dedicated board in sidebar |
-| `⌘N` | New Note | Start blank quick note |
-| `⌘H` / `⎋` | Dismiss & Hide | Dismiss scratchpad and hide Aerial to background |
-| `⌘⇧S` | Export PNG | Export full visible board as PNG |
-| `⌘B` | Toggle Sidebar | Show/hide board management sidebar |
-| `⌘,` | Canvas Settings | Open canvas background & color palette menu |
-| `⌃⌘F` | Toggle Fullscreen | Enter or exit native macOS fullscreen |
-| `⌘0` | Reset Zoom | Reset zoom to 100% and center origin |
-| `⌘+` / `⌘-` | Zoom In/Out | Step zoom level |
+### 5. macOS Menu Bar System Tray Integration (`src-tauri/src/lib.rs`)
+- Built-in tray icon with quick actions: `Quick Note (⌥Space / ⌘⇧N)`, `Open Aerial Canvas`, `Quit Aerial`.
 
 ---
 
 ## Verification
-- `cargo check --manifest-path src-tauri/Cargo.toml`: Finished in 1.61s with 0 errors.
-- `bun run build`: TypeScript compiler and Vite bundler passed with 0 errors.
-- `bun run build:lib`: Distribution and type declarations built with 0 errors.
-- Hephaestus compliance audit passed (zero Orbitron, zero raw logs).
+- `cargo check --manifest-path src-tauri/Cargo.toml`: Finished in 1.75s with 0 errors.
+- `bun run build`: Built web bundle in 3.47s with 0 errors.
+- `bun run build:lib`: Built library distribution in 4.42s with 0 errors.
+- Hephaestus compliance audit: 100% compliant (zero Orbitron, zero raw logs).

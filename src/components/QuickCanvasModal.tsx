@@ -279,6 +279,50 @@ export function QuickCanvasModal({
     }, 0);
   }, []);
 
+  // Handle Paste event inside Quick Canvas (Screenshots & Images)
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              const dataUrl = ev.target?.result as string;
+              if (dataUrl) {
+                if (activeTab === 'sketch' && canvasRef.current) {
+                  const img = new Image();
+                  img.onload = () => {
+                    const w = Math.min(img.width, 500);
+                    const h = (w / img.width) * img.height;
+                    const assetId = crypto.randomUUID();
+                    canvasRef.current?.addImage(img, 50, 50, w, h, assetId);
+                  };
+                  img.src = dataUrl;
+                } else {
+                  onStampSketch(file);
+                  setStamped(true);
+                  setTimeout(() => {
+                    setStamped(false);
+                    handleDismiss();
+                  }, 250);
+                }
+              }
+            };
+            reader.readAsDataURL(file);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [activeTab, onStampSketch, handleDismiss]);
+
   // Keyboard shortcut handler inside Quick Canvas
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

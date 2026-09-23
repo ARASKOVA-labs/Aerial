@@ -33,6 +33,7 @@ import {
   ExternalLink,
   Command,
   Palette,
+  Sliders,
   Layers,
   Edit3,
   Check,
@@ -147,6 +148,49 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+
+  // Refs for dismissing popovers on canvas tap / outside click
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const moreToolsRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+  const moreToolsBtnRef = useRef<HTMLButtonElement>(null);
+  const sidebarBtnRef = useRef<HTMLButtonElement>(null);
+
+  const closeAllPopups = useCallback((): boolean => {
+    const wasOpen = showSettings || showMoreTools || isMenuOpen || showWelcome;
+    if (showSettings) setShowSettings(false);
+    if (showMoreTools) setShowMoreTools(false);
+    if (isMenuOpen) setIsMenuOpen(false);
+    if (showWelcome) setShowWelcome(false);
+    return wasOpen;
+  }, [showSettings, showMoreTools, isMenuOpen, showWelcome]);
+
+  // ── Dismiss Popovers on Outside Tap / Click ─────────────────────────────────
+  useEffect(() => {
+    if (!showSettings && !showMoreTools && !isMenuOpen) return;
+
+    const handlePointerDownOutside = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+
+      if (
+        settingsRef.current?.contains(target) ||
+        settingsBtnRef.current?.contains(target) ||
+        moreToolsRef.current?.contains(target) ||
+        moreToolsBtnRef.current?.contains(target) ||
+        sidebarRef.current?.contains(target) ||
+        sidebarBtnRef.current?.contains(target)
+      ) {
+        return;
+      }
+
+      closeAllPopups();
+    };
+
+    window.addEventListener('pointerdown', handlePointerDownOutside, true);
+    return () => window.removeEventListener('pointerdown', handlePointerDownOutside, true);
+  }, [showSettings, showMoreTools, isMenuOpen, closeAllPopups]);
 
   // Collaboration State
   const wsRef = useRef<WebSocket | null>(null);
@@ -358,14 +402,7 @@ export default function App() {
   // ── Tool Selection ────────────────────────────────────────────────────────
   const selectTool = useCallback((id: DesktopToolId) => {
     if (activeTool === id) {
-      if (id === 'eraser') {
-        const nextMode: 'stroke' | 'precision' | 'element' =
-          eraserMode === 'stroke' ? 'precision' : eraserMode === 'precision' ? 'element' : 'stroke';
-        setEraserMode(nextMode);
-        canvasRef.current?.setEraserType(nextMode);
-        return;
-      }
-      if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'magic_pen'].includes(id)) {
+      if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'magic_pen', 'eraser'].includes(id)) {
         setShowSettings(s => !s);
       }
       return;
@@ -718,8 +755,19 @@ export default function App() {
     <div
       className="fixed inset-0 text-foreground overflow-hidden font-brand select-none"
       style={{ backgroundColor: canvasBgColor }}
-      onPointerDown={() => {
-        if (showWelcome) setShowWelcome(false);
+      onPointerDown={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (target && (
+          settingsRef.current?.contains(target) ||
+          moreToolsRef.current?.contains(target) ||
+          sidebarRef.current?.contains(target) ||
+          settingsBtnRef.current?.contains(target) ||
+          moreToolsBtnRef.current?.contains(target) ||
+          sidebarBtnRef.current?.contains(target)
+        )) {
+          return;
+        }
+        closeAllPopups();
       }}
     >
       {/* ── Background Canvas Component (Core Library) ── */}
@@ -740,6 +788,7 @@ export default function App() {
           onZoomChange={setZoomLevel}
           onToolChange={(tool) => setActiveTool(tool)}
           onNodeDoubleClick={handleNodeDoubleClick}
+          onCanvasPointerDown={closeAllPopups}
           className="w-full h-full"
         />
 
@@ -758,6 +807,7 @@ export default function App() {
         {/* Top-Left Hamburger Menu */}
         <div className={`absolute top-4 left-4 z-50 transition-all duration-500 ease-in-out ${isFullscreen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
           <button
+            ref={sidebarBtnRef}
             onClick={() => setIsMenuOpen(!isMenuOpen)}
             className="pointer-events-auto h-10 px-2.5 flex items-center gap-2 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-md rounded-2xl hover:bg-[var(--accent)] transition-all hover:scale-105 active:scale-95 cursor-pointer"
             title="Menu & Canvas Settings"
@@ -767,7 +817,7 @@ export default function App() {
           </button>
 
           {isMenuOpen && (
-            <div className="pointer-events-auto absolute top-12 left-0 w-80 max-h-[calc(100vh-4rem)] bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150 z-50">
+            <div ref={sidebarRef} className="pointer-events-auto absolute top-12 left-0 w-80 max-h-[calc(100vh-4rem)] bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150 z-50">
               {/* Header */}
               <div className="px-4 py-3.5 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] shrink-0">
                 <div className="flex items-center gap-3">
@@ -1210,15 +1260,55 @@ export default function App() {
               <ToolBtn icon={ImageIcon} title="Insert Image" onClick={() => imageInputRef.current?.click()} />
             </div>
             <div className="w-px h-5 bg-[var(--border)] mx-1" />
+
+            {/* Dedicated Color Palette & Stroke Settings Button */}
+            {['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'magic_pen'].includes(activeTool) && (
+              <button
+                ref={settingsBtnRef}
+                onClick={() => setShowSettings(s => !s)}
+                title="Color Palette & Stroke Settings (S)"
+                className={`h-9 px-2 rounded-xl flex items-center gap-1.5 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
+                  showSettings
+                    ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30'
+                    : 'hover:bg-[var(--accent)] text-[var(--foreground)]/80 hover:text-[var(--foreground)]'
+                }`}
+              >
+                <div
+                  className="w-4 h-4 rounded-full border border-white/40 shadow-xs shrink-0"
+                  style={{ backgroundColor: strokeColor }}
+                />
+                <span className="text-[10px] font-mono font-bold">{strokeWidth}px</span>
+              </button>
+            )}
+
+            {/* Dedicated Eraser Settings Button */}
+            {activeTool === 'eraser' && (
+              <button
+                ref={settingsBtnRef}
+                onClick={() => setShowSettings(s => !s)}
+                title="Eraser Settings (S)"
+                className={`h-9 px-2.5 rounded-xl flex items-center gap-1.5 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
+                  showSettings
+                    ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30'
+                    : 'hover:bg-[var(--accent)] text-[var(--foreground)]/80 hover:text-[var(--foreground)]'
+                }`}
+              >
+                <Sliders className="w-3.5 h-3.5" />
+                <span className="text-[10px] font-mono font-bold capitalize">{eraserMode}</span>
+              </button>
+            )}
+
             <div className="relative">
-              <ToolBtn
-                icon={MoreHorizontal}
-                title="More Tools"
-                active={showMoreTools || ['fountain', 'magic_pen', 'laser_pen', 'highlighter'].includes(activeTool)}
-                onClick={() => setShowMoreTools(!showMoreTools)}
-              />
+              <span ref={moreToolsBtnRef} className="inline-flex">
+                <ToolBtn
+                  icon={MoreHorizontal}
+                  title="More Tools"
+                  active={showMoreTools || ['fountain', 'magic_pen', 'laser_pen', 'highlighter'].includes(activeTool)}
+                  onClick={() => setShowMoreTools(!showMoreTools)}
+                />
+              </span>
               {showMoreTools && (
-                <div className="absolute top-full mt-2 right-0 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-64 max-w-[calc(100vw-2rem)] flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                <div ref={moreToolsRef} className="absolute top-full mt-2 right-0 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-64 max-w-[calc(100vw-2rem)] flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
                   <div className="flex items-center gap-1.5 px-2.5 py-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07]" />
                     <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Special Pens</p>
@@ -1265,7 +1355,7 @@ export default function App() {
 
           {/* Settings Popover */}
           {showSettings && (
-            <div className="pointer-events-auto absolute top-20 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-5 w-72 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
+            <div ref={settingsRef} className="pointer-events-auto absolute top-20 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-5 w-72 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
               {activeTool === 'magic_pen' ? (
                 <div className="flex flex-col gap-3">
                   <div>
@@ -1787,12 +1877,19 @@ function DiagramStudioModal({
   onInsertDiagram: (code: string, svg: string) => void;
 }) {
   const [code, setCode] = useState(DIAGRAM_TEMPLATES[0].code);
-  const [diagramStyle, setDiagramStyle] = useState<AraskovaDiagramStyle>('brutalist');
+  const [diagramStyle, setDiagramStyle] = useState<AraskovaDiagramStyle>(() =>
+    isDarkMode ? 'brutalist' : 'industrial_light'
+  );
   const [svgOutput, setSvgOutput] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
   const [copied, setCopied] = useState(false);
   const previewRef = useRef<HTMLDivElement>(null);
+
+  // Sync default aesthetic style when canvas theme toggles
+  useEffect(() => {
+    setDiagramStyle(isDarkMode ? 'brutalist' : 'industrial_light');
+  }, [isDarkMode]);
 
   const renderCurrentDiagram = useCallback(
     async (srcCode: string, style: AraskovaDiagramStyle) => {
@@ -1800,12 +1897,15 @@ function DiagramStudioModal({
       setError(null);
       try {
         const trimmed = srcCode.trim();
+        const effectiveDark =
+          style === 'industrial_light' ? false : style === 'blueprint' ? true : isDarkMode;
+
         if (trimmed.startsWith('node ') || trimmed.startsWith('group ')) {
           // Aras DSL format
           try {
             const res = await invoke<{ svg: string }>('render_diagram', { code: trimmed });
             if (res?.svg) {
-              const styledSvg = applyAraskovaDiagramAesthetics(res.svg, isDarkMode, style);
+              const styledSvg = applyAraskovaDiagramAesthetics(res.svg, effectiveDark, style);
               setSvgOutput(styledSvg);
               setIsRendering(false);
               return;
@@ -1815,11 +1915,18 @@ function DiagramStudioModal({
           }
         }
 
+        // Reset mermaid API configuration cache before re-initializing
+        if ((mermaid as any).mermaidAPI?.reset) {
+          try {
+            (mermaid as any).mermaidAPI.reset();
+          } catch (_) {}
+        }
+
         // Initialize Mermaid with Araskova design system configuration
-        mermaid.initialize(getAraskovaMermaidConfig(isDarkMode, style));
+        mermaid.initialize(getAraskovaMermaidConfig(effectiveDark, style));
         const id = 'mermaid-preview-' + Math.random().toString(36).substring(2, 9);
         const { svg } = await mermaid.render(id, trimmed);
-        const styledSvg = applyAraskovaDiagramAesthetics(svg, isDarkMode, style);
+        const styledSvg = applyAraskovaDiagramAesthetics(svg, effectiveDark, style);
         setSvgOutput(styledSvg);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1848,16 +1955,28 @@ function DiagramStudioModal({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/85 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150 p-4">
-      <div className="bg-[#111111] border border-[#2a2a2a] rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden text-[#f3f3f2]">
+      <div
+        className={`${
+          isDarkMode ? 'bg-[#111111] border-[#2a2a2a] text-[#f3f3f2]' : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a]'
+        } border rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden`}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#2a2a2a] bg-[#0a0a0a]/80">
+        <div
+          className={`flex items-center justify-between px-6 py-4 border-b ${
+            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/80' : 'border-[#e5e5e5] bg-[#f8f9fa]'
+          }`}
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/15 border border-[#e73f07]/30 flex items-center justify-center text-[#e73f07] shadow-inner">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-sm font-sans font-black uppercase tracking-wider text-[#f3f3f2]">
+                <h2
+                  className={`text-sm font-sans font-black uppercase tracking-wider ${
+                    isDarkMode ? 'text-[#f3f3f2]' : 'text-[#0a0a0a]'
+                  }`}
+                >
                   Architecture & Mermaid Studio
                 </h2>
                 <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-widest bg-[#e73f07]/20 text-[#e73f07] border border-[#e73f07]/30">
@@ -1888,7 +2007,9 @@ function DiagramStudioModal({
                 className={`px-2.5 py-1 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
                   diagramStyle === st.id
                     ? 'bg-[#e73f07] text-white shadow-xs'
-                    : 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                    : isDarkMode
+                    ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                    : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
                 }`}
               >
                 {st.label}
@@ -1897,7 +2018,9 @@ function DiagramStudioModal({
 
             <button
               onClick={onClose}
-              className="ml-2 w-8 h-8 rounded-full flex items-center justify-center hover:bg-[#2a2a2a] transition-colors cursor-pointer text-[#81868b] hover:text-[#f3f3f2]"
+              className={`ml-2 w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
+                isDarkMode ? 'hover:bg-[#2a2a2a] text-[#81868b] hover:text-[#f3f3f2]' : 'hover:bg-[#e9ecef] text-[#666666] hover:text-[#000000]'
+              }`}
             >
               <X className="w-4 h-4" />
             </button>
@@ -1905,7 +2028,11 @@ function DiagramStudioModal({
         </div>
 
         {/* Template Selector */}
-        <div className="px-6 py-2.5 bg-[#0a0a0a]/50 border-b border-[#2a2a2a] flex items-center gap-2 overflow-x-auto scrollbar-none">
+        <div
+          className={`px-6 py-2.5 border-b flex items-center gap-2 overflow-x-auto scrollbar-none ${
+            isDarkMode ? 'bg-[#0a0a0a]/50 border-[#2a2a2a]' : 'bg-[#f1f3f5] border-[#e5e5e5]'
+          }`}
+        >
           <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold whitespace-nowrap mr-2">
             Presets:
           </span>
@@ -1916,7 +2043,9 @@ function DiagramStudioModal({
               className={`px-3 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap cursor-pointer ${
                 code === tmpl.code
                   ? 'bg-[#e73f07] text-white shadow-xs'
-                  : 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                  : isDarkMode
+                  ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                  : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
               }`}
             >
               {tmpl.name}
@@ -1925,9 +2054,9 @@ function DiagramStudioModal({
         </div>
 
         {/* Body (Editor + Preview) */}
-        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-[#2a2a2a]">
+        <div className={`flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x ${isDarkMode ? 'divide-[#2a2a2a]' : 'divide-[#e5e5e5]'}`}>
           {/* Editor Side */}
-          <div className="flex flex-col h-full bg-[#111111] p-4">
+          <div className={`flex flex-col h-full ${isDarkMode ? 'bg-[#111111]' : 'bg-[#fafafa]'} p-4`}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] flex items-center gap-1.5">
                 <Code className="w-3.5 h-3.5 text-[#e73f07]" />
@@ -1946,7 +2075,9 @@ function DiagramStudioModal({
               onChange={(e) => setCode(e.target.value)}
               placeholder="Enter Mermaid or Aras DSL code..."
               spellCheck={false}
-              className="flex-1 w-full bg-[#0a0a0a] text-[#f3f3f2] font-mono text-xs p-3.5 rounded-2xl border border-[#2a2a2a] outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner"
+              className={`flex-1 w-full font-mono text-xs p-3.5 rounded-2xl border outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner ${
+                isDarkMode ? 'bg-[#0a0a0a] text-[#f3f3f2] border-[#2a2a2a]' : 'bg-white text-[#0a0a0a] border-[#e5e5e5]'
+              }`}
             />
             {error && (
               <div className="mt-2.5 p-2.5 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 font-mono text-[10px] leading-tight">
@@ -1957,7 +2088,7 @@ function DiagramStudioModal({
           </div>
 
           {/* Preview Side */}
-          <div className="flex flex-col h-full bg-[#0a0a0a] p-4">
+          <div className={`flex flex-col h-full ${isDarkMode ? 'bg-[#0a0a0a]' : 'bg-[#f4f4f5]'} p-4`}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b]">
                 Rendered Preview (Araskova Machinery Engine)
@@ -1965,7 +2096,7 @@ function DiagramStudioModal({
               {svgOutput && (
                 <button
                   onClick={handleCopySvg}
-                  className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] hover:text-[#f3f3f2] flex items-center gap-1 cursor-pointer"
+                  className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] hover:text-[#e73f07] flex items-center gap-1 cursor-pointer"
                 >
                   {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
                   {copied ? 'Copied SVG' : 'Copy SVG'}
@@ -1974,7 +2105,9 @@ function DiagramStudioModal({
             </div>
             <div
               ref={previewRef}
-              className="flex-1 w-full rounded-2xl border border-[#2a2a2a] bg-[#111111] overflow-auto p-4 flex items-center justify-center min-h-[260px] relative"
+              className={`flex-1 w-full rounded-2xl border overflow-auto p-4 flex items-center justify-center min-h-[260px] relative ${
+                isDarkMode ? 'border-[#2a2a2a] bg-[#111111]' : 'border-[#e5e5e5] bg-white'
+              }`}
             >
               {/* Tactical Corner Marks on Preview Box */}
               <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-[#e73f07]/40 pointer-events-none" />
@@ -1997,14 +2130,20 @@ function DiagramStudioModal({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-[#2a2a2a] bg-[#0a0a0a]/80 flex items-center justify-between">
+        <div
+          className={`px-6 py-4 border-t flex items-center justify-between ${
+            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/80' : 'border-[#e5e5e5] bg-[#f8f9fa]'
+          }`}
+        >
           <p className="text-[10px] font-mono text-[#81868b]">
             Embedded Google Fonts & tactical vector reticles. Fully zoomable and exportable.
           </p>
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border border-[#2a2a2a] text-[#f3f3f2] hover:bg-[#1a1a1a] transition-all cursor-pointer"
+              className={`px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                isDarkMode ? 'border-[#2a2a2a] text-[#f3f3f2] hover:bg-[#1a1a1a]' : 'border-[#e5e5e5] text-[#0a0a0a] hover:bg-[#e9ecef]'
+              }`}
             >
               Cancel
             </button>

@@ -303,12 +303,20 @@ export function getAraskovaMermaidConfig(isDarkMode = true, style: AraskovaDiagr
  */
 export function applyAraskovaDiagramAesthetics(
   svgString: string,
-  _isDarkMode = true,
-  _style: AraskovaDiagramStyle = 'brutalist'
+  isDarkMode = true,
+  style: AraskovaDiagramStyle = 'brutalist'
 ): string {
   if (!svgString || typeof svgString !== 'string') return svgString;
 
+  const isDark = style === 'industrial_light' ? false : style === 'blueprint' ? true : isDarkMode;
+  const isBlueprint = style === 'blueprint';
+
   const brandAccent = '#e73f07';
+  const brandSurface = isBlueprint ? '#0c1524' : isDark ? '#18181b' : '#ffffff';
+  const brandBorder = isBlueprint ? '#2563eb' : isDark ? '#3f3f46' : '#18181b';
+  const textPrimary = isBlueprint ? '#ffffff' : isDark ? '#f4f4f5' : '#09090b';
+  const lineCol = isBlueprint ? '#38bdf8' : isDark ? '#a1a1aa' : '#27272a';
+  const clusterBkg = isBlueprint ? '#09101d' : isDark ? '#101012' : '#fafafa';
 
   if (typeof DOMParser === 'undefined') return svgString;
 
@@ -318,17 +326,17 @@ export function applyAraskovaDiagramAesthetics(
     const svgEl = doc.querySelector('svg');
     if (!svgEl) return svgString;
 
+    // Remove any hardcoded background colors on root SVG
+    svgEl.removeAttribute('style');
+    svgEl.setAttribute('style', 'background: transparent !important;');
+
     // 1. Ensure explicit pixel dimensions from viewBox
     const vb = svgEl.getAttribute('viewBox');
     if (vb) {
       const parts = vb.trim().split(/[\s,]+/).map(parseFloat);
       if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-        if (!svgEl.getAttribute('width') || svgEl.getAttribute('width') === '100%') {
-          svgEl.setAttribute('width', String(Math.round(parts[2])));
-        }
-        if (!svgEl.getAttribute('height') || svgEl.getAttribute('height') === '100%') {
-          svgEl.setAttribute('height', String(Math.round(parts[3])));
-        }
+        svgEl.setAttribute('width', String(Math.round(parts[2])));
+        svgEl.setAttribute('height', String(Math.round(parts[3])));
       }
     }
 
@@ -339,26 +347,83 @@ export function applyAraskovaDiagramAesthetics(
       svgEl.insertBefore(defsEl, svgEl.firstChild);
     }
 
-    // 3. Purge all drop-shadow filters from the SVG DOM to guarantee crispness
+    // 3. Inject our theme CSS into SVG <style id="araskova-theme-override">
+    const { themeCSS } = getAraskovaMermaidConfig(isDarkMode, style);
+    let themeStyleEl = svgEl.querySelector('#araskova-theme-override');
+    if (!themeStyleEl) {
+      themeStyleEl = doc.createElementNS('http://www.w3.org/2000/svg', 'style');
+      themeStyleEl.setAttribute('id', 'araskova-theme-override');
+      svgEl.insertBefore(themeStyleEl, defsEl.nextSibling);
+    }
+    themeStyleEl.textContent = themeCSS;
+
+    // 4. Update Node fills, strokes, and texts in DOM to guarantee theme sync
+    const nodeShapes = doc.querySelectorAll('.node rect, .node circle, .node polygon, .node path');
+    nodeShapes.forEach((el) => {
+      const currentStroke = el.getAttribute('stroke') || '';
+      const isAccent = currentStroke.toLowerCase().includes('e73f07') || currentStroke.toLowerCase().includes('orange');
+      if (!isAccent) {
+        el.setAttribute('fill', brandSurface);
+        el.setAttribute('stroke', brandBorder);
+      }
+      el.removeAttribute('filter');
+    });
+
+    const nodeTexts = doc.querySelectorAll('.node text, .nodeLabel, .node span, text.actor');
+    nodeTexts.forEach((el) => {
+      el.setAttribute('fill', textPrimary);
+      (el as HTMLElement).style.color = textPrimary;
+    });
+
+    // 5. Update Clusters
+    const clusterRects = doc.querySelectorAll('g.cluster rect');
+    clusterRects.forEach((r) => {
+      r.setAttribute('fill', clusterBkg);
+      r.setAttribute('stroke', brandBorder);
+      r.removeAttribute('filter');
+    });
+
+    // 6. Update Edges and Labels
+    const edgePaths = doc.querySelectorAll('.edgePath .path, .flowchart-link');
+    edgePaths.forEach((p) => {
+      p.setAttribute('stroke', lineCol);
+    });
+
+    const edgeLabelRects = doc.querySelectorAll('.edgeLabel rect');
+    edgeLabelRects.forEach((r) => {
+      r.setAttribute('fill', isDark ? '#27272a' : '#ffffff');
+      r.setAttribute('stroke', brandBorder);
+    });
+
+    // 7. Purge all drop-shadow filters from the SVG DOM to guarantee crispness
     const elementsWithFilter = doc.querySelectorAll('[filter]');
     elementsWithFilter.forEach(el => el.removeAttribute('filter'));
 
-    // 4. Inject precision sharp Araskova arrowhead marker
-    const markerEl = doc.createElementNS('http://www.w3.org/2000/svg', 'marker');
-    markerEl.setAttribute('id', 'araskova-arrow-head');
-    markerEl.setAttribute('viewBox', '0 0 10 10');
-    markerEl.setAttribute('refX', '7');
-    markerEl.setAttribute('refY', '5');
-    markerEl.setAttribute('markerWidth', '6');
-    markerEl.setAttribute('markerHeight', '6');
-    markerEl.setAttribute('orient', 'auto-start-reverse');
-    const markerPath = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
-    markerPath.setAttribute('d', 'M 0 2 L 7 5 L 0 8 Z');
-    markerPath.setAttribute('fill', brandAccent);
-    markerEl.appendChild(markerPath);
-    defsEl.appendChild(markerEl);
+    // 8. Inject precision sharp Araskova arrowhead marker
+    let markerEl = doc.querySelector('#araskova-arrow-head');
+    if (!markerEl) {
+      markerEl = doc.createElementNS('http://www.w3.org/2000/svg', 'marker');
+      markerEl.setAttribute('id', 'araskova-arrow-head');
+      markerEl.setAttribute('viewBox', '0 0 10 10');
+      markerEl.setAttribute('refX', '7');
+      markerEl.setAttribute('refY', '5');
+      markerEl.setAttribute('markerWidth', '6');
+      markerEl.setAttribute('markerHeight', '6');
+      markerEl.setAttribute('orient', 'auto-start-reverse');
+      const markerPath = doc.createElementNS('http://www.w3.org/2000/svg', 'path');
+      markerPath.setAttribute('d', 'M 0 2 L 7 5 L 0 8 Z');
+      markerPath.setAttribute('fill', brandAccent);
+      markerEl.appendChild(markerPath);
+      defsEl.appendChild(markerEl);
+    }
 
-    // 5. Stylize Subgraphs / Clusters with crisp // SYS.<NAME> Header Bar
+    // 9. Update all line markers to Araskova Orange
+    const pathsWithMarker = doc.querySelectorAll('path[marker-end]');
+    pathsWithMarker.forEach(p => {
+      p.setAttribute('marker-end', 'url(#araskova-arrow-head)');
+    });
+
+    // 10. Stylize Subgraphs / Clusters with crisp // SYS.<NAME> Header Bar
     const clusterGroups = doc.querySelectorAll('g.cluster');
     clusterGroups.forEach(cluster => {
       const clusterRect = cluster.querySelector('rect');
@@ -368,9 +433,9 @@ export function applyAraskovaDiagramAesthetics(
         const cy = parseFloat(clusterRect.getAttribute('y') || '0');
         const cw = parseFloat(clusterRect.getAttribute('width') || '0');
 
-        // Add crisp top indicator notch
-        if (cw > 50) {
+        if (cw > 50 && !cluster.querySelector('.araskova-cluster-tab')) {
           const tab = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          tab.setAttribute('class', 'araskova-cluster-tab');
           tab.setAttribute('x', `${cx + 6}`);
           tab.setAttribute('y', `${cy}`);
           tab.setAttribute('width', `${Math.min(cw - 12, 60)}`);
@@ -380,7 +445,6 @@ export function applyAraskovaDiagramAesthetics(
           cluster.insertBefore(tab, clusterRect.nextSibling);
         }
 
-        // Format cluster label text with technical slash prefix
         const rawContent = clusterText.textContent?.trim() || '';
         if (rawContent && !rawContent.startsWith('//')) {
           clusterText.textContent = `// SYS.${rawContent.toUpperCase()}`;
@@ -388,13 +452,7 @@ export function applyAraskovaDiagramAesthetics(
       }
     });
 
-    // 6. Update all line markers to Araskova Orange
-    const pathsWithMarker = doc.querySelectorAll('path[marker-end]');
-    pathsWithMarker.forEach(p => {
-      p.setAttribute('marker-end', 'url(#araskova-arrow-head)');
-    });
-
-    // 7. Serialize modified SVG back to string
+    // 11. Serialize modified SVG back to string
     const serializer = new XMLSerializer();
     return serializer.serializeToString(doc);
   } catch (err) {
@@ -412,9 +470,9 @@ export const ARASKOVA_DIAGRAM_TEMPLATES = [
     desc: 'Autonomous multi-spectral defect detection & neural perception',
     type: 'Flowchart',
     code: `graph TD
-    classDef hardware fill:#18181b,stroke:#3f3f46,stroke-width:1.5px;
-    classDef neural fill:#201410,stroke:#e73f07,stroke-width:2px;
-    classDef telemetry fill:#18181b,stroke:#3f3f46,stroke-width:1.5px;
+    classDef hardware stroke:#3f3f46,stroke-width:1.5px;
+    classDef neural stroke:#e73f07,stroke-width:2px;
+    classDef telemetry stroke:#3f3f46,stroke-width:1.5px;
 
     subgraph INGESTION ["// Ingestion Cluster"]
         A[RGB Camera Feed] --> B[Frame Demuxer]

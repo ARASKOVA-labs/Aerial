@@ -19,6 +19,8 @@ import {
 } from './AerialToolbar';
 import { AerialDraggableTextBox } from './AerialDraggableTextBox';
 import { Edit3 } from 'lucide-react';
+import mermaid from 'mermaid';
+import { getAraskovaMermaidConfig, applyAraskovaDiagramAesthetics } from '../lib/diagram-theme';
 import type {
   AerialEngine,
   AerialCanvasProps,
@@ -58,6 +60,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       onEraserTypeChange,
       onToolChange,
       onNodeDoubleClick,
+      onCanvasPointerDown,
     } = props;
 
     // ── Refs ──────────────────────────────────────────────────────────────
@@ -262,13 +265,105 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       return () => clearInterval(interval);
     }, [engineReady, onChange, changeInterval]);
 
-    // ── Dark mode sync ────────────────────────────────────────────────────
-    useEffect(() => {
-      if (engineReady && engineRef.current) {
-        engineRef.current.set_dark_mode(isDarkMode);
-        engineRef.current.render();
+    // ── SVG to Image Rasterizer (Handles WebKit Data URLs & Blob URLs) ──
+    const renderSvgToImage = useCallback((cleanSvg: string): Promise<HTMLImageElement> => {
+      return new Promise((resolve, reject) => {
+        const sanitized = cleanSvg.replace(/@import\s+url\([^)]+\);?/gi, '');
+        const svg64 = btoa(unescape(encodeURIComponent(sanitized)));
+        const dataUrl = 'data:image/svg+xml;base64,' + svg64;
+
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => {
+          try {
+            const blob = new Blob([sanitized], { type: 'image/svg+xml;charset=utf-8' });
+            const blobUrl = URL.createObjectURL(blob);
+            const fallbackImg = new Image();
+            fallbackImg.onload = () => {
+              URL.revokeObjectURL(blobUrl);
+              resolve(fallbackImg);
+            };
+            fallbackImg.onerror = (e) => {
+              URL.revokeObjectURL(blobUrl);
+              reject(e);
+            };
+            fallbackImg.src = blobUrl;
+          } catch (e) {
+            reject(e);
+          }
+        };
+        img.src = dataUrl;
+      });
+    }, []);
+
+    // ── Dynamic Diagram Re-Theming on Canvas ──────────────────────────────
+    const rethemeDiagrams = useCallback(async (isDark: boolean) => {
+      if (!engineRef.current) return;
+      try {
+        const sceneJson = engineRef.current.get_scene_json();
+        const parsed = JSON.parse(sceneJson);
+        const diagramElements = (parsed.elements || []).filter(
+          (el: any) => el.kind && el.kind.toLowerCase() === 'diagram' && (el.code || el.svg)
+        );
+
+        if (diagramElements.length > 0) {
+          const style = isDark ? 'brutalist' : 'industrial_light';
+          if ((mermaid as any).mermaidAPI?.reset) {
+            try {
+              (mermaid as any).mermaidAPI.reset();
+            } catch (_) {}
+          }
+          mermaid.initialize(getAraskovaMermaidConfig(isDark, style));
+
+          for (const el of diagramElements) {
+            try {
+              let newSvg = '';
+              const code = (el.code || '').trim();
+              if (code.startsWith('node ') || code.startsWith('group ')) {
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  const res = await invoke<{ svg: string }>('render_diagram', { code });
+                  if (res?.svg) {
+                    newSvg = applyAraskovaDiagramAesthetics(res.svg, isDark, style);
+                  }
+                } catch {
+                  // Fall back if not running in Tauri
+                }
+              }
+
+              if (!newSvg && code) {
+                const id = 'retheme-' + el.id + '-' + Math.random().toString(36).substring(2, 7);
+                const { svg } = await mermaid.render(id, code);
+                newSvg = applyAraskovaDiagramAesthetics(svg, isDark, style);
+              }
+
+              if (!newSvg && el.svg) {
+                newSvg = applyAraskovaDiagramAesthetics(el.svg, isDark, style);
+              }
+
+              if (newSvg && engineRef.current) {
+                const img = await renderSvgToImage(newSvg);
+                engineRef.current.set_cached_image(BigInt(el.id), img);
+                engineRef.current.render();
+                logger.info(`Re-themed diagram #${el.id} for ${isDark ? 'dark' : 'light'} mode`);
+              }
+            } catch (err) {
+              logger.warn(`Failed to re-theme diagram #${el.id}:`, err);
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to parse scene for diagram re-theming:', err);
       }
-    }, [isDarkMode, engineReady]);
+    }, [renderSvgToImage]);
+
+    // ── Dark mode sync & Dynamic Diagram Re-Theming ───────────────────────
+    useEffect(() => {
+      if (!engineReady || !engineRef.current) return;
+      engineRef.current.set_dark_mode(isDarkMode);
+      rethemeDiagrams(isDarkMode);
+      engineRef.current.render();
+    }, [isDarkMode, engineReady, rethemeDiagrams]);
 
     // ── Background color sync ──────────────────────────────────────────────
     useEffect(() => {
@@ -459,6 +554,13 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
 
     // ── Pointer events ────────────────────────────────────────────────────
     const onPointerDown = useCallback((e: React.PointerEvent) => {
+      const dismissed = onCanvasPointerDown?.();
+      setShowSettings(false);
+      if (dismissed) {
+        // Tapping canvas dismissed an open popup menu cleanly.
+        // Suppress drawing or selection to prevent accidental marks.
+        return;
+      }
       if (!engineReady || !engineRef.current || readOnly) return;
 
       // Multi-touch tracking
@@ -914,14 +1016,13 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engineRef.current?.import_full_state(bytes);
         engineRef.current?.render();
       },
-      addDiagram: (code: string, rawSvg: string) => {
+      addDiagram: async (code: string, rawSvg: string) => {
         if (!engineRef.current) return;
 
         try {
-          // 1. Sanitize SVG: strip any external network @import (which WebKit strictly blocks in Image data URLs)
-          let cleanSvg = rawSvg.replace(/@import\s+url\([^)]+\);?/gi, '');
+          const style = isDarkMode ? 'brutalist' : 'industrial_light';
+          const cleanSvg = applyAraskovaDiagramAesthetics(rawSvg, isDarkMode, style);
 
-          // 2. Parse SVG to extract or enforce explicit width/height from viewBox
           let svgW = 600;
           let svgH = 400;
           if (typeof DOMParser !== 'undefined') {
@@ -945,61 +1046,28 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
                     svgH = Math.round(hAttr);
                   }
                 }
-
-                // Explicitly set width & height attributes on SVG root for guaranteed Image rasterization
-                svgEl.setAttribute('width', String(svgW));
-                svgEl.setAttribute('height', String(svgH));
-                cleanSvg = new XMLSerializer().serializeToString(doc);
               }
             } catch (e) {
               logger.warn('SVG parse error in addDiagram:', e);
             }
           }
 
-          // 3. Prepare Image and position centered in the current visible viewport
-          const blob = new Blob([cleanSvg], { type: 'image/svg+xml;charset=utf-8' });
-          const blobUrl = URL.createObjectURL(blob);
-          const img = new Image();
+          const img = await renderSvgToImage(cleanSvg);
+          const w = svgW || img.naturalWidth || 600;
+          const h = svgH || img.naturalHeight || 400;
 
-          img.onload = () => {
-            const w = svgW || img.naturalWidth || img.width || 500;
-            const h = svgH || img.naturalHeight || img.height || 350;
+          // Position at the visible center of the screen
+          const cx = window.innerWidth / 2;
+          const cy = window.innerHeight / 2;
+          const wx = engineRef.current ? engineRef.current.screen_to_world_x(cx - w / 2) : 100;
+          const wy = engineRef.current ? engineRef.current.screen_to_world_y(cy - h / 2) : 100;
 
-            // Position at the visible center of the screen
-            const cx = window.innerWidth / 2;
-            const cy = window.innerHeight / 2;
-            const wx = engineRef.current ? engineRef.current.screen_to_world_x(cx - w / 2) : 100;
-            const wy = engineRef.current ? engineRef.current.screen_to_world_y(cy - h / 2) : 100;
+          const svg64 = btoa(unescape(encodeURIComponent(cleanSvg)));
+          const dataUrl = 'data:image/svg+xml;base64,' + svg64;
 
-            const svg64 = btoa(unescape(encodeURIComponent(cleanSvg)));
-            const dataUrl = 'data:image/svg+xml;base64,' + svg64;
-
-            engineRef.current?.add_diagram(img, wx, wy, w, h, code, dataUrl, '{}');
-            engineRef.current?.render();
-            URL.revokeObjectURL(blobUrl);
-            logger.info(`Inserted diagram at (${wx.toFixed(1)}, ${wy.toFixed(1)}) size (${w}x${h})`);
-          };
-
-          img.onerror = (e) => {
-            logger.error('Failed to load diagram SVG image into canvas:', e);
-            URL.revokeObjectURL(blobUrl);
-
-            // Fallback: try base64 data url directly
-            const svg64 = btoa(unescape(encodeURIComponent(cleanSvg)));
-            const fallbackSrc = 'data:image/svg+xml;base64,' + svg64;
-            const fallbackImg = new Image();
-            fallbackImg.onload = () => {
-              const cx = window.innerWidth / 2;
-              const cy = window.innerHeight / 2;
-              const wx = engineRef.current ? engineRef.current.screen_to_world_x(cx - svgW / 2) : 100;
-              const wy = engineRef.current ? engineRef.current.screen_to_world_y(cy - svgH / 2) : 100;
-              engineRef.current?.add_diagram(fallbackImg, wx, wy, svgW, svgH, code, fallbackSrc, '{}');
-              engineRef.current?.render();
-            };
-            fallbackImg.src = fallbackSrc;
-          };
-
-          img.src = blobUrl;
+          engineRef.current?.add_diagram(img, wx, wy, w, h, code, dataUrl, '{}');
+          engineRef.current?.render();
+          logger.info(`Inserted diagram at (${wx.toFixed(1)}, ${wy.toFixed(1)}) size (${w}x${h})`);
         } catch (err) {
           logger.error('Error in addDiagram:', err);
         }
@@ -1055,6 +1123,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       deleteSelected: () => { engineRef.current?.delete_selected(); },
       setDarkMode: (isDark: boolean) => {
         engineRef.current?.set_dark_mode(isDark);
+        rethemeDiagrams(isDark);
         engineRef.current?.render();
       },
       setBackgroundColor: (color: string) => {

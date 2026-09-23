@@ -172,6 +172,8 @@ export interface AerialCanvasProps {
   onEraserTypeChange?: (type: 'stroke' | 'precision' | 'element') => void;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
+  /** Callback when canvas receives pointer down (used to dismiss menus/popovers; return true to consume event and suppress drawing) */
+  onCanvasPointerDown?: () => boolean | void;
 }
 
 // ── Imperative Ref API ──────────────────────────────────────────────────────

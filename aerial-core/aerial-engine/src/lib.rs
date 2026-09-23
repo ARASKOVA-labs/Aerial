@@ -68,6 +68,7 @@ pub struct AerialCanvas {
     is_rough: bool,
     is_curved: bool,
     is_dark_mode: bool,
+    bg_color: Option<String>,
     grid_type: String,
     dpr: f64,
     zoom: f64,
@@ -117,6 +118,7 @@ impl AerialCanvas {
             is_rough: false,
             is_curved: true,
             is_dark_mode: false,
+            bg_color: None,
             grid_type: "dots".to_string(),
             dpr: 1.0,
             zoom: 1.0,
@@ -425,6 +427,11 @@ impl AerialCanvas {
     // ── Appearance & Viewport ─────────────────────────────────────────────────
     pub fn set_dark_mode(&mut self, is_dark: bool) {
         self.is_dark_mode = is_dark;
+        self.dirty = true;
+    }
+
+    pub fn set_background_color(&mut self, color: &str) {
+        self.bg_color = Some(color.to_string());
         self.dirty = true;
     }
 
@@ -908,10 +915,19 @@ impl AerialCanvas {
         let height = self.canvas.height() as f64;
 
         // Clear canvas
-        let bg_color = if self.is_dark_mode { "#000000" } else { "#ffffff" };
-        self.ctx.set_fill_style_str(bg_color);
         self.ctx.clear_rect(0.0, 0.0, width, height);
-        self.ctx.fill_rect(0.0, 0.0, width, height);
+
+        let bg_color = self.bg_color.as_deref().unwrap_or(if self.is_dark_mode { "#0a0a0a" } else { "#ffffff" });
+        if bg_color != "transparent" {
+            self.ctx.set_fill_style_str(bg_color);
+            self.ctx.fill_rect(0.0, 0.0, width, height);
+        }
+
+        let is_dark = if let Some(ref c) = self.bg_color {
+            !c.starts_with("#f") && !c.starts_with("#F") && c != "white"
+        } else {
+            self.is_dark_mode
+        };
 
         self.ctx.save();
         self.ctx.scale(self.dpr, self.dpr).unwrap();
@@ -920,7 +936,7 @@ impl AerialCanvas {
 
         // Draw grid
         if self.grid_type == "dots" {
-            self.ctx.set_fill_style_str(if self.is_dark_mode { "#333333" } else { "#cbd5e1" });
+            self.ctx.set_fill_style_str(if is_dark { "#333333" } else { "#cbd5e1" });
             let step = 30.0;
             let start_x = ((self.screen_to_world_x(0.0) / step).floor() * step) as i32;
             let end_x = ((self.screen_to_world_x(width) / step).ceil() * step) as i32;
@@ -935,7 +951,7 @@ impl AerialCanvas {
                 }
             }
         } else if self.grid_type == "lines" {
-            self.ctx.set_stroke_style_str(if self.is_dark_mode { "#222222" } else { "#e2e8f0" });
+            self.ctx.set_stroke_style_str(if is_dark { "#222222" } else { "#e2e8f0" });
             self.ctx.set_line_width(1.0 / self.zoom);
             let step = 30.0;
             let start_x = ((self.screen_to_world_x(0.0) / step).floor() * step) as i32;

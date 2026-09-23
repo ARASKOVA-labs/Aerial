@@ -33,6 +33,7 @@ export const aerialcanvas_reset_view: (a: number) => number;
 export const aerialcanvas_save_state: (a: number) => void;
 export const aerialcanvas_screen_to_world_x: (a: number, b: number) => number;
 export const aerialcanvas_screen_to_world_y: (a: number, b: number) => number;
+export const aerialcanvas_set_background_color: (a: number, b: number, c: number) => void;
 export const aerialcanvas_set_cached_image: (a: number, b: bigint, c: any) => void;
 export const aerialcanvas_set_dark_mode: (a: number, b: number) => void;
 export const aerialcanvas_set_dpr: (a: number, b: number) => void;

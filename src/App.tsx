@@ -206,9 +206,12 @@ export default function App() {
 
     engine.set_grid_type(gridType);
     engine.set_dark_mode(isDarkMode);
+    if (canvasBgColor && typeof (engine as any).set_background_color === 'function') {
+      (engine as any).set_background_color(canvasBgColor);
+    }
     engine.render();
     setCanvasReady(true);
-  }, [activeBoardId, gridType, isDarkMode]);
+  }, [activeBoardId, gridType, isDarkMode, canvasBgColor]);
 
   // ── Auto-Save Loop: Persist to Tauri backend & broadcast delta ─────────────
   useEffect(() => {
@@ -355,6 +358,13 @@ export default function App() {
   const changeSharpness = useCallback((s: number) => {
     setFountainSharpness(s);
     canvasRef.current?.getEngine()?.set_fountain_sharpness(s);
+  }, []);
+
+  // ── Canvas Background Change ──────────────────────────────────────────────
+  const changeCanvasBg = useCallback((color: string) => {
+    setCanvasBgColor(color);
+    localStorage.setItem('aerial_canvas_bg', color);
+    canvasRef.current?.setBackgroundColor(color);
   }, []);
 
   // ── Diagram Node Double-Click (Tauri DSL update) ───────────────────────────
@@ -674,6 +684,7 @@ export default function App() {
           ref={canvasRef}
           theme={isDarkMode ? 'dark' : 'light'}
           backgroundColor={canvasBgColor}
+          onChangeBackgroundColor={changeCanvasBg}
           palmRejection={palmRejection}
           showToolbar={false}
           onReady={handleCanvasReady}
@@ -698,10 +709,11 @@ export default function App() {
         <div className={`absolute top-4 left-4 z-50 transition-all duration-500 ease-in-out ${isFullscreen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
           <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
-            className="pointer-events-auto w-10 h-10 flex items-center justify-center bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-md rounded-2xl hover:bg-[var(--accent)] transition-all hover:scale-105 active:scale-95 cursor-pointer"
-            title="Menu"
+            className="pointer-events-auto h-10 px-2.5 flex items-center gap-2 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-md rounded-2xl hover:bg-[var(--accent)] transition-all hover:scale-105 active:scale-95 cursor-pointer"
+            title="Menu & Canvas Settings"
           >
-            <Menu className="w-5 h-5 text-[var(--foreground)]" />
+            <AerialMark size={24} isDarkMode={isDarkMode} />
+            <Menu className="w-4 h-4 text-[var(--foreground)]" />
           </button>
 
           {isMenuOpen && (
@@ -710,7 +722,7 @@ export default function App() {
               <div className="px-4 py-3.5 flex items-center justify-between border-b border-[var(--border)] bg-[var(--card)] shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="w-8 h-8 shrink-0 rounded-xl overflow-hidden shadow-sm flex items-center justify-center">
-                    <AerialMark size={32} />
+                    <AerialMark size={32} isDarkMode={isDarkMode} />
                   </div>
                   <div>
                     <h1 className="font-rephen text-lg tracking-widest leading-none text-[var(--foreground)]" style={{ letterSpacing: '0.15em' }}>AERIAL</h1>
@@ -835,10 +847,7 @@ export default function App() {
                     {CANVAS_BG_PRESETS.map(preset => (
                       <button
                         key={preset.hex}
-                        onClick={() => {
-                          setCanvasBgColor(preset.hex);
-                          localStorage.setItem('aerial_canvas_bg', preset.hex);
-                        }}
+                        onClick={() => changeCanvasBg(preset.hex)}
                         title={preset.name}
                         style={{ backgroundColor: preset.hex, borderColor: preset.border }}
                         className={`h-7 rounded-lg border flex items-center justify-center transition-transform hover:scale-110 cursor-pointer ${
@@ -850,6 +859,18 @@ export default function App() {
                         )}
                       </button>
                     ))}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[10px] font-mono text-[var(--muted-foreground)]">Custom Color:</span>
+                    <div className="relative w-6 h-6 rounded-md border border-[var(--border)] overflow-hidden cursor-pointer hover:scale-105 transition-transform" title="Custom Canvas Background">
+                      <input
+                        type="color"
+                        value={canvasBgColor}
+                        onChange={(e) => changeCanvasBg(e.target.value)}
+                        className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between pt-1">
@@ -1350,6 +1371,47 @@ export default function App() {
                   )}
                 </>
               )}
+
+              {/* Canvas Background Section (Persistent in Settings) */}
+              <div className="pt-2.5 border-t border-[var(--border)]">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold flex items-center gap-1.5">
+                    <Palette className="w-3.5 h-3.5 text-[#e73f07]" />
+                    Canvas Background
+                  </p>
+                  <span className="text-[9px] font-mono text-[var(--muted-foreground)]">
+                    {CANVAS_BG_PRESETS.find(p => p.hex === canvasBgColor)?.name || 'Custom'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-6 gap-1.5 mb-1.5">
+                  {CANVAS_BG_PRESETS.map(preset => (
+                    <button
+                      key={preset.hex}
+                      onClick={() => changeCanvasBg(preset.hex)}
+                      title={preset.name}
+                      style={{ backgroundColor: preset.hex, borderColor: preset.border }}
+                      className={`h-7 rounded-lg border flex items-center justify-center transition-transform hover:scale-110 cursor-pointer ${
+                        canvasBgColor === preset.hex ? 'ring-2 ring-[#e73f07] scale-105 shadow-md' : 'opacity-85 hover:opacity-100'
+                      }`}
+                    >
+                      {canvasBgColor === preset.hex && (
+                        <div className={`w-2 h-2 rounded-full ${preset.hex === '#ffffff' || preset.hex === '#fdfbf7' ? 'bg-[#0a0a0a]' : 'bg-white'}`} />
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[10px] font-mono text-[var(--muted-foreground)]">Custom Color:</span>
+                  <div className="relative w-6 h-6 rounded-md border border-[var(--border)] overflow-hidden cursor-pointer hover:scale-105 transition-transform" title="Custom Canvas Background">
+                    <input
+                      type="color"
+                      value={canvasBgColor}
+                      onChange={(e) => changeCanvasBg(e.target.value)}
+                      className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </div>
 
               {/* Translation Settings */}
               <div className="flex flex-col gap-3 pt-4 border-t border-[var(--border)]">

@@ -35,6 +35,7 @@ export class AerialCanvas {
     save_state(): void;
     screen_to_world_x(sx: number): number;
     screen_to_world_y(sy: number): number;
+    set_background_color(color: string): void;
     set_cached_image(id: bigint, img: HTMLImageElement): void;
     set_dark_mode(is_dark: boolean): void;
     set_dpr(dpr: number): void;
@@ -105,6 +106,7 @@ export interface InitOutput {
     readonly aerialcanvas_save_state: (a: number) => void;
     readonly aerialcanvas_screen_to_world_x: (a: number, b: number) => number;
     readonly aerialcanvas_screen_to_world_y: (a: number, b: number) => number;
+    readonly aerialcanvas_set_background_color: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_set_cached_image: (a: number, b: bigint, c: any) => void;
     readonly aerialcanvas_set_dark_mode: (a: number, b: number) => void;
     readonly aerialcanvas_set_dpr: (a: number, b: number) => void;

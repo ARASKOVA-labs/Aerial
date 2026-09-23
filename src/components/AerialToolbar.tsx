@@ -280,6 +280,8 @@ export function AerialSettingsPopover({
   onChangeSharpness,
   onChangeRough,
   onChangeCurved,
+  backgroundColor,
+  onChangeBackgroundColor,
 }: AerialSettingsPopoverProps) {
   return (
     <div className="pointer-events-auto absolute top-20 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-5 w-72 flex flex-col gap-4 animate-in fade-in slide-in-from-top-2 duration-200">
@@ -374,6 +376,31 @@ export function AerialSettingsPopover({
                 onChange={(e) => onChangeCurved(e.target.checked)}
               />
               <label htmlFor="curvedArrowToggle" className="text-[11px] font-mono uppercase tracking-wider font-semibold text-[var(--muted-foreground)] cursor-pointer select-none hover:text-[var(--foreground)]">Curved Arrow</label>
+            </div>
+          )}
+
+          {onChangeBackgroundColor && (
+            <div className="pt-2 border-t border-[var(--border)]">
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2">Canvas Background</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                {['#0a0a0a', '#000000', '#0d1b2a', '#0a1912', '#ffffff', '#f8f9fa'].map(bg => (
+                  <button
+                    key={bg}
+                    onClick={() => onChangeBackgroundColor(bg)}
+                    className={`w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 cursor-pointer ${backgroundColor === bg ? 'border-[#e73f07] scale-110 ring-2 ring-[#e73f07]/25' : 'border-[var(--border)]'}`}
+                    style={{ backgroundColor: bg }}
+                  />
+                ))}
+                <div className="relative w-6 h-6 rounded-full border-2 border-[var(--border)] overflow-hidden cursor-pointer hover:scale-110 transition-transform">
+                  <input
+                    type="color"
+                    value={backgroundColor || '#0a0a0a'}
+                    onChange={(e) => onChangeBackgroundColor(e.target.value)}
+                    className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer"
+                    title="Custom Canvas Background"
+                  />
+                </div>
+              </div>
             </div>
           )}
         </>

@@ -147,6 +147,8 @@ export interface AerialCanvasProps {
   palmRejection?: boolean;
   /** Callback when zoom level changes */
   onZoomChange?: (zoomPercent: number) => void;
+  /** Callback when canvas background color changes */
+  onChangeBackgroundColor?: (color: string) => void;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
 }
@@ -194,6 +196,8 @@ export interface AerialCanvasRef {
   deleteSelected: () => void;
   /** Set dark/light mode on the engine */
   setDarkMode: (isDark: boolean) => void;
+  /** Set canvas background color */
+  setBackgroundColor: (color: string) => void;
   /** Get a reference to the raw WASM engine (advanced use) */
   getEngine: () => AerialEngine | null;
   /** Add an image element at world coordinates */
@@ -234,4 +238,6 @@ export interface AerialSettingsPopoverProps {
   onChangeSharpness: (s: number) => void;
   onChangeRough: (rough: boolean) => void;
   onChangeCurved: (curved: boolean) => void;
+  backgroundColor?: string;
+  onChangeBackgroundColor?: (color: string) => void;
 }

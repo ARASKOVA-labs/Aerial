@@ -305,6 +305,14 @@ export class AerialCanvas {
         return ret;
     }
     /**
+     * @param {string} color
+     */
+    set_background_color(color) {
+        const ptr0 = passStringToWasm0(color, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_set_background_color(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * @param {bigint} id
      * @param {HTMLImageElement} img
      */

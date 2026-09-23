@@ -1,6 +1,6 @@
 {
   "name": "@araskova/aerial",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Ultra-high performance 120 FPS infinite canvas and ideation framework powered by Rust, WebAssembly, and Yrs CRDTs.",
   "private": false,
   "license": "MIT",

@@ -3,33 +3,44 @@
  * Rephen is loaded via @font-face in index.css from /fonts/rephen.ttf.
  */
 
-interface AerialMarkProps {
+export interface AerialMarkProps {
   size?: number;
   className?: string;
+  isDarkMode?: boolean;
 }
 
 /**
  * Iconic 'A' Monogram
- * A bold 'A' in Rephen font on a vibrant yellow squircle background.
+ * A bold 'A' in Rephen font on an Araskova Orange squircle background.
+ * - Dark Mode: Black monogram (#0a0a0a)
+ * - Light Mode: White monogram (#ffffff)
  */
-function MonogramA() {
+function MonogramA({ isDarkMode }: { isDarkMode?: boolean }) {
+  const monogramFill = isDarkMode === true ? '#0a0a0a' : isDarkMode === false ? '#ffffff' : undefined;
+
   return (
     <>
       <defs>
-        <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
+        <style>{`
+          @font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }
+          .aerial-monogram-text { fill: #ffffff; }
+          :root.dark .aerial-monogram-text, html.dark .aerial-monogram-text, body.dark .aerial-monogram-text, .dark .aerial-monogram-text { fill: #0a0a0a; }
+          :root:not(.dark) .aerial-monogram-text, html:not(.dark) .aerial-monogram-text, body:not(.dark) .aerial-monogram-text { fill: #ffffff; }
+        `}</style>
       </defs>
       
       {/* Araskova Orange Squircle Background */}
       <rect width="44" height="44" rx="11" fill="#e73f07" />
       
-      {/* White 'A' Monogram in Rephen */}
+      {/* 'A' Monogram in Rephen (Black in darkmode, White in lightmode) */}
       <text
         x="22"
         y="23"
         fontFamily="Rephen, -apple-system, sans-serif"
         fontSize="27"
         fontWeight="900"
-        fill="#ffffff"
+        fill={monogramFill}
+        className="aerial-monogram-text"
         textAnchor="middle"
         dominantBaseline="central"
         style={{ fontFamily: 'Rephen, -apple-system, sans-serif', fontWeight: 900 }}
@@ -41,7 +52,7 @@ function MonogramA() {
 /**
  * The Aerial icon mark
  */
-export function AerialMark({ size = 32, className = '' }: AerialMarkProps) {
+export function AerialMark({ size = 32, className = '', isDarkMode }: AerialMarkProps) {
   return (
     <svg
       viewBox="0 0 44 44"
@@ -52,7 +63,7 @@ export function AerialMark({ size = 32, className = '' }: AerialMarkProps) {
       className={className}
       aria-label="Aerial"
     >
-      <MonogramA />
+      <MonogramA isDarkMode={isDarkMode} />
     </svg>
   );
 }
@@ -61,6 +72,7 @@ interface AerialWordmarkProps {
   className?: string;
   showMark?: boolean;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  isDarkMode?: boolean;
 }
 
 const sizeMap = {
@@ -73,7 +85,7 @@ const sizeMap = {
 /**
  * Full wordmark: optional mark + "AERIAL" in Rephen + indigo dot.
  */
-export function AerialWordmark({ className = '', showMark = false, size = 'md' }: AerialWordmarkProps) {
+export function AerialWordmark({ className = '', showMark = false, size = 'md', isDarkMode }: AerialWordmarkProps) {
   const s = sizeMap[size];
   const textW = s.fontSize * 16.5; // approx width of "AERIAL PREMIUM" + letter-spacing
   const totalW = (showMark ? s.markSize + s.gap : 0) + textW + s.dot + 4;
@@ -91,7 +103,7 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md' }
     >
       {showMark && (
         <svg x="0" y={(h - s.markSize) / 2} width={s.markSize} height={s.markSize} viewBox="0 0 44 44">
-          <MonogramA />
+          <MonogramA isDarkMode={isDarkMode} />
         </svg>
       )}
 
@@ -120,7 +132,7 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md' }
 /**
  * Loading screen stack: large monogram mark + AERIAL wordmark below + horizon line.
  */
-export function AerialLogoStack({ className = '' }: { className?: string }) {
+export function AerialLogoStack({ className = '', isDarkMode }: { className?: string; isDarkMode?: boolean }) {
   return (
     <div className={`flex flex-col items-center gap-3 ${className}`}>
       {/* Large Monogram */}
@@ -131,7 +143,7 @@ export function AerialLogoStack({ className = '' }: { className?: string }) {
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
       >
-        <MonogramA />
+        <MonogramA isDarkMode={isDarkMode} />
       </svg>
 
       {/* AERIAL wordmark below */}

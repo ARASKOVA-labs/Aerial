@@ -1,6 +1,6 @@
 [package]
 name = "aerial"
-version = "1.2.0"
+version = "1.2.1"
 description = "High-performance open-source digital whiteboard and canvas"
 authors = ["Araskova Labs <dev@araskova.com>"]
 edition = "2021"

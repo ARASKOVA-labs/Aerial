@@ -48,6 +48,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       changeInterval = 500,
       palmRejection = true,
       onZoomChange,
+      onChangeBackgroundColor,
       onNodeDoubleClick,
     } = props;
 
@@ -130,6 +131,9 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
 
           // Sync React state → engine
           engine.set_dark_mode(isDarkMode);
+          if (backgroundColor && typeof (engine as any).set_background_color === 'function') {
+            (engine as any).set_background_color(backgroundColor);
+          }
           engine.set_grid_type('dots');
           engine.set_stroke_color(strokeColor);
           engine.set_fill_color(fillColor);
@@ -225,6 +229,16 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engineRef.current.render();
       }
     }, [isDarkMode, engineReady]);
+
+    // ── Background color sync ──────────────────────────────────────────────
+    useEffect(() => {
+      if (engineReady && engineRef.current && backgroundColor !== undefined) {
+        if (typeof (engineRef.current as any).set_background_color === 'function') {
+          (engineRef.current as any).set_background_color(backgroundColor);
+        }
+        engineRef.current.render();
+      }
+    }, [backgroundColor, engineReady]);
 
     // ── Prevent native elastic scroll on canvas ───────────────────────────
     useEffect(() => {
@@ -598,6 +612,14 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engineRef.current?.set_dark_mode(isDark);
         engineRef.current?.render();
       },
+      setBackgroundColor: (color: string) => {
+        if (engineRef.current) {
+          if (typeof (engineRef.current as any).set_background_color === 'function') {
+            (engineRef.current as any).set_background_color(color);
+          }
+          engineRef.current.render();
+        }
+      },
       getEngine: () => engineRef.current,
       addImage: (img, x, y, w, h, assetId) => {
         engineRef.current?.add_image(img, x, y, w, h, assetId);
@@ -642,6 +664,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         <canvas
           id={canvasId}
           ref={canvasRef}
+          style={{ background: backgroundColor || 'transparent' }}
           className={`block w-full h-full touch-none select-none ${cursorClass}`}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -764,6 +787,14 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
                 onChangeCurved={(curved) => {
                   setIsCurved(curved);
                   engineRef.current?.set_is_curved(curved);
+                }}
+                backgroundColor={backgroundColor}
+                onChangeBackgroundColor={(color) => {
+                  if (onChangeBackgroundColor) {
+                    onChangeBackgroundColor(color);
+                  } else {
+                    apiInstance.setBackgroundColor(color);
+                  }
                 }}
               />
             )}

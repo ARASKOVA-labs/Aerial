@@ -4,6 +4,8 @@
 import './index.css';
 
 export { AerialCanvas } from './components/AerialCanvas';
+export { AerialDraggableTextBox } from './components/AerialDraggableTextBox';
+export type { AerialDraggableTextBoxProps } from './components/AerialDraggableTextBox';
 export {
   AerialToolbar,
   AerialZoomBar,

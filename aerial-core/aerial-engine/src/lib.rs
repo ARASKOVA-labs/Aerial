@@ -69,6 +69,7 @@ pub struct AerialCanvas {
     is_curved: bool,
     is_dark_mode: bool,
     bg_color: Option<String>,
+    magic_baseline_y: Option<f64>,
     grid_type: String,
     dpr: f64,
     zoom: f64,
@@ -119,6 +120,7 @@ impl AerialCanvas {
             is_curved: true,
             is_dark_mode: false,
             bg_color: None,
+            magic_baseline_y: None,
             grid_type: "dots".to_string(),
             dpr: 1.0,
             zoom: 1.0,
@@ -162,7 +164,7 @@ impl AerialCanvas {
     pub fn set_tool_highlighter(&mut self) { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Highlighter; }
     pub fn set_tool_text(&mut self)        { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Text; }
     pub fn set_tool_eraser(&mut self)      { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::Eraser; }
-    pub fn set_tool_magic_pen(&mut self)   { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::MagicPen; }
+    pub fn set_tool_magic_pen(&mut self)   { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::MagicPen; self.magic_baseline_y = None; self.dirty = true; }
     pub fn set_tool_laser_pen(&mut self)   { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::LaserPen; }
 
     // ── Text & Selection ──────────────────────────────────────────────────────
@@ -192,6 +194,12 @@ impl AerialCanvas {
         self.next_id += 1;
         
         let c = color.unwrap_or_else(|| self.stroke_color.clone());
+        let fam = font_family.unwrap_or_else(|| "Inter, Roboto, sans-serif".to_string());
+        
+        let lines: Vec<&str> = text.split('\n').collect();
+        let max_chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1);
+        let approx_w = (max_chars as f64 * size * 0.65).max(60.0);
+        let approx_h = (lines.len() as f64 * size * 1.3).max(size * 1.5);
         
         self.elements.push(Element {
             id,
@@ -199,14 +207,14 @@ impl AerialCanvas {
             points: vec![(x, y)],
             x,
             y,
-            w: 200.0,
-            h: size * 1.5,
+            w: approx_w,
+            h: approx_h,
             stroke_color: c.clone(),
             fill_color: c.clone(),
             stroke_width: self.stroke_width,
             text,
             font_size: size,
-            font_family: font_family.unwrap_or_else(|| "sans-serif".to_string()),
+            font_family: fam,
             asset_id: None,
             code: None,
             svg: None,
@@ -215,6 +223,41 @@ impl AerialCanvas {
             is_curved: self.is_curved,
         });
         self.dirty = true;
+    }
+
+    pub fn update_text_element(&mut self, id: u64, text: String, x: f64, y: f64, size: f64, font_family: Option<String>, color: Option<String>) {
+        self.save_state();
+        if let Some(el) = self.elements.iter_mut().find(|e| e.id == id) {
+            let lines: Vec<&str> = text.split('\n').collect();
+            let max_chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1);
+            let approx_w = (max_chars as f64 * size * 0.65).max(60.0);
+            let approx_h = (lines.len() as f64 * size * 1.3).max(size * 1.5);
+
+            el.text = text;
+            el.x = x;
+            el.y = y;
+            el.points = vec![(x, y)];
+            el.w = approx_w;
+            el.h = approx_h;
+            el.font_size = size;
+            if let Some(fam) = font_family {
+                el.font_family = fam;
+            }
+            if let Some(c) = color {
+                el.stroke_color = c.clone();
+                el.fill_color = c;
+            }
+            self.dirty = true;
+        }
+    }
+
+    pub fn get_selected_element_json(&self) -> Option<String> {
+        if let Some(id) = self.selected_id {
+            if let Some(el) = self.elements.iter().find(|e| e.id == id) {
+                return serde_json::to_string(el).ok();
+            }
+        }
+        None
     }
 
     pub fn clear_board(&mut self) {
@@ -233,8 +276,19 @@ impl AerialCanvas {
         self.dirty = true;
     }
 
+    pub fn clear_magic_strokes(&mut self) {
+        self.magic_strokes.clear();
+        self.magic_baseline_y = None;
+        self.dirty = true;
+    }
+
     pub fn extract_magic_strokes(&mut self) -> String {
         let mut all_strokes_json = Vec::new();
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
         for stroke in &self.magic_strokes {
             let mut xs = Vec::new();
             let mut ys = Vec::new();
@@ -243,15 +297,33 @@ impl AerialCanvas {
             for (i, p) in stroke.points.iter().enumerate() {
                 xs.push(p.0);
                 ys.push(p.1);
-                ts.push((i * 10) as f64); 
+                ts.push((i * 10) as f64);
+                if p.0 < min_x { min_x = p.0; }
+                if p.0 > max_x { max_x = p.0; }
+                if p.1 < min_y { min_y = p.1; }
+                if p.1 > max_y { max_y = p.1; }
             }
             all_strokes_json.push(vec![xs, ys, ts]);
         }
+
+        let baseline = self.magic_baseline_y.unwrap_or(if max_y.is_finite() { max_y } else { 0.0 });
         
-        let json = serde_json::to_string(&all_strokes_json).unwrap_or_else(|_| "[]".to_string());
+        let payload = serde_json::json!({
+            "ink": all_strokes_json,
+            "count": self.magic_strokes.len(),
+            "bounds": {
+                "min_x": if min_x.is_finite() { min_x } else { 0.0 },
+                "min_y": if min_y.is_finite() { min_y } else { 0.0 },
+                "max_x": if max_x.is_finite() { max_x } else { 0.0 },
+                "max_y": if max_y.is_finite() { max_y } else { 0.0 },
+                "baseline_y": baseline,
+            }
+        });
+        
         self.magic_strokes.clear();
+        self.magic_baseline_y = None;
         self.dirty = true;
-        json
+        payload.to_string()
     }
 
     pub fn delete_selected(&mut self) {
@@ -480,6 +552,14 @@ impl AerialCanvas {
         (sy - self.offset_y) / self.zoom
     }
 
+    pub fn world_to_screen_x(&self, wx: f64) -> f64 {
+        wx * self.zoom + self.offset_x
+    }
+
+    pub fn world_to_screen_y(&self, wy: f64) -> f64 {
+        wy * self.zoom + self.offset_y
+    }
+
     // ── Gesture Detection & Erasing ──────────────────────────────────────────
     /// Detects if a stroke is an intentional "scratch-out" scribble to erase.
     /// Uses hysteresis-based macro-reversals to prevent normal handwriting, straight lines
@@ -672,6 +752,16 @@ impl AerialCanvas {
             _ => "FreeDraw",
         }.to_string();
 
+        if self.tool == Tool::MagicPen {
+            if let Some(existing_base) = self.magic_baseline_y {
+                if (wy - existing_base).abs() > 80.0 {
+                    self.magic_baseline_y = Some(wy + 15.0);
+                }
+            } else {
+                self.magic_baseline_y = Some(wy + 15.0);
+            }
+        }
+
         let id = self.next_id;
         self.next_id += 1;
 
@@ -794,7 +884,16 @@ impl AerialCanvas {
                 }
                 // Freehand tools: accumulate all points for smooth stroke
                 _ => {
-                    stroke.points.push((wx, wy));
+                    let mut pt_y = wy;
+                    if stroke.kind == "MagicPen" {
+                        if let Some(base_y) = self.magic_baseline_y {
+                            // Gentle baseline magnetic snap when within 4px of baseline:
+                            if (pt_y - base_y).abs() < 4.0 {
+                                pt_y = base_y;
+                            }
+                        }
+                    }
+                    stroke.points.push((wx, pt_y));
                     let min_x = stroke.points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
                     let min_y = stroke.points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
                     let max_x = stroke.points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
@@ -970,6 +1069,71 @@ impl AerialCanvas {
                 self.ctx.line_to(end_x as f64, gy as f64);
             }
             self.ctx.stroke();
+        }
+
+        // ── Magic Pen Writing Guidelines ─────────────────────────────────────────
+        if self.tool == Tool::MagicPen {
+            let left_w = self.screen_to_world_x(0.0);
+            let right_w = self.screen_to_world_x(width);
+            let top_w = self.screen_to_world_y(0.0);
+            let bottom_w = self.screen_to_world_y(height);
+
+            if let Some(base_y) = self.magic_baseline_y {
+                // Active single-line writing lane guidelines:
+                let x_height_y = base_y - 20.0;
+                let cap_height_y = base_y - 34.0;
+                let descender_y = base_y + 14.0;
+
+                // 1. Solid Baseline (Araskova Orange accent)
+                self.ctx.begin_path();
+                self.ctx.set_stroke_style_str("rgba(231, 63, 7, 0.75)");
+                self.ctx.set_line_width(1.8 / self.zoom);
+                self.ctx.move_to(left_w, base_y);
+                self.ctx.line_to(right_w, base_y);
+                self.ctx.stroke();
+
+                // 2. Midline / x-height (dashed line)
+                self.ctx.begin_path();
+                self.ctx.set_stroke_style_str(if is_dark { "rgba(255, 255, 255, 0.35)" } else { "rgba(10, 10, 10, 0.35)" });
+                self.ctx.set_line_width(1.0 / self.zoom);
+                let _ = self.ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from_f64(6.0 / self.zoom), &JsValue::from_f64(6.0 / self.zoom)));
+                self.ctx.move_to(left_w, x_height_y);
+                self.ctx.line_to(right_w, x_height_y);
+                self.ctx.stroke();
+                let _ = self.ctx.set_line_dash(&js_sys::Array::new());
+
+                // 3. Cap-height / Topline (thin solid line)
+                self.ctx.begin_path();
+                self.ctx.set_stroke_style_str(if is_dark { "rgba(255, 255, 255, 0.20)" } else { "rgba(10, 10, 10, 0.20)" });
+                self.ctx.set_line_width(1.0 / self.zoom);
+                self.ctx.move_to(left_w, cap_height_y);
+                self.ctx.line_to(right_w, cap_height_y);
+                self.ctx.stroke();
+
+                // 4. Descender line (faint dotted line)
+                self.ctx.begin_path();
+                self.ctx.set_stroke_style_str(if is_dark { "rgba(255, 255, 255, 0.15)" } else { "rgba(10, 10, 10, 0.15)" });
+                self.ctx.set_line_width(1.0 / self.zoom);
+                let _ = self.ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from_f64(2.0 / self.zoom), &JsValue::from_f64(4.0 / self.zoom)));
+                self.ctx.move_to(left_w, descender_y);
+                self.ctx.line_to(right_w, descender_y);
+                self.ctx.stroke();
+                let _ = self.ctx.set_line_dash(&js_sys::Array::new());
+            } else {
+                // Subtle ruled notebook lines before user starts writing
+                let line_step = 60.0;
+                let start_y = ((top_w / line_step).floor() * line_step) as i32;
+                let end_y = ((bottom_w / line_step).ceil() * line_step) as i32;
+
+                self.ctx.begin_path();
+                self.ctx.set_stroke_style_str(if is_dark { "rgba(231, 63, 7, 0.18)" } else { "rgba(231, 63, 7, 0.15)" });
+                self.ctx.set_line_width(1.0 / self.zoom);
+                for gy in (start_y..=end_y).step_by(line_step as usize) {
+                    self.ctx.move_to(left_w, gy as f64);
+                    self.ctx.line_to(right_w, gy as f64);
+                }
+                self.ctx.stroke();
+            }
         }
 
         // Draw stored elements

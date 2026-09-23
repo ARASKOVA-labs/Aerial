@@ -17,6 +17,7 @@ import {
   AerialZoomBar,
   AerialSettingsPopover,
 } from './AerialToolbar';
+import { AerialDraggableTextBox } from './AerialDraggableTextBox';
 import type {
   AerialEngine,
   AerialCanvasProps,
@@ -49,6 +50,8 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       palmRejection = true,
       onZoomChange,
       onChangeBackgroundColor,
+      magicLanguage = 'en',
+      magicFont = "'Space Grotesk', sans-serif",
       onNodeDoubleClick,
     } = props;
 
@@ -73,10 +76,20 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     const [showSettings, setShowSettings] = useState(false);
     const [eraserPos, setEraserPos] = useState<{ x: number; y: number } | null>(null);
     const [typingText, setTypingText] = useState<{
-      screenX: number; screenY: number;
-      worldX: number; worldY: number;
+      elementId?: bigint | null;
+      screenX: number;
+      screenY: number;
+      worldX: number;
+      worldY: number;
       value: string;
+      fontSize?: number;
+      fontFamily?: string;
+      color?: string;
+      width?: number;
+      height?: number;
     } | null>(null);
+    const [isConvertingMagic, setIsConvertingMagic] = useState(false);
+    const magicDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [fontFamily] = useState('Caveat');
 
     // Determine dark mode from prop
@@ -261,6 +274,10 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         }
         setShowSettings(false);
         setEraserPos(null);
+        if (id !== 'magic_pen' && magicDebounceTimerRef.current) {
+          clearTimeout(magicDebounceTimerRef.current);
+          magicDebounceTimerRef.current = null;
+        }
         const e = engineRef.current;
         if (!e) return id;
         switch (id) {
@@ -298,6 +315,69 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       engineRef.current?.set_fountain_sharpness(s);
     }, []);
 
+    // ── Magic Pen Handwriting Recognition Pipeline ────────────────────────
+    const convertMagicStrokes = useCallback(async (): Promise<string | null> => {
+      const engine = engineRef.current;
+      if (!engine) return null;
+      const jsonStr = engine.extract_magic_strokes();
+      if (!jsonStr) return null;
+      try {
+        const parsed = JSON.parse(jsonStr);
+        const { ink, bounds } = parsed;
+        if (!ink || !Array.isArray(ink) || ink.length === 0) return null;
+
+        setIsConvertingMagic(true);
+        const itcLang = magicLanguage || 'en';
+        const url = `https://inputtools.google.com/request?itc=${itcLang}-t-i0-handwrit&app=translate`;
+
+        const payload = {
+          app_version: 0.4,
+          api_level: '533.0.0',
+          device: typeof navigator !== 'undefined' ? navigator.userAgent : 'AerialCanvas',
+          input_type: '0',
+          options: 'enable_pre_space',
+          requests: [
+            {
+              writing_guide: {
+                writing_area_width: Math.max(800, (bounds?.max_x || 800) - (bounds?.min_x || 0)),
+                writing_area_height: Math.max(300, (bounds?.max_y || 300) - (bounds?.min_y || 0)),
+              },
+              ink: ink,
+              language: itcLang,
+            },
+          ],
+        };
+
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          throw new Error(`Recognition API HTTP error: ${resp.status}`);
+        }
+
+        const data = await resp.json();
+        if (data && data[0] === 'SUCCESS' && data[1]?.[0]?.[1]?.[0]) {
+          const recognized = data[1][0][1][0] as string;
+          const targetX = bounds?.min_x ?? 250;
+          // Align text with the baseline: 28px font size
+          const targetY = bounds?.baseline_y ? bounds.baseline_y - 28.0 : (bounds?.min_y ?? 250);
+          const font = magicFont || "'Space Grotesk', sans-serif";
+          engine.add_text(recognized, targetX, targetY, 28, font, strokeColor);
+          engine.render();
+          return recognized;
+        }
+      } catch (err) {
+        logger.warn('Handwriting recognition failed:', err);
+      } finally {
+        setIsConvertingMagic(false);
+        engine.render();
+      }
+      return null;
+    }, [magicLanguage, magicFont, strokeColor]);
+
     // ── Pointer events ────────────────────────────────────────────────────
     const onPointerDown = useCallback((e: React.PointerEvent) => {
       if (!engineReady || !engineRef.current || readOnly) return;
@@ -333,6 +413,11 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
       if (e.pointerType === 'pen') activePenIdRef.current = e.pointerId;
 
+      if (magicDebounceTimerRef.current) {
+        clearTimeout(magicDebounceTimerRef.current);
+        magicDebounceTimerRef.current = null;
+      }
+
       // Already drawing with another pointer
       if (activeDrawingPointerIdRef.current !== null) return;
 
@@ -355,13 +440,25 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           const screenY = e.clientY - rect.top;
           const worldX = engineRef.current.screen_to_world_x(screenX);
           const worldY = engineRef.current.screen_to_world_y(screenY);
-          setTypingText({ screenX, screenY, worldX, worldY, value: '' });
+          setTypingText({
+            elementId: null,
+            screenX,
+            screenY,
+            worldX,
+            worldY,
+            value: '',
+            fontSize: 28,
+            fontFamily: "'Inter', sans-serif",
+            color: strokeColor,
+            width: 320,
+            height: 140,
+          });
         }
         return;
       }
 
       engineRef.current?.on_mouse_down(e.clientX - rect.left, e.clientY - rect.top);
-    }, [activeTool, typingText, engineReady, readOnly, canvasId]);
+    }, [activeTool, typingText, engineReady, readOnly, canvasId, strokeColor]);
 
     const onPointerMove = useCallback((e: React.PointerEvent) => {
       e.preventDefault();
@@ -431,7 +528,16 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
 
       const rect = canvasRef.current!.getBoundingClientRect();
       engineRef.current?.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
-    }, [engineReady]);
+
+      if (activeTool === 'magic_pen') {
+        if (magicDebounceTimerRef.current) {
+          clearTimeout(magicDebounceTimerRef.current);
+        }
+        magicDebounceTimerRef.current = setTimeout(() => {
+          convertMagicStrokes();
+        }, 1200);
+      }
+    }, [engineReady, activeTool, convertMagicStrokes]);
 
     const onPointerLeave = useCallback((e: React.PointerEvent) => {
       if (isDrawingRef.current && activeDrawingPointerIdRef.current === e.pointerId) {
@@ -450,7 +556,9 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     const onDoubleClick = useCallback((e: React.MouseEvent) => {
       if (!engineRef.current || readOnly) return;
       const rect = canvasRef.current!.getBoundingClientRect();
-      const hitIdStr = engineRef.current.on_double_click(e.clientX - rect.left, e.clientY - rect.top);
+      const rawX = e.clientX - rect.left;
+      const rawY = e.clientY - rect.top;
+      const hitIdStr = engineRef.current.on_double_click(rawX, rawY);
       if (hitIdStr) {
         const parts = hitIdStr.split(',');
         if (parts[1]) {
@@ -460,7 +568,34 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
             onNodeDoubleClick(elId, parts[1], code);
           }
         } else {
-          // Text edit
+          // Check if hit element is a text element
+          const elJson = engineRef.current.get_selected_element_json();
+          if (elJson) {
+            try {
+              const el = JSON.parse(elJson);
+              if (el.kind === 'text') {
+                const screenX = engineRef.current.world_to_screen_x(el.x);
+                const screenY = engineRef.current.world_to_screen_y(el.y);
+                setTypingText({
+                  elementId: BigInt(el.id),
+                  screenX: Math.round(screenX),
+                  screenY: Math.round(screenY),
+                  worldX: el.x,
+                  worldY: el.y,
+                  value: el.text || '',
+                  fontSize: el.font_size || 28,
+                  fontFamily: el.font_family || "'Inter', sans-serif",
+                  color: el.stroke_color || strokeColor,
+                  width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
+                  height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
+                });
+                return;
+              }
+            } catch (err) {
+              logger.warn('Failed to parse selected element for text edit:', err);
+            }
+          }
+          // Fallback text prompt
           const text = engineRef.current.get_selected_text();
           if (text) {
             const newText = window.prompt('Edit text:', text);
@@ -471,7 +606,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           }
         }
       }
-    }, [readOnly, onNodeDoubleClick]);
+    }, [readOnly, onNodeDoubleClick, strokeColor]);
 
     const onWheel = useCallback((e: React.WheelEvent) => {
       if (!engineRef.current) return;
@@ -562,10 +697,11 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         };
         img.src = imgSrc;
       },
-      addText: (text: string, x = 250, y = 250, size = 28, color?: string) => {
-        engineRef.current?.add_text(text, x, y, size, fontFamily, color);
+      addText: (text: string, x = 250, y = 250, size = 28, color?: string, fontFamily?: string) => {
+        engineRef.current?.add_text(text, x, y, size, fontFamily || "'Inter', sans-serif", color);
         engineRef.current?.render();
       },
+      convertMagicStrokes: () => convertMagicStrokes(),
       exportPngBlob: () => {
         return new Promise<Blob>((resolve, reject) => {
           const canvas = canvasRef.current;
@@ -695,58 +831,64 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           </div>
         )}
 
-        {/* Text input overlay */}
+        {/* Draggable & Droppable Text Box with Readjustment Features */}
         {typingText && (
-          <textarea
-            autoFocus
-            style={{
-              position: 'absolute',
-              left: typingText.screenX,
-              top: typingText.screenY,
-              transform: 'translateY(-14px)',
-              fontFamily: 'Inter, Roboto, -apple-system, sans-serif',
-              fontSize: '28px',
-              fontWeight: 600,
-              color: strokeColor || (isDarkMode ? '#ffffff' : '#0a0a0a'),
-              background: 'transparent',
-              border: '1.5px dashed #e73f07',
-              borderRadius: '6px',
-              outline: 'none',
-              resize: 'none',
-              overflow: 'hidden',
-              minWidth: '60px',
-              minHeight: '36px',
-              zIndex: 40,
-              padding: '2px 6px',
-              margin: 0,
-              lineHeight: 1.2,
-            }}
-            value={typingText.value}
-            onChange={(e) => {
-              e.target.style.height = 'auto';
-              e.target.style.height = e.target.scrollHeight + 'px';
-              e.target.style.width = 'auto';
-              e.target.style.width = Math.max(60, e.target.scrollWidth) + 'px';
-              setTypingText({ ...typingText, value: e.target.value });
-            }}
-            onBlur={() => {
-              if (typingText.value.trim() && engineRef.current) {
-                engineRef.current.add_text(typingText.value, typingText.worldX, typingText.worldY, 28, 'Inter, Roboto, sans-serif', strokeColor);
-                engineRef.current.render();
+          <AerialDraggableTextBox
+            initialText={typingText.value}
+            screenX={typingText.screenX}
+            screenY={typingText.screenY}
+            initialFontSize={typingText.fontSize || 28}
+            initialFontFamily={typingText.fontFamily || "'Inter', sans-serif"}
+            initialColor={typingText.color || strokeColor}
+            initialWidth={typingText.width || 320}
+            initialHeight={typingText.height || 140}
+            isDarkMode={isDarkMode}
+            onCommit={(data) => {
+              const engine = engineRef.current;
+              if (engine) {
+                const wx = engine.screen_to_world_x(data.screenX);
+                const wy = engine.screen_to_world_y(data.screenY);
+                if (typingText.elementId != null) {
+                  engine.update_text_element(
+                    typingText.elementId,
+                    data.text,
+                    wx,
+                    wy,
+                    data.fontSize,
+                    data.fontFamily,
+                    data.color
+                  );
+                } else {
+                  engine.add_text(data.text, wx, wy, data.fontSize, data.fontFamily, data.color);
+                }
+                engine.render();
                 selectTool('select');
               }
               setTypingText(null);
             }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                e.currentTarget.blur();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                setTypingText(null);
+            onCancel={() => setTypingText(null)}
+            onDragMove={(newSx, newSy) => {
+              if (engineRef.current) {
+                const wx = engineRef.current.screen_to_world_x(newSx);
+                const wy = engineRef.current.screen_to_world_y(newSy);
+                setTypingText((prev) =>
+                  prev ? { ...prev, screenX: newSx, screenY: newSy, worldX: wx, worldY: wy } : null
+                );
               }
             }}
           />
+        )}
+
+        {/* Magic Pen Guided Baseline & Handwriting HUD */}
+        {activeTool === 'magic_pen' && (
+          <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-[var(--card)]/90 backdrop-blur-xl border border-[#e73f07]/80 shadow-lg text-[10px] font-mono tracking-wider text-[var(--foreground)] uppercase animate-in fade-in slide-in-from-top-2 duration-300">
+            <span className={`w-2 h-2 rounded-full bg-[#e73f07] ${isConvertingMagic ? 'animate-ping' : 'animate-pulse'}`} />
+            <span>
+              {isConvertingMagic
+                ? 'Converting handwriting to text…'
+                : `Magic Pen · ${magicLanguage?.toUpperCase() || 'EN'} · Straight-Line Guide`}
+            </span>
+          </div>
         )}
 
         {/* Built-in toolbar (optional) */}

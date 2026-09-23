@@ -710,6 +710,8 @@ export default function App() {
           backgroundColor={canvasBgColor}
           onChangeBackgroundColor={changeCanvasBg}
           palmRejection={palmRejection}
+          magicLanguage={magicLanguage}
+          magicFont={magicFont}
           showToolbar={false}
           onReady={handleCanvasReady}
           onZoomChange={setZoomLevel}

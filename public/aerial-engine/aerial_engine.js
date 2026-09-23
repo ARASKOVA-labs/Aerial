@@ -81,6 +81,9 @@ export class AerialCanvas {
     clear_laser_strokes() {
         wasm.aerialcanvas_clear_laser_strokes(this.__wbg_ptr);
     }
+    clear_magic_strokes() {
+        wasm.aerialcanvas_clear_magic_strokes(this.__wbg_ptr);
+    }
     delete_selected() {
         wasm.aerialcanvas_delete_selected(this.__wbg_ptr);
     }
@@ -156,6 +159,18 @@ export class AerialCanvas {
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
+    }
+    /**
+     * @returns {string | undefined}
+     */
+    get_selected_element_json() {
+        const ret = wasm.aerialcanvas_get_selected_element_json(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
     }
     /**
      * @returns {string | undefined}
@@ -448,6 +463,40 @@ export class AerialCanvas {
         wasm.aerialcanvas_update_selected_text(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * @param {bigint} id
+     * @param {string} text
+     * @param {number} x
+     * @param {number} y
+     * @param {number} size
+     * @param {string | null} [font_family]
+     * @param {string | null} [color]
+     */
+    update_text_element(id, text, x, y, size, font_family, color) {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        var ptr1 = isLikeNone(font_family) ? 0 : passStringToWasm0(font_family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len1 = WASM_VECTOR_LEN;
+        var ptr2 = isLikeNone(color) ? 0 : passStringToWasm0(color, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        var len2 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_update_text_element(this.__wbg_ptr, id, ptr0, len0, x, y, size, ptr1, len1, ptr2, len2);
+    }
+    /**
+     * @param {number} wx
+     * @returns {number}
+     */
+    world_to_screen_x(wx) {
+        const ret = wasm.aerialcanvas_world_to_screen_x(this.__wbg_ptr, wx);
+        return ret;
+    }
+    /**
+     * @param {number} wy
+     * @returns {number}
+     */
+    world_to_screen_y(wy) {
+        const ret = wasm.aerialcanvas_world_to_screen_y(this.__wbg_ptr, wy);
+        return ret;
+    }
+    /**
      * @returns {number}
      */
     zoom_in() {
@@ -575,8 +624,16 @@ function __wbg_get_imports() {
             const ret = arg0.msCrypto;
             return ret;
         },
+        __wbg_new_116be93542d39019: function() {
+            const ret = new Array();
+            return ret;
+        },
         __wbg_new_with_length_3ffc1c56427c525c: function(arg0) {
             const ret = new Uint8Array(arg0 >>> 0);
+            return ret;
+        },
+        __wbg_of_598c0ff0cd48a890: function(arg0, arg1) {
+            const ret = Array.of(arg0, arg1);
             return ret;
         },
         __wbg_prototypesetcall_de8e0d9553586985: function(arg0, arg1, arg2) {
@@ -604,6 +661,9 @@ function __wbg_get_imports() {
         __wbg_self_d2194f493ba20573: function() { return handleError(function () {
             const ret = self.self;
             return ret;
+        }, arguments); },
+        __wbg_setLineDash_d915b0269ee28de8: function() { return handleError(function (arg0, arg1) {
+            arg0.setLineDash(arg1);
         }, arguments); },
         __wbg_set_fillStyle_52e75a25be60a3ff: function(arg0, arg1, arg2) {
             arg0.fillStyle = getStringFromWasm0(arg1, arg2);
@@ -669,7 +729,12 @@ function __wbg_get_imports() {
             const ret = arg0.width;
             return ret;
         },
-        __wbindgen_cast_0000000000000001: function(arg0, arg1) {
+        __wbindgen_cast_0000000000000001: function(arg0) {
+            // Cast intrinsic for `F64 -> Externref`.
+            const ret = arg0;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
             return ret;

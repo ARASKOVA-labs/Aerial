@@ -44,9 +44,12 @@ export interface AerialEngine {
   // Text operations
   get_selected_text: () => string | null;
   update_selected_text: (text: string) => void;
+  update_text_element: (id: bigint | number, text: string, x: number, y: number, size: number, font_family?: string, color?: string) => void;
+  get_selected_element_json: () => string | null;
 
   // Laser / magic
   clear_laser_strokes: () => void;
+  clear_magic_strokes: () => void;
   extract_magic_strokes: () => string;
 
   // Image / Diagram
@@ -77,6 +80,8 @@ export interface AerialEngine {
   // Coordinate conversion
   screen_to_world_x: (sx: number) => number;
   screen_to_world_y: (sy: number) => number;
+  world_to_screen_x: (wx: number) => number;
+  world_to_screen_y: (wy: number) => number;
 
   // Drawing primitives
   add_text: (text: string, x: number, y: number, size: number, font_family?: string, color?: string) => void;
@@ -149,6 +154,10 @@ export interface AerialCanvasProps {
   onZoomChange?: (zoomPercent: number) => void;
   /** Callback when canvas background color changes */
   onChangeBackgroundColor?: (color: string) => void;
+  /** Handwriting language for Magic Pen (en, ml, ta, te, etc.) */
+  magicLanguage?: string;
+  /** Font family for converted Magic Pen text */
+  magicFont?: string;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
 }
@@ -167,7 +176,9 @@ export interface AerialCanvasRef {
   /** Add a diagram element to the canvas */
   addDiagram: (code: string, svg: string) => void;
   /** Add a text element at world coordinates */
-  addText: (text: string, x?: number, y?: number, size?: number, color?: string) => void;
+  addText: (text: string, x?: number, y?: number, size?: number, color?: string, fontFamily?: string) => void;
+  /** Convert currently drawn magic pen strokes into text */
+  convertMagicStrokes: () => Promise<string | null>;
   /** Export the visible canvas area as a PNG Blob */
   exportPngBlob: () => Promise<Blob>;
   /** Export the visible canvas area as an SVG string (canvas snapshot embedded) */

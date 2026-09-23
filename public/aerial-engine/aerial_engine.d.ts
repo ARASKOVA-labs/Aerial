@@ -11,6 +11,7 @@ export class AerialCanvas {
     check_and_clear_dirty(): boolean;
     clear_board(): void;
     clear_laser_strokes(): void;
+    clear_magic_strokes(): void;
     delete_selected(): void;
     export_delta_update(remote_sv: Uint8Array): Uint8Array;
     export_full_state(): Uint8Array;
@@ -18,6 +19,7 @@ export class AerialCanvas {
     get_element_code(id: bigint): string | undefined;
     get_local_state_vector(): Uint8Array;
     get_scene_json(): string;
+    get_selected_element_json(): string | undefined;
     get_selected_text(): string | undefined;
     get_zoom(): number;
     import_full_state(bytes: Uint8Array): void;
@@ -66,6 +68,7 @@ export class AerialCanvas {
     tick_animations(): boolean;
     undo(): boolean;
     update_selected_text(text: string): void;
+    update_text_element(id: bigint, text: string, x: number, y: number, size: number, font_family?: string | null, color?: string | null): void;
     zoom_in(): number;
     zoom_out(): number;
 }
@@ -82,6 +85,7 @@ export interface InitOutput {
     readonly aerialcanvas_check_and_clear_dirty: (a: number) => number;
     readonly aerialcanvas_clear_board: (a: number) => void;
     readonly aerialcanvas_clear_laser_strokes: (a: number) => void;
+    readonly aerialcanvas_clear_magic_strokes: (a: number) => void;
     readonly aerialcanvas_delete_selected: (a: number) => void;
     readonly aerialcanvas_export_delta_update: (a: number, b: number, c: number) => [number, number];
     readonly aerialcanvas_export_full_state: (a: number) => [number, number];
@@ -89,6 +93,7 @@ export interface InitOutput {
     readonly aerialcanvas_get_element_code: (a: number, b: bigint) => [number, number];
     readonly aerialcanvas_get_local_state_vector: (a: number) => [number, number];
     readonly aerialcanvas_get_scene_json: (a: number) => [number, number];
+    readonly aerialcanvas_get_selected_element_json: (a: number) => [number, number];
     readonly aerialcanvas_get_selected_text: (a: number) => [number, number];
     readonly aerialcanvas_get_zoom: (a: number) => number;
     readonly aerialcanvas_import_full_state: (a: number, b: number, c: number) => void;
@@ -134,6 +139,7 @@ export interface InitOutput {
     readonly aerialcanvas_tick_animations: (a: number) => number;
     readonly aerialcanvas_undo: (a: number) => number;
     readonly aerialcanvas_update_selected_text: (a: number, b: number, c: number) => void;
+    readonly aerialcanvas_update_text_element: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly aerialcanvas_zoom_in: (a: number) => number;
     readonly aerialcanvas_zoom_out: (a: number) => number;
     readonly __wbindgen_malloc: (a: number, b: number) => number;

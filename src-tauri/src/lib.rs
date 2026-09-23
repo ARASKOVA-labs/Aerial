@@ -159,7 +159,10 @@ fn load_asset(state: State<'_, AppState>, id: String) -> Result<String, String> 
     std::fs::read_to_string(file_path).map_err(|e| e.to_string())
 }
 
-// Removed rustama commands
+#[tauri::command]
+fn hide_window(window: Window) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())
+}
 
 use tauri::{Manager, Emitter};
 
@@ -172,6 +175,15 @@ pub fn run() {
         .plugin(tauri_plugin_http::init());
 
     #[cfg(desktop)]
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            // Keep app resident in background with near-zero memory footprint
+            let _ = window.hide();
+            api.prevent_close();
+        }
+    });
+
+    #[cfg(desktop)]
     let builder = builder.plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, _shortcut, event| {
@@ -180,7 +192,7 @@ pub fn run() {
                         let _ = window.unminimize();
                         let _ = window.show();
                         let _ = window.set_focus();
-                        let _ = window.emit("quick-canvas:open", ());
+                        let _ = window.emit("quick-canvas:open", true);
                     }
                 }
             })
@@ -193,17 +205,17 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            std::fs::create_dir_all(&app_data_dir).unwrap();
+            std::fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
             let db_path = app_data_dir.join("aerial_store.redb");
-            let db = Database::create(db_path).expect("Failed to create redb database");
+            let db = Database::create(db_path).map_err(|e| e.to_string())?;
 
-            let write_txn = db.begin_write().expect("Failed to begin write txn");
+            let write_txn = db.begin_write().map_err(|e| e.to_string())?;
             {
                 let _ = write_txn
                     .open_table(BOARDS_TABLE)
-                    .expect("Failed to open table");
+                    .map_err(|e| e.to_string())?;
             }
-            write_txn.commit().expect("Failed to commit txn");
+            write_txn.commit().map_err(|e| e.to_string())?;
 
             app.manage(AppState {
                 db: Arc::new(db),
@@ -220,6 +232,62 @@ pub fn run() {
                 if let Ok(shortcut) = "super+shift+a".parse::<tauri_plugin_global_shortcut::Shortcut>() {
                     let _ = app.global_shortcut().register(shortcut);
                 }
+
+                // Setup Menu Bar Tray Icon for laptop users & background status
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+
+                if let (Ok(note_i), Ok(show_i), Ok(quit_i)) = (
+                    MenuItem::with_id(app, "quick_note", "Quick Note (⌥Space / ⌘⇧N)", true, None::<&str>),
+                    MenuItem::with_id(app, "show", "Open Aerial Canvas", true, None::<&str>),
+                    MenuItem::with_id(app, "quit", "Quit Aerial", true, None::<&str>),
+                ) {
+                    if let Ok(menu) = Menu::with_items(app, &[&note_i, &show_i, &quit_i]) {
+                        let mut tray_builder = TrayIconBuilder::new()
+                            .menu(&menu)
+                            .show_menu_on_left_click(false)
+                            .on_menu_event(|app, event| {
+                                match event.id.as_ref() {
+                                    "quit" => {
+                                        app.exit(0);
+                                    }
+                                    "show" => {
+                                        if let Some(window) = app.get_webview_window("main") {
+                                            let _ = window.unminimize();
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                        }
+                                    }
+                                    "quick_note" => {
+                                        if let Some(window) = app.get_webview_window("main") {
+                                            let _ = window.unminimize();
+                                            let _ = window.show();
+                                            let _ = window.set_focus();
+                                            let _ = window.emit("quick-canvas:open", true);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            })
+                            .on_tray_icon_event(|tray, event| {
+                                if let TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
+                                    let app = tray.app_handle();
+                                    if let Some(window) = app.get_webview_window("main") {
+                                        let _ = window.unminimize();
+                                        let _ = window.show();
+                                        let _ = window.set_focus();
+                                        let _ = window.emit("quick-canvas:open", true);
+                                    }
+                                }
+                            });
+
+                        if let Some(icon) = app.default_window_icon() {
+                            tray_builder = tray_builder.icon(icon.clone());
+                        }
+
+                        let _ = tray_builder.build(app);
+                    }
+                }
             }
 
             Ok(())
@@ -229,6 +297,7 @@ pub fn run() {
             load_board,
             save_asset,
             load_asset,
+            hide_window,
             openrouter_generate,
             diagram::render_diagram,
             diagram::update_diagram_node

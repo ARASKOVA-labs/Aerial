@@ -174,10 +174,19 @@ export default function App() {
     return wasOpen;
   }, [showSettings, showMoreTools, isMenuOpen, showWelcome, showQuickCanvas, showCommandPalette]);
 
+  const [isOpenedFromBackground, setIsOpenedFromBackground] = useState(false);
+
+  const handleHideWindow = useCallback(() => {
+    invoke('hide_window').catch((err) => {
+      logger.debug('hide_window not available (web mode):', err);
+    });
+  }, []);
+
   // ── Global Shortcut Event Listener (Tauri) ─────────────────────────────────
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen('quick-canvas:open', () => {
+    listen<boolean>('quick-canvas:open', (event) => {
+      setIsOpenedFromBackground(Boolean(event.payload));
       setShowQuickCanvas(true);
     }).then((fn) => {
       unlisten = fn;
@@ -1961,10 +1970,18 @@ export default function App() {
       {showQuickCanvas && (
         <QuickCanvasModal
           isDarkMode={isDarkMode}
-          onClose={() => setShowQuickCanvas(false)}
+          isOpenedFromBackground={isOpenedFromBackground}
+          onClose={() => {
+            setShowQuickCanvas(false);
+            if (isOpenedFromBackground) {
+              handleHideWindow();
+              setIsOpenedFromBackground(false);
+            }
+          }}
           onStampSketch={handleStampSketch}
           onStampText={handleStampText}
           onSaveAsBoard={handleSaveQuickNoteAsBoard}
+          onHideWindow={handleHideWindow}
         />
       )}
 

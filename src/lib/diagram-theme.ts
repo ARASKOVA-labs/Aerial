@@ -14,12 +14,16 @@ export interface MermaidThemeConfig {
  * Generates Mermaid initialization configuration adhering strictly to Araskova brand tokens.
  * Prioritizes razor-sharp contrast, clean vector edges, and crystal-clear legibility.
  */
-export function getAraskovaMermaidConfig(isDarkMode = true, style: AraskovaDiagramStyle = 'brutalist'): MermaidThemeConfig {
+export function getAraskovaMermaidConfig(
+  isDarkMode = true,
+  style: AraskovaDiagramStyle = 'brutalist',
+  customAccent?: string
+): MermaidThemeConfig {
   const isDark = style === 'industrial_light' ? false : isDarkMode;
   const isBlueprint = style === 'blueprint';
 
   // Araskova Brand Tokens (High-Contrast, Crisp Palettes)
-  const brandAccent = '#e73f07'; // Araskova Orange-Red
+  const brandAccent = customAccent || '#e73f07'; // Customizable accent (defaults to Araskova Orange-Red)
   const brandDark = '#0a0a0a';
 
   // Crisp Surfaces & Borders (No muddy dark-on-dark)
@@ -138,7 +142,7 @@ export function getAraskovaMermaidConfig(isDarkMode = true, style: AraskovaDiagr
       stroke-linecap: square !important;
     }
 
-    /* Araskova Orange Sharp Arrowheads */
+    /* Sharp Arrowheads with Configurable Accent */
     marker path, #flowchart-pointEnd, #statediagram-barbEnd, [id*="pointEnd"], [id*="arrowhead"] path {
       fill: ${brandAccent} !important;
       stroke: ${brandAccent} !important;
@@ -186,7 +190,7 @@ export function getAraskovaMermaidConfig(isDarkMode = true, style: AraskovaDiagr
       color: ${brandAccent} !important;
     }
 
-    /* Sequence Diagrams — Military Telemetry & Hardware Cards */
+    /* Sequence Diagrams — Telemetry Cards */
     .actor {
       fill: ${brandSurface} !important;
       stroke: ${brandBorder} !important;
@@ -298,20 +302,21 @@ export function getAraskovaMermaidConfig(isDarkMode = true, style: AraskovaDiagr
  * Architectural SVG Post-Processor:
  * 1. Enforces explicit pixel width & height from viewBox so Image loading in canvas never produces 0x0.
  * 2. Purges any blurry drop-shadow filters or hazy styles.
- * 3. Injects custom precision Araskova Orange arrowhead markers.
+ * 3. Injects custom precision arrowhead markers styled with the chosen accent color.
  * 4. Ensures cluster wireframes have clean technical // SYS. headers.
  */
 export function applyAraskovaDiagramAesthetics(
   svgString: string,
   isDarkMode = true,
-  style: AraskovaDiagramStyle = 'brutalist'
+  style: AraskovaDiagramStyle = 'brutalist',
+  customAccent?: string
 ): string {
   if (!svgString || typeof svgString !== 'string') return svgString;
 
   const isDark = style === 'industrial_light' ? false : style === 'blueprint' ? true : isDarkMode;
   const isBlueprint = style === 'blueprint';
 
-  const brandAccent = '#e73f07';
+  const brandAccent = customAccent || '#e73f07';
   const brandSurface = isBlueprint ? '#0c1524' : isDark ? '#18181b' : '#ffffff';
   const brandBorder = isBlueprint ? '#2563eb' : isDark ? '#3f3f46' : '#18181b';
   const textPrimary = isBlueprint ? '#ffffff' : isDark ? '#f4f4f5' : '#09090b';
@@ -348,7 +353,7 @@ export function applyAraskovaDiagramAesthetics(
     }
 
     // 3. Inject our theme CSS into SVG <style id="araskova-theme-override">
-    const { themeCSS } = getAraskovaMermaidConfig(isDarkMode, style);
+    const { themeCSS } = getAraskovaMermaidConfig(isDarkMode, style, brandAccent);
     let themeStyleEl = svgEl.querySelector('#araskova-theme-override');
     if (!themeStyleEl) {
       themeStyleEl = doc.createElementNS('http://www.w3.org/2000/svg', 'style');
@@ -361,8 +366,13 @@ export function applyAraskovaDiagramAesthetics(
     const nodeShapes = doc.querySelectorAll('.node rect, .node circle, .node polygon, .node path');
     nodeShapes.forEach((el) => {
       const currentStroke = el.getAttribute('stroke') || '';
-      const isAccent = currentStroke.toLowerCase().includes('e73f07') || currentStroke.toLowerCase().includes('orange');
-      if (!isAccent) {
+      const isAccent =
+        currentStroke.toLowerCase().includes('e73f07') ||
+        currentStroke.toLowerCase().includes('orange') ||
+        (customAccent && currentStroke.toLowerCase() === customAccent.toLowerCase());
+      if (isAccent) {
+        el.setAttribute('stroke', brandAccent);
+      } else {
         el.setAttribute('fill', brandSurface);
         el.setAttribute('stroke', brandBorder);
       }
@@ -399,7 +409,7 @@ export function applyAraskovaDiagramAesthetics(
     const elementsWithFilter = doc.querySelectorAll('[filter]');
     elementsWithFilter.forEach(el => el.removeAttribute('filter'));
 
-    // 8. Inject precision sharp Araskova arrowhead marker
+    // 8. Inject precision sharp arrowhead marker with chosen accent color
     let markerEl = doc.querySelector('#araskova-arrow-head');
     if (!markerEl) {
       markerEl = doc.createElementNS('http://www.w3.org/2000/svg', 'marker');
@@ -415,9 +425,12 @@ export function applyAraskovaDiagramAesthetics(
       markerPath.setAttribute('fill', brandAccent);
       markerEl.appendChild(markerPath);
       defsEl.appendChild(markerEl);
+    } else {
+      const p = markerEl.querySelector('path');
+      if (p) p.setAttribute('fill', brandAccent);
     }
 
-    // 9. Update all line markers to Araskova Orange
+    // 9. Update all line markers to the configured accent
     const pathsWithMarker = doc.querySelectorAll('path[marker-end]');
     pathsWithMarker.forEach(p => {
       p.setAttribute('marker-end', 'url(#araskova-arrow-head)');
@@ -433,16 +446,19 @@ export function applyAraskovaDiagramAesthetics(
         const cy = parseFloat(clusterRect.getAttribute('y') || '0');
         const cw = parseFloat(clusterRect.getAttribute('width') || '0');
 
-        if (cw > 50 && !cluster.querySelector('.araskova-cluster-tab')) {
-          const tab = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
-          tab.setAttribute('class', 'araskova-cluster-tab');
+        let tab = cluster.querySelector('.araskova-cluster-tab');
+        if (cw > 50) {
+          if (!tab) {
+            tab = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            tab.setAttribute('class', 'araskova-cluster-tab');
+            cluster.insertBefore(tab, clusterRect.nextSibling);
+          }
           tab.setAttribute('x', `${cx + 6}`);
           tab.setAttribute('y', `${cy}`);
           tab.setAttribute('width', `${Math.min(cw - 12, 60)}`);
           tab.setAttribute('height', '2.5');
           tab.setAttribute('fill', brandAccent);
           tab.setAttribute('rx', '1');
-          cluster.insertBefore(tab, clusterRect.nextSibling);
         }
 
         const rawContent = clusterText.textContent?.trim() || '';
@@ -461,122 +477,144 @@ export function applyAraskovaDiagramAesthetics(
 }
 
 /**
- * Curated deep-tech architecture templates showcasing the Araskova design aesthetic.
+ * Standard, production software & cloud architecture templates.
+ * Zero proprietary secrets, zero weapon/internal codenames.
  */
 export const ARASKOVA_DIAGRAM_TEMPLATES = [
   {
-    id: 'pipeline',
-    name: 'Vigil Perception Pipeline',
-    desc: 'Autonomous multi-spectral defect detection & neural perception',
+    id: 'microservices',
+    name: 'Cloud Microservices',
+    desc: 'API Gateway, Auth, Order & Inventory microservices with Kafka event bus',
     type: 'Flowchart',
     code: `graph TD
-    classDef hardware stroke:#3f3f46,stroke-width:1.5px;
-    classDef neural stroke:#e73f07,stroke-width:2px;
-    classDef telemetry stroke:#3f3f46,stroke-width:1.5px;
+    classDef edge stroke:#3f3f46,stroke-width:1.5px;
+    classDef accent stroke:#e73f07,stroke-width:2px;
+    classDef storage stroke:#3f3f46,stroke-width:1.5px;
 
-    subgraph INGESTION ["// Ingestion Cluster"]
-        A[RGB Camera Feed] --> B[Frame Demuxer]
-        C[IR Thermal Sensor] --> B
+    subgraph CLIENT_TIER ["// Client Layer"]
+        A[Web Frontend] --> G[API Gateway]
+        B[Mobile Client] --> G
     end
 
-    subgraph INFERENCE ["// Neural Perception"]
-        B -->|RAW 120FPS| D[TensorRT Backbone]:::neural
-        D -->|Feature Map| E[Vigil Defect Head]:::neural
-        D -->|Bounding Box| F[Spatial Locator]:::neural
+    subgraph SERVICES ["// Microservices Mesh"]
+        G -->|JWT AUTH| S1[Auth Service]:::accent
+        G -->|REST / gRPC| S2[Order Service]:::accent
+        G -->|CATALOG| S3[Product Service]:::accent
     end
 
-    subgraph TELEMETRY ["// Realtime Action"]
-        E -->|ALERT| G[Pneumatic Rejector]:::hardware
-        F -->|COORDINATES| H[Robotic Arm]:::hardware
-        E -->|LOG_STREAM| I[Audit Trail]:::telemetry
+    subgraph EVENT_BUS ["// Async Event Streaming"]
+        S2 -->|ORDER_CREATED| K[Kafka Broker]
+        K --> S4[Notification Service]
+        K --> S5[Inventory Sync]
+    end
+
+    subgraph STORAGE ["// Persistence Layer"]
+        S1 --> D1[(User Auth DB)]:::storage
+        S2 --> D2[(Order Store)]:::storage
+        S3 --> D3[(Redis Cache)]:::storage
     end`,
   },
   {
-    id: 'drone_grid',
-    name: 'Argus Autonomous Drone Grid',
-    desc: 'Distributed swarm telemetry & edge mesh coordination',
+    id: 'event_stream',
+    name: 'Real-Time Event Stream',
+    desc: 'Multi-source stream ingestion, Apache Flink compute, and analytics sinks',
     type: 'Architecture',
     code: `graph LR
-    subgraph PERIMETER ["// Tactical Perimeter"]
-        UAV1[Argus Drone Alpha] -->|P2P MESH| GW[Gateway Node]
-        UAV2[Argus Drone Bravo] -->|P2P MESH| GW
-        UAV3[Argus Drone Charlie] -->|P2P MESH| GW
+    subgraph INGESTION ["// Ingestion Sources"]
+        IOT[IoT Edge Sensors] -->|MQTT| GW[Stream Gateway]
+        APP[Web App Telemetry] -->|HTTP / JSON| GW
+        CDC[Database CDC Logs] -->|Debezium| GW
     end
 
-    subgraph EDGE_COMPUTE ["// Field Edge Compute"]
-        GW -->|ENCRYPTED STREAM| PROC[Edge Processor]
-        PROC -->|SPATIAL MAP| LOC[Coordinate Fusion]
+    subgraph STREAM_PROCESSOR ["// Real-Time Compute"]
+        GW -->|PARTITIONED TOPIC| TOPIC[Kafka Event Cluster]
+        TOPIC --> FLINK[Apache Flink Engine]
+        FLINK -->|AGGREGATED METRICS| AN[Anomaly Detector]
     end
 
-    subgraph COMMAND ["// Command & Control"]
-        LOC -->|DOWNLINK| C2[HQ Console]
-        C2 -->|TASKING| GW
+    subgraph SINKS ["// Data Destinations"]
+        AN -->|ALERTS| SLACK[Incident Webhook]
+        FLINK -->|TIMESERIES| TSDB[(ClickHouse Storage)]
+        FLINK -->|RAW ARCHIVE| S3[(Object Storage / S3)]
     end`,
   },
   {
-    id: 'quantum_protocol',
-    name: 'Cerberus Quantum-Safe Protocol',
-    desc: 'Post-Quantum Key Encapsulation (NIST ML-KEM-768) handshake',
+    id: 'oauth2_pkce',
+    name: 'OAuth2 & PKCE Auth Flow',
+    desc: 'Modern Single Page Application authorization with PKCE and JWT exchange',
     type: 'Sequence',
     code: `sequenceDiagram
     autonumber
-    actor Alice as Aerial Edge Node
-    actor Vault as Cerberus Hardware Vault
-    actor Bob as Field Terminal
+    actor User as User Agent
+    actor App as Single Page App (SPA)
+    actor Auth as Identity Provider
+    actor API as Resource Server
 
-    Note over Alice,Bob: NIST ML-KEM-768 Post-Quantum Handshake
-    Alice->>Vault: Request Ephemeral Public Key (KEM.KeyGen)
-    Vault-->>Alice: Return pk_vault (768-bit lattice)
-    Alice->>Alice: KEM.Encaps(pk_vault) -> (c, ss_alice)
-    Alice->>Bob: Transmit Ciphertext c + MAC
-    Bob->>Vault: Decapsulate Ciphertext c (KEM.Decaps)
-    Vault-->>Bob: Shared Secret ss_bob
-    Note over Alice,Bob: AES-256-GCM Symmetrical Tunnel Established
-    Alice-)Bob: Encrypted Telemetry Frame [120 FPS]`,
+    Note over User,API: OAuth 2.0 Authorization Code Flow with PKCE
+    App->>App: Generate code_verifier & code_challenge
+    User->>App: Click 'Sign In'
+    App->>Auth: GET /authorize?code_challenge=xyz&response_type=code
+    Auth-->>User: Present Login & Consent Screen
+    User->>Auth: Submit Credentials & Consent
+    Auth-->>App: Redirect with authorization code
+    App->>Auth: POST /oauth/token with code & code_verifier
+    Auth-->>App: Return ID Token & Access Token (JWT)
+    App->>API: GET /api/v1/profile with Bearer JWT
+    API-->>App: Return 200 OK + User Profile JSON`,
   },
   {
-    id: 'state_machine',
-    name: 'Hardware Target Acquisition',
-    desc: 'Military sensor tracking, thermal lock, and engagement state machine',
+    id: 'order_state',
+    name: 'Order Lifecycle State Machine',
+    desc: 'E-commerce transactional transitions from payment to delivery & return',
     type: 'State Diagram',
     code: `stateDiagram-v2
-    [*] --> Standby: System Init [001]
-    Standby --> Scanning: Radar Pulse Active
-    Scanning --> Tracking: Candidate Acquired
-    Tracking --> ThermalLock: IR Contrast > 88%
-    Tracking --> Scanning: Target Lost
-    ThermalLock --> Engaged: Fire Control Authorization
-    Engaged --> TargetNeutralized: Impact Confirmed
-    TargetNeutralized --> Standby: Reset Subsystem
-    Engaged --> Standby: Abort Command`,
+    [*] --> Draft: Cart Checkout
+    Draft --> PendingPayment: Place Order
+    PendingPayment --> PaymentFailed: Card Declined
+    PaymentFailed --> PendingPayment: Retry Payment
+    PaymentFailed --> Cancelled: Timeout (30m)
+    PendingPayment --> Processing: Payment Authorized
+    Processing --> Shipped: Package Dispatched
+    Shipped --> Delivered: Carrier Confirmed
+    Processing --> Refunded: Customer Cancellation
+    Delivered --> Refunded: Return Accepted
+    Delivered --> [*]
+    Cancelled --> [*]
+    Refunded --> [*]`,
   },
   {
-    id: 'class_hierarchy',
-    name: 'Perception Engine Entities',
-    desc: 'Core vision models, vector anchors, and spatial bounding primitives',
+    id: 'domain_entities',
+    name: 'E-Commerce Domain Entities',
+    desc: 'Standard clean domain architecture for customers, orders, and payment items',
     type: 'Class Diagram',
     code: `classDiagram
-    class SensorFrame {
-        +UUID frame_id
-        +Timestamp capture_time
-        +Dimensions resolution
-        +get_luminance() float
+    class Customer {
+        +UUID customer_id
+        +String email
+        +String full_name
+        +get_order_history() List
     }
-    class BoundingReticle {
-        +float x
-        +float y
-        +float width
-        +float height
-        +float confidence_score
-        +render_corners() void
+    class Order {
+        +UUID order_id
+        +DateTime created_at
+        +Decimal total_amount
+        +OrderStatus status
+        +calculate_tax() Decimal
     }
-    class DefectClassification {
-        +String anomaly_type
-        +SeverityLevel severity
-        +calculate_drift() float
+    class LineItem {
+        +UUID item_id
+        +String sku
+        +Int quantity
+        +Decimal unit_price
     }
-    SensorFrame <|-- ThermalFrame
-    SensorFrame *-- BoundingReticle
-    BoundingReticle o-- DefectClassification`,
+    class PaymentMethod {
+        +UUID payment_id
+        +String provider
+        +String masked_pan
+        +is_valid() Boolean
+    }
+    Customer "1" *-- "0..*" Order
+    Order "1" *-- "1..*" LineItem
+    Customer "1" o-- "1..*" PaymentMethod`,
   },
 ];

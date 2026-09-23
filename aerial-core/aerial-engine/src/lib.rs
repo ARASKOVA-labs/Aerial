@@ -87,6 +87,16 @@ pub struct AerialCanvas {
     is_dragging: bool,
     drag_offset_x: f64,
     drag_offset_y: f64,
+    is_resizing: bool,
+    resize_handle: u8,
+    resize_start_x: f64,
+    resize_start_y: f64,
+    resize_orig_x: f64,
+    resize_orig_y: f64,
+    resize_orig_w: f64,
+    resize_orig_h: f64,
+    selection_anim_phase: f64,
+    accent_color: String,
     eraser_radius: f64,
     eraser_type: EraserType,
     last_mouse_x: f64,
@@ -139,6 +149,16 @@ impl AerialCanvas {
             is_dragging: false,
             drag_offset_x: 0.0,
             drag_offset_y: 0.0,
+            is_resizing: false,
+            resize_handle: 0,
+            resize_start_x: 0.0,
+            resize_start_y: 0.0,
+            resize_orig_x: 0.0,
+            resize_orig_y: 0.0,
+            resize_orig_w: 0.0,
+            resize_orig_h: 0.0,
+            selection_anim_phase: 0.0,
+            accent_color: "#e73f07".to_string(),
             eraser_radius: 24.0,
             eraser_type: EraserType::Stroke,
             last_mouse_x: 0.0,
@@ -160,6 +180,8 @@ impl AerialCanvas {
         self.is_drawing = false;
         self.is_panning = false;
         self.is_dragging = false;
+        self.is_resizing = false;
+        self.resize_handle = 0;
     }
 
     pub fn set_tool_freedraw(&mut self)    { self.reset_interaction_state(); self.selected_id = None; self.tool = Tool::FreeDraw; }
@@ -267,6 +289,59 @@ impl AerialCanvas {
             }
         }
         None
+    }
+
+    pub fn set_accent_color(&mut self, color: String) {
+        self.accent_color = color;
+        self.dirty = true;
+    }
+
+    pub fn get_accent_color(&self) -> String {
+        self.accent_color.clone()
+    }
+
+    pub fn set_selected_id(&mut self, id: u64) {
+        self.selected_id = Some(id);
+        self.dirty = true;
+    }
+
+    pub fn deselect(&mut self) {
+        self.selected_id = None;
+        self.is_resizing = false;
+        self.is_dragging = false;
+        self.dirty = true;
+    }
+
+    pub fn scale_selected(&mut self, factor: f64) {
+        if factor <= 0.0 { return; }
+        if let Some(id) = self.selected_id {
+            if self.elements.iter().any(|e| e.id == id) {
+                self.save_state();
+                if let Some(el) = self.elements.iter_mut().find(|e| e.id == id) {
+                    let cx = el.x + el.w / 2.0;
+                    let cy = el.y + el.h / 2.0;
+                    let new_w = (el.w * factor).max(20.0);
+                    let new_h = (el.h * factor).max(20.0);
+                    let new_x = cx - new_w / 2.0;
+                    let new_y = cy - new_h / 2.0;
+
+                    if el.w > 0.0 && el.h > 0.0 {
+                        let sx = new_w / el.w;
+                        let sy = new_h / el.h;
+                        for p in el.points.iter_mut() {
+                            p.0 = new_x + (p.0 - el.x) * sx;
+                            p.1 = new_y + (p.1 - el.y) * sy;
+                        }
+                    }
+
+                    el.x = new_x;
+                    el.y = new_y;
+                    el.w = new_w;
+                    el.h = new_h;
+                    self.dirty = true;
+                }
+            }
+        }
     }
 
     pub fn get_element_at(&self, raw_x: f64, raw_y: f64) -> Option<String> {
@@ -644,8 +719,44 @@ impl AerialCanvas {
         self.is_drawing = true;
 
         if self.tool == Tool::Select {
+            // 1. Check if user clicked on one of the 4 corner resize handles of the currently selected element
+            if let Some(id) = self.selected_id {
+                if let Some(el) = self.elements.iter().find(|e| e.id == id) {
+                    let handle_hit_radius = 16.0 / self.zoom.max(0.1);
+                    let corners = [
+                        (1u8, el.x, el.y),
+                        (2u8, el.x + el.w, el.y),
+                        (3u8, el.x, el.y + el.h),
+                        (4u8, el.x + el.w, el.y + el.h),
+                    ];
+                    let mut hit_h = 0u8;
+                    for (h_num, cx, cy) in corners.iter() {
+                        let dx = wx - cx;
+                        let dy = wy - cy;
+                        if (dx * dx + dy * dy) <= (handle_hit_radius * handle_hit_radius) {
+                            hit_h = *h_num;
+                            break;
+                        }
+                    }
+
+                    if hit_h > 0 {
+                        self.is_resizing = true;
+                        self.resize_handle = hit_h;
+                        self.resize_start_x = wx;
+                        self.resize_start_y = wy;
+                        self.resize_orig_x = el.x;
+                        self.resize_orig_y = el.y;
+                        self.resize_orig_w = el.w;
+                        self.resize_orig_h = el.h;
+                        self.dirty = true;
+                        return;
+                    }
+                }
+            }
+
+            // 2. Normal element selection
             let hit = self.elements.iter().rev().find(|el| {
-                let pad = if el.kind == "Text" { 16.0 } else { 4.0 };
+                let pad = if el.kind == "Text" { 16.0 } else { 6.0 };
                 wx >= (el.x - pad) && wx <= (el.x + el.w + pad) && wy >= (el.y - pad) && wy <= (el.y + el.h + pad)
             }).map(|el| el.id);
             if let Some(id) = hit {
@@ -826,6 +937,96 @@ impl AerialCanvas {
             return;
         }
 
+        // Handle corner resize
+        if self.is_resizing {
+            let wx = self.screen_to_world_x(raw_x);
+            let wy = self.screen_to_world_y(raw_y);
+            let dx = wx - self.resize_start_x;
+            let dy = wy - self.resize_start_y;
+
+            if let Some(id) = self.selected_id {
+                if let Some(el) = self.elements.iter_mut().find(|e| e.id == id) {
+                    let is_diagram_or_image = el.kind == "Diagram" || el.kind == "Image";
+                    let orig_w = self.resize_orig_w;
+                    let orig_h = self.resize_orig_h;
+                    let orig_x = self.resize_orig_x;
+                    let orig_y = self.resize_orig_y;
+
+                    let (mut new_x, mut new_y, mut new_w, mut new_h) = match self.resize_handle {
+                        1 => { // Top-Left
+                            let nw = (orig_w - dx).max(24.0);
+                            let nh = (orig_h - dy).max(24.0);
+                            (orig_x + orig_w - nw, orig_y + orig_h - nh, nw, nh)
+                        }
+                        2 => { // Top-Right
+                            let nw = (orig_w + dx).max(24.0);
+                            let nh = (orig_h - dy).max(24.0);
+                            (orig_x, orig_y + orig_h - nh, nw, nh)
+                        }
+                        3 => { // Bottom-Left
+                            let nw = (orig_w - dx).max(24.0);
+                            let nh = (orig_h + dy).max(24.0);
+                            (orig_x + orig_w - nw, orig_y, nw, nh)
+                        }
+                        4 => { // Bottom-Right
+                            let nw = (orig_w + dx).max(24.0);
+                            let nh = (orig_h + dy).max(24.0);
+                            (orig_x, orig_y, nw, nh)
+                        }
+                        _ => (orig_x, orig_y, orig_w, orig_h),
+                    };
+
+                    // For diagrams and images, preserve aspect ratio so visuals never get squished
+                    if is_diagram_or_image && orig_w > 0.0 && orig_h > 0.0 {
+                        let scale_x = new_w / orig_w;
+                        let scale_y = new_h / orig_h;
+                        let scale = scale_x.max(scale_y);
+                        new_w = (orig_w * scale).max(24.0);
+                        new_h = (orig_h * scale).max(24.0);
+
+                        match self.resize_handle {
+                            1 => {
+                                new_x = orig_x + orig_w - new_w;
+                                new_y = orig_y + orig_h - new_h;
+                            }
+                            2 => {
+                                new_x = orig_x;
+                                new_y = orig_y + orig_h - new_h;
+                            }
+                            3 => {
+                                new_x = orig_x + orig_w - new_w;
+                                new_y = orig_y;
+                            }
+                            4 => {
+                                new_x = orig_x;
+                                new_y = orig_y;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Scale vector element points proportionally
+                    if orig_w > 0.0 && orig_h > 0.0 && !el.points.is_empty() {
+                        let sx = new_w / orig_w;
+                        let sy = new_h / orig_h;
+                        for p in el.points.iter_mut() {
+                            p.0 = new_x + (p.0 - orig_x) * sx;
+                            p.1 = new_y + (p.1 - orig_y) * sy;
+                        }
+                    }
+
+                    el.x = new_x;
+                    el.y = new_y;
+                    el.w = new_w;
+                    el.h = new_h;
+                    self.dirty = true;
+                }
+            }
+            self.last_mouse_x = raw_x;
+            self.last_mouse_y = raw_y;
+            return;
+        }
+
         // Handle select-tool drag
         if self.is_dragging {
             let wx = self.screen_to_world_x(raw_x);
@@ -900,14 +1101,16 @@ impl AerialCanvas {
     }
 
     pub fn on_mouse_up(&mut self, raw_x: f64, raw_y: f64) {
-        // Save state when a drag-move completes (element was moved)
-        if self.is_dragging {
+        // Save state when a drag-move or resize completes
+        if self.is_dragging || self.is_resizing {
             self.save_state();
         }
         self.on_mouse_move(raw_x, raw_y);
         self.is_drawing = false;
         self.is_panning = false;
         self.is_dragging = false;
+        self.is_resizing = false;
+        self.resize_handle = 0;
 
         if let Some(stroke) = self.active_stroke.take() {
             // A stroke is substantial if it has traveled at least 1px in either dimension
@@ -963,6 +1166,13 @@ impl AerialCanvas {
     /// Returns true if there are still animations running (e.g. laser fade).
     pub fn tick_animations(&mut self) -> bool {
         let mut has_animations = false;
+
+        // Animate marching dashes for selected element at 60 FPS
+        if self.tool == Tool::Select && self.selected_id.is_some() {
+            self.selection_anim_phase = (self.selection_anim_phase + 0.6) % 1000.0;
+            self.dirty = true;
+            has_animations = true;
+        }
 
         // Fade out laser strokes by reducing their alpha over time
         if !self.laser_strokes.is_empty() {
@@ -1142,9 +1352,96 @@ impl AerialCanvas {
         if self.tool == Tool::Select {
             if let Some(id) = self.selected_id {
                 if let Some(el) = self.elements.iter().find(|e| e.id == id) {
-                    self.ctx.set_stroke_style_str("#3b82f6");
+                    self.ctx.save();
+                    let pad = 6.0;
+                    let sel_x = el.x - pad;
+                    let sel_y = el.y - pad;
+                    let sel_w = el.w + pad * 2.0;
+                    let sel_h = el.h + pad * 2.0;
+
+                    let accent = &self.accent_color;
+
+                    // 1. Animated marching dash boundary
+                    self.ctx.set_stroke_style_str(accent);
                     self.ctx.set_line_width(1.5 / self.zoom);
-                    let _ = self.ctx.stroke_rect(el.x - 4.0, el.y - 4.0, el.w + 8.0, el.h + 8.0);
+
+                    let dash_array = js_sys::Array::new();
+                    dash_array.push(&wasm_bindgen::JsValue::from_f64(6.0 / self.zoom));
+                    dash_array.push(&wasm_bindgen::JsValue::from_f64(4.0 / self.zoom));
+                    let _ = self.ctx.set_line_dash(&dash_array);
+                    self.ctx.set_line_dash_offset(-self.selection_anim_phase / self.zoom);
+
+                    self.ctx.stroke_rect(sel_x, sel_y, sel_w, sel_h);
+
+                    // Reset line dash for solid geometry
+                    let empty_dash = js_sys::Array::new();
+                    let _ = self.ctx.set_line_dash(&empty_dash);
+
+                    // 2. Tactical Corner Reticles (L-brackets extending from corners)
+                    let bracket_len = (12.0 / self.zoom).min(sel_w / 3.0).min(sel_h / 3.0);
+                    self.ctx.set_stroke_style_str(accent);
+                    self.ctx.set_line_width(2.0 / self.zoom);
+                    self.ctx.begin_path();
+                    // Top-Left
+                    self.ctx.move_to(sel_x, sel_y + bracket_len);
+                    self.ctx.line_to(sel_x, sel_y);
+                    self.ctx.line_to(sel_x + bracket_len, sel_y);
+                    // Top-Right
+                    self.ctx.move_to(sel_x + sel_w - bracket_len, sel_y);
+                    self.ctx.line_to(sel_x + sel_w, sel_y);
+                    self.ctx.line_to(sel_x + sel_w, sel_y + bracket_len);
+                    // Bottom-Left
+                    self.ctx.move_to(sel_x, sel_y + sel_h - bracket_len);
+                    self.ctx.line_to(sel_x, sel_y + sel_h);
+                    self.ctx.line_to(sel_x + bracket_len, sel_y + sel_h);
+                    // Bottom-Right
+                    self.ctx.move_to(sel_x + sel_w - bracket_len, sel_y + sel_h);
+                    self.ctx.line_to(sel_x + sel_w, sel_y + sel_h);
+                    self.ctx.line_to(sel_x + sel_w, sel_y + sel_h - bracket_len);
+                    self.ctx.stroke();
+
+                    // 3. Four Interactive Corner Resize Handles (Square Reticles)
+                    let handle_size = 8.0 / self.zoom;
+                    let half_h = handle_size / 2.0;
+                    let corners = [
+                        (el.x, el.y),
+                        (el.x + el.w, el.y),
+                        (el.x, el.y + el.h),
+                        (el.x + el.w, el.y + el.h),
+                    ];
+
+                    for (cx, cy) in corners.iter() {
+                        self.ctx.set_fill_style_str(if self.is_dark_mode { "#18181b" } else { "#ffffff" });
+                        self.ctx.set_stroke_style_str(accent);
+                        self.ctx.set_line_width(1.5 / self.zoom);
+                        self.ctx.fill_rect(cx - half_h, cy - half_h, handle_size, handle_size);
+                        self.ctx.stroke_rect(cx - half_h, cy - half_h, handle_size, handle_size);
+                    }
+
+                    // 4. Machinery Telemetry Badge [ W × H px ]
+                    let badge_text = if el.kind == "Diagram" {
+                        format!("DIAGRAM • {} × {} px", el.w.round() as i64, el.h.round() as i64)
+                    } else {
+                        format!("{} × {} px", el.w.round() as i64, el.h.round() as i64)
+                    };
+                    let font_size = (10.0 / self.zoom).clamp(8.0, 14.0);
+                    self.ctx.set_font(&format!("bold {}px 'Space Mono', monospace", font_size));
+                    let text_w = badge_text.len() as f64 * (font_size * 0.62);
+                    let badge_w = text_w + (14.0 / self.zoom);
+                    let badge_h = 18.0 / self.zoom;
+                    let badge_x = sel_x + (sel_w - badge_w) / 2.0;
+                    let badge_y = sel_y + sel_h + (8.0 / self.zoom);
+
+                    self.ctx.set_fill_style_str(if self.is_dark_mode { "#111111" } else { "#ffffff" });
+                    self.ctx.set_stroke_style_str("#2a2a2a");
+                    self.ctx.set_line_width(1.0 / self.zoom);
+                    self.ctx.fill_rect(badge_x, badge_y, badge_w, badge_h);
+                    self.ctx.stroke_rect(badge_x, badge_y, badge_w, badge_h);
+
+                    self.ctx.set_fill_style_str(accent);
+                    let _ = self.ctx.fill_text(&badge_text, badge_x + (7.0 / self.zoom), badge_y + badge_h - (5.0 / self.zoom));
+
+                    self.ctx.restore();
                 }
             }
         }

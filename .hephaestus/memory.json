@@ -47,5 +47,17 @@
     "timestamp": "2026-09-23T04:34:26.154Z",
     "learned": true,
     "source_project": "Aerial"
+  },
+  {
+    "domain": "web",
+    "category": "General",
+    "title": "Toolbar Jitter on Stroke Size Scrubbing",
+    "symptom": "Dragging stroke width or size slider causes the centered toolbar to violently jitter and wobble horizontally",
+    "root_cause": "Unspecified root cause.",
+    "solution": "Decouple positioning transitions from toolbar content, enforce fixed widths on indicator buttons using tabular-nums, and replace transition-all with scoped transition-colors and transition-[opacity,transform]",
+    "id": "LEARN-005",
+    "timestamp": "2026-09-23T10:40:12.334Z",
+    "learned": true,
+    "source_project": "Aerial"
   }
 ]

@@ -87,6 +87,9 @@ export class AerialCanvas {
     delete_selected() {
         wasm.aerialcanvas_delete_selected(this.__wbg_ptr);
     }
+    deselect() {
+        wasm.aerialcanvas_deselect(this.__wbg_ptr);
+    }
     /**
      * @param {Uint8Array} remote_sv
      * @returns {Uint8Array}
@@ -116,6 +119,21 @@ export class AerialCanvas {
         let deferred1_1;
         try {
             const ret = wasm.aerialcanvas_extract_magic_strokes(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    get_accent_color() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_accent_color(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -333,6 +351,12 @@ export class AerialCanvas {
         wasm.aerialcanvas_save_state(this.__wbg_ptr);
     }
     /**
+     * @param {number} factor
+     */
+    scale_selected(factor) {
+        wasm.aerialcanvas_scale_selected(this.__wbg_ptr, factor);
+    }
+    /**
      * @param {number} sx
      * @returns {number}
      */
@@ -347,6 +371,14 @@ export class AerialCanvas {
     screen_to_world_y(sy) {
         const ret = wasm.aerialcanvas_screen_to_world_y(this.__wbg_ptr, sy);
         return ret;
+    }
+    /**
+     * @param {string} color
+     */
+    set_accent_color(color) {
+        const ptr0 = passStringToWasm0(color, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_set_accent_color(this.__wbg_ptr, ptr0, len0);
     }
     /**
      * @param {string} color
@@ -422,6 +454,12 @@ export class AerialCanvas {
      */
     set_is_rough(rough) {
         wasm.aerialcanvas_set_is_rough(this.__wbg_ptr, rough);
+    }
+    /**
+     * @param {bigint} id
+     */
+    set_selected_id(id) {
+        wasm.aerialcanvas_set_selected_id(this.__wbg_ptr, id);
     }
     /**
      * @param {string} c
@@ -676,6 +714,10 @@ function __wbg_get_imports() {
         __wbg_prototypesetcall_de8e0d9553586985: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
         },
+        __wbg_push_adb0107829f02d75: function(arg0, arg1) {
+            const ret = arg0.push(arg1);
+            return ret;
+        },
         __wbg_quadraticCurveTo_5bb4e18a192b53b9: function(arg0, arg1, arg2, arg3, arg4) {
             arg0.quadraticCurveTo(arg1, arg2, arg3, arg4);
         },
@@ -713,6 +755,9 @@ function __wbg_get_imports() {
         },
         __wbg_set_lineCap_ec484c1489fa48bc: function(arg0, arg1, arg2) {
             arg0.lineCap = getStringFromWasm0(arg1, arg2);
+        },
+        __wbg_set_lineDashOffset_77617c80be8af018: function(arg0, arg1) {
+            arg0.lineDashOffset = arg1;
         },
         __wbg_set_lineJoin_645744ec04386dd0: function(arg0, arg1, arg2) {
             arg0.lineJoin = getStringFromWasm0(arg1, arg2);

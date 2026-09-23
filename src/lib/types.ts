@@ -109,6 +109,11 @@ export interface AerialEngine {
 
   // Element operations
   delete_selected: () => void;
+  scale_selected: (factor: number) => void;
+  set_accent_color: (color: string) => void;
+  get_accent_color: () => string;
+  set_selected_id: (id: number | bigint) => void;
+  deselect: () => void;
   render: () => void;
   tick_animations: () => boolean;
   undo: () => boolean;
@@ -188,7 +193,11 @@ export interface AerialCanvasRef {
   /** Import full binary state */
   importFullState: (bytes: Uint8Array) => void;
   /** Add a diagram element to the canvas */
-  addDiagram: (code: string, svg: string) => void;
+  addDiagram: (code: string, svg: string, scale?: number, accentColor?: string) => void;
+  /** Scale the currently selected element on canvas by a multiplier */
+  scaleSelected?: (factor: number) => void;
+  /** Set engine selection accent color */
+  setAccentColor?: (color: string) => void;
   /** Add a text element at world coordinates */
   addText: (text: string, x?: number, y?: number, size?: number, color?: string, fontFamily?: string) => void;
   /** Convert currently drawn magic pen strokes into text */

@@ -18,7 +18,7 @@ import {
   AerialSettingsPopover,
 } from './AerialToolbar';
 import { AerialDraggableTextBox } from './AerialDraggableTextBox';
-import { Edit3 } from 'lucide-react';
+import { Edit3, Trash2, Plus, Minus } from 'lucide-react';
 import mermaid from 'mermaid';
 import { getAraskovaMermaidConfig, applyAraskovaDiagramAesthetics } from '../lib/diagram-theme';
 import type {
@@ -109,6 +109,17 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       color: string;
       width: number;
       height: number;
+    } | null>(null);
+    const [selectedDiagramEl, setSelectedDiagramEl] = useState<{
+      id: bigint;
+      screenX: number;
+      screenY: number;
+      worldX: number;
+      worldY: number;
+      width: number;
+      height: number;
+      code: string;
+      accentColor: string;
     } | null>(null);
     const [isConvertingMagic, setIsConvertingMagic] = useState(false);
     const magicDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -763,17 +774,37 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
                 width: Math.max(260, Math.round((el.w || 260) * (engineRef.current!.get_zoom() || 1))),
                 height: Math.max(100, Math.round((el.h || 100) * (engineRef.current!.get_zoom() || 1))),
               });
+              setSelectedDiagramEl(null);
+            } else if (el.kind && el.kind.toLowerCase() === 'diagram') {
+              const sx = engineRef.current!.world_to_screen_x(el.x);
+              const sy = engineRef.current!.world_to_screen_y(el.y);
+              setSelectedDiagramEl({
+                id: BigInt(el.id),
+                screenX: Math.round(sx),
+                screenY: Math.round(sy),
+                worldX: el.x,
+                worldY: el.y,
+                width: Math.round((el.w || 600) * (engineRef.current!.get_zoom() || 1)),
+                height: Math.round((el.h || 400) * (engineRef.current!.get_zoom() || 1)),
+                code: el.code || '',
+                accentColor: el.stroke_color && el.stroke_color !== 'transparent' ? el.stroke_color : '#e73f07',
+              });
+              setSelectedTextEl(null);
             } else {
               setSelectedTextEl(null);
+              setSelectedDiagramEl(null);
             }
           } catch (_) {
             setSelectedTextEl(null);
+            setSelectedDiagramEl(null);
           }
         } else {
           setSelectedTextEl(null);
+          setSelectedDiagramEl(null);
         }
       } else {
         setSelectedTextEl(null);
+        setSelectedDiagramEl(null);
       }
 
       if (activeTool === 'magic_pen') {
@@ -1016,12 +1047,12 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engineRef.current?.import_full_state(bytes);
         engineRef.current?.render();
       },
-      addDiagram: async (code: string, rawSvg: string) => {
+      addDiagram: async (code: string, rawSvg: string, scale = 1.0, accentColor = '#e73f07') => {
         if (!engineRef.current) return;
 
         try {
           const style = isDarkMode ? 'brutalist' : 'industrial_light';
-          const cleanSvg = applyAraskovaDiagramAesthetics(rawSvg, isDarkMode, style);
+          const cleanSvg = applyAraskovaDiagramAesthetics(rawSvg, isDarkMode, style, accentColor);
 
           let svgW = 600;
           let svgH = 400;
@@ -1053,8 +1084,10 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           }
 
           const img = await renderSvgToImage(cleanSvg);
-          const w = svgW || img.naturalWidth || 600;
-          const h = svgH || img.naturalHeight || 400;
+          const baseW = svgW || img.naturalWidth || 600;
+          const baseH = svgH || img.naturalHeight || 400;
+          const w = Math.round(baseW * scale);
+          const h = Math.round(baseH * scale);
 
           // Position at the visible center of the screen
           const cx = window.innerWidth / 2;
@@ -1066,11 +1099,20 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           const dataUrl = 'data:image/svg+xml;base64,' + svg64;
 
           engineRef.current?.add_diagram(img, wx, wy, w, h, code, dataUrl, '{}');
+          engineRef.current?.set_accent_color(accentColor);
           engineRef.current?.render();
           logger.info(`Inserted diagram at (${wx.toFixed(1)}, ${wy.toFixed(1)}) size (${w}x${h})`);
         } catch (err) {
           logger.error('Error in addDiagram:', err);
         }
+      },
+      scaleSelected: (factor: number) => {
+        engineRef.current?.scale_selected(factor);
+        engineRef.current?.render();
+      },
+      setAccentColor: (color: string) => {
+        engineRef.current?.set_accent_color(color);
+        engineRef.current?.render();
       },
       addText: (text: string, x = 250, y = 250, size = 28, color?: string, fontFamily?: string) => {
         engineRef.current?.add_text(text, x, y, size, fontFamily || "'Inter', sans-serif", color);
@@ -1312,6 +1354,206 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
               <span>EDIT TEXT</span>
             </button>
             <span className="text-[10px] text-brand-gray font-mono pl-1 border-l border-brand-border">Press ↵ Enter</span>
+          </div>
+        )}
+
+        {/* Floating HUD for Selected Diagram */}
+        {selectedDiagramEl && activeTool === 'select' && (
+          <div
+            style={{
+              position: 'absolute',
+              left: `${Math.max(12, selectedDiagramEl.screenX)}px`,
+              top: `${Math.max(12, selectedDiagramEl.screenY - 48)}px`,
+              zIndex: 45,
+            }}
+            className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-[#0a0a0a]/95 border border-[#2a2a2a] shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 pointer-events-auto"
+          >
+            <span className="px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-[#81868b] border-r border-[#2a2a2a]">
+              Diagram
+            </span>
+
+            {/* Quick Scale Buttons */}
+            <div className="flex items-center gap-1 px-1">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!engineRef.current) return;
+                  engineRef.current.scale_selected(0.9);
+                  engineRef.current.render();
+                  const elJson = engineRef.current.get_selected_element_json();
+                  if (elJson) {
+                    try {
+                      const el = JSON.parse(elJson);
+                      const sx = engineRef.current.world_to_screen_x(el.x);
+                      const sy = engineRef.current.world_to_screen_y(el.y);
+                      setSelectedDiagramEl(prev => prev ? {
+                        ...prev,
+                        screenX: Math.round(sx),
+                        screenY: Math.round(sy),
+                        worldX: el.x,
+                        worldY: el.y,
+                        width: Math.round((el.w || 600) * (engineRef.current!.get_zoom() || 1)),
+                        height: Math.round((el.h || 400) * (engineRef.current!.get_zoom() || 1)),
+                      } : null);
+                    } catch (_) {}
+                  }
+                }}
+                title="Scale Down 10%"
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-mono font-bold text-[#f3f3f2] hover:bg-[#1f1f1f] border border-[#2a2a2a] transition-all cursor-pointer"
+              >
+                <Minus size={12} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!engineRef.current) return;
+                  engineRef.current.scale_selected(1.1);
+                  engineRef.current.render();
+                  const elJson = engineRef.current.get_selected_element_json();
+                  if (elJson) {
+                    try {
+                      const el = JSON.parse(elJson);
+                      const sx = engineRef.current.world_to_screen_x(el.x);
+                      const sy = engineRef.current.world_to_screen_y(el.y);
+                      setSelectedDiagramEl(prev => prev ? {
+                        ...prev,
+                        screenX: Math.round(sx),
+                        screenY: Math.round(sy),
+                        worldX: el.x,
+                        worldY: el.y,
+                        width: Math.round((el.w || 600) * (engineRef.current!.get_zoom() || 1)),
+                        height: Math.round((el.h || 400) * (engineRef.current!.get_zoom() || 1)),
+                      } : null);
+                    } catch (_) {}
+                  }
+                }}
+                title="Scale Up 10%"
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-mono font-bold text-[#f3f3f2] hover:bg-[#1f1f1f] border border-[#2a2a2a] transition-all cursor-pointer"
+              >
+                <Plus size={12} />
+              </button>
+            </div>
+
+            {/* Color Palette Swatches */}
+            <div className="flex items-center gap-1 px-1 border-l border-[#2a2a2a]">
+              {[
+                { color: '#e73f07', name: 'Araskova Orange' },
+                { color: '#0ea5e9', name: 'Electric Cyan' },
+                { color: '#10b981', name: 'Emerald Green' },
+                { color: '#8b5cf6', name: 'Radiant Violet' },
+                { color: '#f59e0b', name: 'Cyber Amber' },
+                { color: '#ef4444', name: 'Crimson Red' },
+                { color: '#f3f3f2', name: 'Crisp White' },
+              ].map((swatch) => (
+                <button
+                  key={swatch.color}
+                  type="button"
+                  onClick={async () => {
+                    if (!engineRef.current || !selectedDiagramEl || !selectedDiagramEl.code) return;
+                    try {
+                      const style = isDarkMode ? 'brutalist' : 'industrial_light';
+                      mermaid.initialize(getAraskovaMermaidConfig(isDarkMode, style, swatch.color));
+                      const id = 'mermaid-recolor-' + Math.random().toString(36).substring(2, 9);
+                      const { svg } = await mermaid.render(id, selectedDiagramEl.code);
+                      const styledSvg = applyAraskovaDiagramAesthetics(svg, isDarkMode, style, swatch.color);
+                      const img = await renderSvgToImage(styledSvg);
+                      const numId = Number(selectedDiagramEl.id);
+
+                      engineRef.current.set_cached_image(numId, img);
+                      engineRef.current.set_accent_color(swatch.color);
+
+                      const sceneJson = engineRef.current.get_scene_json();
+                      if (sceneJson) {
+                        try {
+                          const parsed = JSON.parse(sceneJson);
+                          const target = parsed.elements?.find((e: any) => BigInt(e.id) === selectedDiagramEl.id);
+                          if (target) {
+                            target.stroke_color = swatch.color;
+                            target.svg = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(styledSvg)));
+                            engineRef.current.load_scene_json(JSON.stringify(parsed));
+                            engineRef.current.set_cached_image(numId, img);
+                            engineRef.current.set_selected_id(numId);
+                          }
+                        } catch (_) {}
+                      }
+                      engineRef.current.render();
+                      setSelectedDiagramEl(prev => prev ? { ...prev, accentColor: swatch.color } : null);
+                    } catch (err) {
+                      logger.error('Failed to update diagram accent color:', err);
+                    }
+                  }}
+                  title={swatch.name}
+                  style={{ backgroundColor: swatch.color }}
+                  className={`w-5 h-5 rounded-full border transition-all cursor-pointer shadow-xs ${
+                    selectedDiagramEl.accentColor.toLowerCase() === swatch.color.toLowerCase()
+                      ? 'border-white scale-110 ring-2 ring-white/30'
+                      : 'border-white/20 hover:scale-110 active:scale-95'
+                  }`}
+                />
+              ))}
+              <label
+                title="Custom Color"
+                className="relative w-5 h-5 rounded-full border border-white/30 flex items-center justify-center cursor-pointer overflow-hidden bg-gradient-to-tr from-pink-500 via-purple-500 to-cyan-500 hover:scale-110 transition-transform"
+              >
+                <input
+                  type="color"
+                  value={selectedDiagramEl.accentColor}
+                  className="opacity-0 absolute inset-0 cursor-pointer w-full h-full"
+                  onChange={async (e) => {
+                    const customCol = e.target.value;
+                    if (!engineRef.current || !selectedDiagramEl || !selectedDiagramEl.code) return;
+                    try {
+                      const style = isDarkMode ? 'brutalist' : 'industrial_light';
+                      mermaid.initialize(getAraskovaMermaidConfig(isDarkMode, style, customCol));
+                      const id = 'mermaid-recolor-' + Math.random().toString(36).substring(2, 9);
+                      const { svg } = await mermaid.render(id, selectedDiagramEl.code);
+                      const styledSvg = applyAraskovaDiagramAesthetics(svg, isDarkMode, style, customCol);
+                      const img = await renderSvgToImage(styledSvg);
+                      const numId = Number(selectedDiagramEl.id);
+
+                      engineRef.current.set_cached_image(numId, img);
+                      engineRef.current.set_accent_color(customCol);
+
+                      const sceneJson = engineRef.current.get_scene_json();
+                      if (sceneJson) {
+                        try {
+                          const parsed = JSON.parse(sceneJson);
+                          const target = parsed.elements?.find((e: any) => BigInt(e.id) === selectedDiagramEl.id);
+                          if (target) {
+                            target.stroke_color = customCol;
+                            target.svg = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(styledSvg)));
+                            engineRef.current.load_scene_json(JSON.stringify(parsed));
+                            engineRef.current.set_cached_image(numId, img);
+                            engineRef.current.set_selected_id(numId);
+                          }
+                        } catch (_) {}
+                      }
+                      engineRef.current.render();
+                      setSelectedDiagramEl(prev => prev ? { ...prev, accentColor: customCol } : null);
+                    } catch (err) {
+                      logger.error('Failed to update diagram accent color:', err);
+                    }
+                  }}
+                />
+              </label>
+            </div>
+
+            {/* Delete Button */}
+            <div className="pl-1 border-l border-[#2a2a2a]">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!engineRef.current) return;
+                  engineRef.current.delete_selected();
+                  engineRef.current.render();
+                  setSelectedDiagramEl(null);
+                }}
+                title="Delete Diagram"
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-[#ef4444] hover:bg-red-950/40 border border-transparent hover:border-red-900/50 transition-all cursor-pointer"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
           </div>
         )}
 

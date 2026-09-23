@@ -247,7 +247,7 @@ export function AerialToolbar({
 
   return (
     <div
-      className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-2 w-max max-w-[calc(100vw-2rem)] transition-all duration-500 ease-in-out ${
+      className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-2 w-max max-w-[calc(100vw-2rem)] transition-[opacity,transform] duration-300 ease-in-out ${
         isHidden ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
       }`}
     >
@@ -316,7 +316,7 @@ export function AerialZoomBar({
 }: AerialZoomBarProps) {
   return (
     <div
-      className={`pointer-events-auto absolute bottom-6 left-4 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-1.5 transition-all duration-500 ease-in-out ${
+      className={`pointer-events-auto absolute bottom-6 left-4 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-1.5 transition-[opacity,transform] duration-300 ease-in-out ${
         isHidden ? 'opacity-0 translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'
       }`}
     >
@@ -362,7 +362,7 @@ export function AerialSettingsPopover({
           <div>
             <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
               <span>Eraser Size</span>
-              <span className="text-[var(--foreground)]">{eraserSize}px</span>
+              <span className="text-[var(--foreground)] font-mono tabular-nums">{eraserSize}px</span>
             </p>
             <input
               type="range" min="8" max="80" step="2"
@@ -400,7 +400,7 @@ export function AerialSettingsPopover({
           <div>
             <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
               <span>Stroke Size</span>
-              <span className="text-[var(--foreground)]">{strokeWidth}px</span>
+              <span className="text-[var(--foreground)] font-mono tabular-nums">{strokeWidth}px</span>
             </p>
             <input
               type="range" min="1" max="24" step="0.5"
@@ -414,7 +414,7 @@ export function AerialSettingsPopover({
             <div>
               <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
                 <span>Nib Sharpness</span>
-                <span className="text-[var(--foreground)]">{fountainSharpness}</span>
+                <span className="text-[var(--foreground)] font-mono tabular-nums">{fountainSharpness}</span>
               </p>
               <input
                 type="range" min="0.1" max="2.0" step="0.1"

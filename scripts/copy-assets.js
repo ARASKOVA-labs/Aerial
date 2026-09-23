@@ -6,9 +6,9 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const targetDir = process.argv[2] || './public/aerial-engine';
 
-let srcDir = path.resolve(__dirname, '../dist/aerial-engine');
+let srcDir = path.resolve(__dirname, '../public/aerial-engine');
 if (!fs.existsSync(srcDir)) {
-  srcDir = path.resolve(__dirname, '../public/aerial-engine');
+  srcDir = path.resolve(__dirname, '../dist/aerial-engine');
 }
 
 if (!fs.existsSync(srcDir)) {
@@ -18,6 +18,10 @@ if (!fs.existsSync(srcDir)) {
 
 const destDir = path.resolve(process.cwd(), targetDir);
 
-fs.mkdirSync(destDir, { recursive: true });
-fs.cpSync(srcDir, destDir, { recursive: true });
-console.log(`[Aerial] Copied WASM engine assets to: ${destDir}`);
+if (srcDir !== destDir) {
+  fs.mkdirSync(destDir, { recursive: true });
+  fs.cpSync(srcDir, destDir, { recursive: true });
+  console.log(`[Aerial] Copied WASM engine assets to: ${destDir}`);
+} else {
+  console.log(`[Aerial] Assets already at: ${destDir}`);
+}

@@ -38,6 +38,7 @@ import {
   Edit3,
   Check,
   Copy,
+  Bot,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import mermaid from 'mermaid';
@@ -1242,94 +1243,96 @@ export default function App() {
         <div className="flex-1 relative">
 
           {/* Top Center: Main Drawing Tools */}
-          <div className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-2 w-max max-w-[calc(100vw-2rem)] transition-all duration-500 ease-in-out ${isFullscreen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
-            <ToolBtn icon={MousePointer2} title="Select (V / 1)" active={activeTool === 'select'} onClick={() => selectTool('select')} />
-            <ToolBtn icon={Hand} title="Pan (H / 2)" active={activeTool === 'hand'} onClick={() => selectTool('hand')} />
-            <div className="w-px h-5 bg-[var(--border)] mx-1 hidden sm:block" />
-            <div className="hidden sm:flex items-center gap-1">
-              <ToolBtn icon={Square} title="Rectangle (R / 3)" active={activeTool === 'rectangle'} onClick={() => selectTool('rectangle')} />
-              <ToolBtn icon={Circle} title="Ellipse (O / 4)" active={activeTool === 'ellipse'} onClick={() => selectTool('ellipse')} />
-              <ToolBtn icon={Minus} title="Line (L / 5)" active={activeTool === 'line'} onClick={() => selectTool('line')} />
-              <ToolBtn icon={ArrowUpRight} title="Arrow (A / 6)" active={activeTool === 'arrow'} onClick={() => selectTool('arrow')} />
-            </div>
-            <div className="w-px h-5 bg-[var(--border)] mx-1 hidden sm:block" />
-            <ToolBtn icon={Pen} title="Draw (P / 7)" active={activeTool === 'freedraw'} onClick={() => selectTool('freedraw')} />
-            <ToolBtn icon={Type} title="Text (T / 8)" active={activeTool === 'text'} onClick={() => selectTool('text')} />
-            <ToolBtn icon={Eraser} title="Eraser (E / 9)" active={activeTool === 'eraser'} onClick={() => selectTool('eraser')} />
-            <div className="hidden sm:block">
-              <ToolBtn icon={ImageIcon} title="Insert Image" onClick={() => imageInputRef.current?.click()} />
-            </div>
-            <div className="w-px h-5 bg-[var(--border)] mx-1" />
+          <div className={`pointer-events-auto absolute top-4 left-1/2 -translate-x-1/2 transition-[opacity,transform] duration-300 ease-in-out ${isFullscreen ? 'opacity-0 -translate-y-4 pointer-events-none' : 'opacity-100 translate-y-0'}`}>
+            <div className="flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl rounded-2xl px-2.5 py-2 w-max max-w-[calc(100vw-2rem)]">
+              <ToolBtn icon={MousePointer2} title="Select (V / 1)" active={activeTool === 'select'} onClick={() => selectTool('select')} />
+              <ToolBtn icon={Hand} title="Pan (H / 2)" active={activeTool === 'hand'} onClick={() => selectTool('hand')} />
+              <div className="w-px h-5 bg-[var(--border)] mx-1 hidden sm:block" />
+              <div className="hidden sm:flex items-center gap-1">
+                <ToolBtn icon={Square} title="Rectangle (R / 3)" active={activeTool === 'rectangle'} onClick={() => selectTool('rectangle')} />
+                <ToolBtn icon={Circle} title="Ellipse (O / 4)" active={activeTool === 'ellipse'} onClick={() => selectTool('ellipse')} />
+                <ToolBtn icon={Minus} title="Line (L / 5)" active={activeTool === 'line'} onClick={() => selectTool('line')} />
+                <ToolBtn icon={ArrowUpRight} title="Arrow (A / 6)" active={activeTool === 'arrow'} onClick={() => selectTool('arrow')} />
+              </div>
+              <div className="w-px h-5 bg-[var(--border)] mx-1 hidden sm:block" />
+              <ToolBtn icon={Pen} title="Draw (P / 7)" active={activeTool === 'freedraw'} onClick={() => selectTool('freedraw')} />
+              <ToolBtn icon={Type} title="Text (T / 8)" active={activeTool === 'text'} onClick={() => selectTool('text')} />
+              <ToolBtn icon={Eraser} title="Eraser (E / 9)" active={activeTool === 'eraser'} onClick={() => selectTool('eraser')} />
+              <div className="hidden sm:block">
+                <ToolBtn icon={ImageIcon} title="Insert Image" onClick={() => imageInputRef.current?.click()} />
+              </div>
+              <div className="w-px h-5 bg-[var(--border)] mx-1" />
 
-            {/* Dedicated Color Palette & Stroke Settings Button */}
-            {['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'magic_pen'].includes(activeTool) && (
-              <button
-                ref={settingsBtnRef}
-                onClick={() => setShowSettings(s => !s)}
-                title="Color Palette & Stroke Settings (S)"
-                className={`h-9 px-2 rounded-xl flex items-center gap-1.5 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
-                  showSettings
-                    ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30'
-                    : 'hover:bg-[var(--accent)] text-[var(--foreground)]/80 hover:text-[var(--foreground)]'
-                }`}
-              >
-                <div
-                  className="w-4 h-4 rounded-full border border-white/40 shadow-xs shrink-0"
-                  style={{ backgroundColor: strokeColor }}
-                />
-                <span className="text-[10px] font-mono font-bold">{strokeWidth}px</span>
-              </button>
-            )}
-
-            {/* Dedicated Eraser Settings Button */}
-            {activeTool === 'eraser' && (
-              <button
-                ref={settingsBtnRef}
-                onClick={() => setShowSettings(s => !s)}
-                title="Eraser Settings (S)"
-                className={`h-9 px-2.5 rounded-xl flex items-center gap-1.5 transition-all duration-200 hover:scale-105 active:scale-95 cursor-pointer ${
-                  showSettings
-                    ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30'
-                    : 'hover:bg-[var(--accent)] text-[var(--foreground)]/80 hover:text-[var(--foreground)]'
-                }`}
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span className="text-[10px] font-mono font-bold capitalize">{eraserMode}</span>
-              </button>
-            )}
-
-            <div className="relative">
-              <span ref={moreToolsBtnRef} className="inline-flex">
-                <ToolBtn
-                  icon={MoreHorizontal}
-                  title="More Tools"
-                  active={showMoreTools || ['fountain', 'magic_pen', 'laser_pen', 'highlighter'].includes(activeTool)}
-                  onClick={() => setShowMoreTools(!showMoreTools)}
-                />
-              </span>
-              {showMoreTools && (
-                <div ref={moreToolsRef} className="absolute top-full mt-2 right-0 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-64 max-w-[calc(100vw-2rem)] flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <div className="flex items-center gap-1.5 px-2.5 py-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07]" />
-                    <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Special Pens</p>
-                  </div>
-                  <DropdownToolBtn icon={Pen} title="Calligraphy Pen (F)" active={activeTool === 'fountain'} onClick={() => { selectTool('fountain'); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Highlighter} title="Highlighter (M)" active={activeTool === 'highlighter'} onClick={() => { selectTool('highlighter'); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Wand2} title="Magic Pen (W)" active={activeTool === 'magic_pen'} variant="accent" onClick={() => { selectTool('magic_pen'); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} variant="danger" onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }} />
-
-                  <div className="h-px bg-[var(--border)]/60 my-1 mx-1" />
-                  <div className="flex items-center gap-1.5 px-2.5 py-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--muted-foreground)]/60" />
-                    <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Insert & Actions</p>
-                  </div>
-                  <DropdownToolBtn icon={FileText} title="Insert PDF" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={ImageIcon} title="Insert Image" className="sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Code} title="Mermaid Chart" onClick={() => { setShowDiagramModal(true); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Languages} title="Translate Text" onClick={() => { setShowTranslatorModal(true); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Trash2} title="Clear Board" variant="danger" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }} />
-                </div>
+              {/* Dedicated Color Palette & Stroke Settings Button */}
+              {['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'magic_pen'].includes(activeTool) && (
+                <button
+                  ref={settingsBtnRef}
+                  onClick={() => setShowSettings(s => !s)}
+                  title="Color Palette & Stroke Settings (S)"
+                  className={`h-9 px-2 rounded-xl flex items-center justify-center gap-1.5 transition-colors duration-150 hover:scale-105 active:scale-95 cursor-pointer w-[76px] shrink-0 ${
+                    showSettings
+                      ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30'
+                      : 'hover:bg-[var(--accent)] text-[var(--foreground)]/80 hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  <div
+                    className="w-4 h-4 rounded-full border border-white/40 shadow-xs shrink-0"
+                    style={{ backgroundColor: strokeColor }}
+                  />
+                  <span className="text-[10px] font-mono font-bold w-10 text-center tabular-nums shrink-0">{strokeWidth}px</span>
+                </button>
               )}
+
+              {/* Dedicated Eraser Settings Button */}
+              {activeTool === 'eraser' && (
+                <button
+                  ref={settingsBtnRef}
+                  onClick={() => setShowSettings(s => !s)}
+                  title="Eraser Settings (S)"
+                  className={`h-9 px-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-colors duration-150 hover:scale-105 active:scale-95 cursor-pointer w-24 shrink-0 ${
+                    showSettings
+                      ? 'bg-[#e73f07] text-white shadow-md shadow-[#e73f07]/30'
+                      : 'hover:bg-[var(--accent)] text-[var(--foreground)]/80 hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  <Sliders className="w-3.5 h-3.5 shrink-0" />
+                  <span className="text-[10px] font-mono font-bold capitalize w-14 text-center shrink-0">{eraserMode}</span>
+                </button>
+              )}
+
+              <div className="relative">
+                <span ref={moreToolsBtnRef} className="inline-flex">
+                  <ToolBtn
+                    icon={MoreHorizontal}
+                    title="More Tools"
+                    active={showMoreTools || ['fountain', 'magic_pen', 'laser_pen', 'highlighter'].includes(activeTool)}
+                    onClick={() => setShowMoreTools(!showMoreTools)}
+                  />
+                </span>
+                {showMoreTools && (
+                  <div ref={moreToolsRef} className="absolute top-full mt-2 right-0 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-64 max-w-[calc(100vw-2rem)] flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                    <div className="flex items-center gap-1.5 px-2.5 py-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07]" />
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Special Pens</p>
+                    </div>
+                    <DropdownToolBtn icon={Pen} title="Calligraphy Pen (F)" active={activeTool === 'fountain'} onClick={() => { selectTool('fountain'); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Highlighter} title="Highlighter (M)" active={activeTool === 'highlighter'} onClick={() => { selectTool('highlighter'); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Wand2} title="Magic Pen (W)" active={activeTool === 'magic_pen'} variant="accent" onClick={() => { selectTool('magic_pen'); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} variant="danger" onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }} />
+
+                    <div className="h-px bg-[var(--border)]/60 my-1 mx-1" />
+                    <div className="flex items-center gap-1.5 px-2.5 py-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--muted-foreground)]/60" />
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Insert & Actions</p>
+                    </div>
+                    <DropdownToolBtn icon={FileText} title="Insert PDF" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={ImageIcon} title="Insert Image" className="sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Code} title="Mermaid Chart" onClick={() => { setShowDiagramModal(true); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Languages} title="Translate Text" onClick={() => { setShowTranslatorModal(true); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Trash2} title="Clear Board" variant="danger" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }} />
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1422,7 +1425,7 @@ export default function App() {
                   <div>
                     <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
                       <span>Eraser Size</span>
-                      <span className="text-[var(--foreground)]">{eraserSize}px</span>
+                      <span className="text-[var(--foreground)] font-mono tabular-nums">{eraserSize}px</span>
                     </p>
                     <input
                       type="range" min="8" max="80" step="2"
@@ -1464,7 +1467,7 @@ export default function App() {
                   <div>
                     <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
                       <span>Stroke Size</span>
-                      <span className="text-[var(--foreground)]">{strokeWidth}px</span>
+                      <span className="text-[var(--foreground)] font-mono tabular-nums">{strokeWidth}px</span>
                     </p>
                     <input
                       type="range" min="1" max="24" step="0.5"
@@ -1478,7 +1481,7 @@ export default function App() {
                     <div>
                       <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-2 flex justify-between">
                         <span>Nib Sharpness</span>
-                        <span className="text-[var(--foreground)]">{fountainSharpness}</span>
+                        <span className="text-[var(--foreground)] font-mono tabular-nums">{fountainSharpness}</span>
                       </p>
                       <input
                         type="range" min="0.1" max="2.0" step="0.1"
@@ -1736,8 +1739,8 @@ export default function App() {
         <DiagramStudioModal
           isDarkMode={isDarkMode}
           onClose={() => setShowDiagramModal(false)}
-          onInsertDiagram={(code, svg) => {
-            canvasRef.current?.addDiagram(code, svg);
+          onInsertDiagram={(code, svg, scale, accentColor) => {
+            canvasRef.current?.addDiagram(code, svg, scale, accentColor);
             setShowDiagramModal(false);
           }}
         />
@@ -1874,12 +1877,16 @@ function DiagramStudioModal({
 }: {
   isDarkMode: boolean;
   onClose: () => void;
-  onInsertDiagram: (code: string, svg: string) => void;
+  onInsertDiagram: (code: string, svg: string, scale?: number, accentColor?: string) => void;
 }) {
   const [code, setCode] = useState(DIAGRAM_TEMPLATES[0].code);
   const [diagramStyle, setDiagramStyle] = useState<AraskovaDiagramStyle>(() =>
     isDarkMode ? 'brutalist' : 'industrial_light'
   );
+  const [accentColor, setAccentColor] = useState('#e73f07');
+  const [diagramScale, setDiagramScale] = useState(1.0);
+  const [customTopic, setCustomTopic] = useState('');
+  const [promptCopied, setPromptCopied] = useState(false);
   const [svgOutput, setSvgOutput] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
@@ -1892,7 +1899,7 @@ function DiagramStudioModal({
   }, [isDarkMode]);
 
   const renderCurrentDiagram = useCallback(
-    async (srcCode: string, style: AraskovaDiagramStyle) => {
+    async (srcCode: string, style: AraskovaDiagramStyle, accentCol: string) => {
       setIsRendering(true);
       setError(null);
       try {
@@ -1905,7 +1912,7 @@ function DiagramStudioModal({
           try {
             const res = await invoke<{ svg: string }>('render_diagram', { code: trimmed });
             if (res?.svg) {
-              const styledSvg = applyAraskovaDiagramAesthetics(res.svg, effectiveDark, style);
+              const styledSvg = applyAraskovaDiagramAesthetics(res.svg, effectiveDark, style, accentCol);
               setSvgOutput(styledSvg);
               setIsRendering(false);
               return;
@@ -1922,11 +1929,11 @@ function DiagramStudioModal({
           } catch (_) {}
         }
 
-        // Initialize Mermaid with Araskova design system configuration
-        mermaid.initialize(getAraskovaMermaidConfig(effectiveDark, style));
+        // Initialize Mermaid with custom accent and Araskova design system configuration
+        mermaid.initialize(getAraskovaMermaidConfig(effectiveDark, style, accentCol));
         const id = 'mermaid-preview-' + Math.random().toString(36).substring(2, 9);
         const { svg } = await mermaid.render(id, trimmed);
-        const styledSvg = applyAraskovaDiagramAesthetics(svg, effectiveDark, style);
+        const styledSvg = applyAraskovaDiagramAesthetics(svg, effectiveDark, style, accentCol);
         setSvgOutput(styledSvg);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1939,8 +1946,8 @@ function DiagramStudioModal({
   );
 
   useEffect(() => {
-    renderCurrentDiagram(code, diagramStyle);
-  }, [code, diagramStyle, renderCurrentDiagram]);
+    renderCurrentDiagram(code, diagramStyle, accentColor);
+  }, [code, diagramStyle, accentColor, renderCurrentDiagram]);
 
   const handleCopySvg = async () => {
     if (!svgOutput) return;
@@ -1953,12 +1960,29 @@ function DiagramStudioModal({
     }
   };
 
+  const handleCopyAiPrompt = async () => {
+    const topic = customTopic.trim() || 'Software System Architecture & Microservices Event Stream';
+    const promptText = `Generate a clean, valid Mermaid.js diagram for: ${topic}
+
+Requirements:
+1. Use standard Mermaid syntax (flowchart TD/LR, sequenceDiagram, stateDiagram-v2, or classDiagram).
+2. Group related components into subgraphs with clear labels (e.g. subgraph INGESTION ["// Ingestion Cluster"]).
+3. Use concise node descriptions and descriptive edge labels.
+4. Output ONLY raw Mermaid code inside a \`\`\`mermaid code block without extra conversational filler so it can be pasted directly into Aerial Canvas.`;
+
+    try {
+      await navigator.clipboard.writeText(promptText);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2500);
+    } catch (_) {}
+  };
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/85 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150 p-4">
       <div
         className={`${
           isDarkMode ? 'bg-[#111111] border-[#2a2a2a] text-[#f3f3f2]' : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a]'
-        } border rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden`}
+        } border rounded-3xl shadow-2xl w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden`}
       >
         {/* Header */}
         <div
@@ -1967,7 +1991,10 @@ function DiagramStudioModal({
           }`}
         >
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/15 border border-[#e73f07]/30 flex items-center justify-center text-[#e73f07] shadow-inner">
+            <div
+              style={{ borderColor: `${accentColor}50`, backgroundColor: `${accentColor}18`, color: accentColor }}
+              className="w-10 h-10 rounded-2xl border flex items-center justify-center shadow-inner transition-colors"
+            >
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
@@ -1979,7 +2006,10 @@ function DiagramStudioModal({
                 >
                   Architecture & Mermaid Studio
                 </h2>
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-widest bg-[#e73f07]/20 text-[#e73f07] border border-[#e73f07]/30">
+                <span
+                  style={{ backgroundColor: `${accentColor}22`, borderColor: `${accentColor}44`, color: accentColor }}
+                  className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-widest border transition-colors"
+                >
                   Araskova Brutalist
                 </span>
               </div>
@@ -2004,9 +2034,10 @@ function DiagramStudioModal({
               <button
                 key={st.id}
                 onClick={() => setDiagramStyle(st.id)}
+                style={diagramStyle === st.id ? { backgroundColor: accentColor } : {}}
                 className={`px-2.5 py-1 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
                   diagramStyle === st.id
-                    ? 'bg-[#e73f07] text-white shadow-xs'
+                    ? 'text-white shadow-xs'
                     : isDarkMode
                     ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
                     : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
@@ -2027,30 +2058,174 @@ function DiagramStudioModal({
           </div>
         </div>
 
-        {/* Template Selector */}
+        {/* AI Prompt Assistant Banner */}
         <div
-          className={`px-6 py-2.5 border-b flex items-center gap-2 overflow-x-auto scrollbar-none ${
+          className={`px-6 py-3 border-b flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 ${
+            isDarkMode ? 'bg-[#151515] border-[#2a2a2a]' : 'bg-[#f4f5f7] border-[#e2e4e8]'
+          }`}
+        >
+          <div className="flex items-start sm:items-center gap-2.5 flex-1 min-w-0">
+            <div
+              style={{ borderColor: `${accentColor}40`, backgroundColor: `${accentColor}18`, color: accentColor }}
+              className="w-7 h-7 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 sm:mt-0"
+            >
+              <Bot className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--foreground)]">
+                  AI Diagram Assistant
+                </span>
+                <span className="text-[9px] font-mono text-[#81868b] uppercase tracking-wider hidden md:inline">
+                  ChatGPT · Claude · Gemini
+                </span>
+              </div>
+              <p className="text-[10px] text-[#81868b] truncate">
+                Copy prompt to ChatGPT or Claude to get exact syntax for whatever you desire, then paste it here to render instantly.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <input
+              type="text"
+              value={customTopic}
+              onChange={(e) => setCustomTopic(e.target.value)}
+              placeholder="e.g. Payment Gateway with Webhooks..."
+              className={`text-[11px] font-mono px-3 py-1.5 rounded-xl border outline-none focus:border-[#e73f07] transition-all w-48 sm:w-56 ${
+                isDarkMode ? 'bg-[#0a0a0a] text-[#f3f3f2] border-[#2a2a2a]' : 'bg-white text-[#0a0a0a] border-[#d0d0d0]'
+              }`}
+            />
+            <button
+              type="button"
+              onClick={handleCopyAiPrompt}
+              style={!promptCopied ? { backgroundColor: accentColor } : {}}
+              className={`px-3 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+                promptCopied
+                  ? 'bg-green-600 text-white'
+                  : 'hover:opacity-90 text-white active:translate-y-px'
+              }`}
+            >
+              {promptCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {promptCopied ? 'Copied Prompt!' : 'Copy AI Prompt'}
+            </button>
+          </div>
+        </div>
+
+        {/* Presets & Customization Bar */}
+        <div
+          className={`px-6 py-2.5 border-b flex items-center justify-between gap-4 overflow-x-auto scrollbar-none ${
             isDarkMode ? 'bg-[#0a0a0a]/50 border-[#2a2a2a]' : 'bg-[#f1f3f5] border-[#e5e5e5]'
           }`}
         >
-          <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold whitespace-nowrap mr-2">
-            Presets:
-          </span>
-          {DIAGRAM_TEMPLATES.map((tmpl) => (
-            <button
-              key={tmpl.name}
-              onClick={() => setCode(tmpl.code)}
-              className={`px-3 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap cursor-pointer ${
-                code === tmpl.code
-                  ? 'bg-[#e73f07] text-white shadow-xs'
-                  : isDarkMode
-                  ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
-                  : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
-              }`}
-            >
-              {tmpl.name}
-            </button>
-          ))}
+          {/* Templates */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold whitespace-nowrap mr-1">
+              Presets:
+            </span>
+            {DIAGRAM_TEMPLATES.map((tmpl) => (
+              <button
+                key={tmpl.name}
+                onClick={() => setCode(tmpl.code)}
+                style={code === tmpl.code ? { backgroundColor: accentColor } : {}}
+                className={`px-2.5 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap cursor-pointer ${
+                  code === tmpl.code
+                    ? 'text-white shadow-xs'
+                    : isDarkMode
+                    ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                    : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
+                }`}
+              >
+                {tmpl.name}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            {/* Color Customizer */}
+            <div className="flex items-center gap-1.5 pl-3 border-l border-[#2a2a2a] shrink-0">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold">
+                Accent:
+              </span>
+              {[
+                { color: '#e73f07', name: 'Araskova Orange' },
+                { color: '#0ea5e9', name: 'Electric Cyan' },
+                { color: '#10b981', name: 'Emerald Green' },
+                { color: '#8b5cf6', name: 'Radiant Violet' },
+                { color: '#f59e0b', name: 'Cyber Amber' },
+                { color: '#ef4444', name: 'Crimson Red' },
+                { color: '#f3f3f2', name: 'Crisp White' },
+              ].map((swatch) => (
+                <button
+                  key={swatch.color}
+                  type="button"
+                  onClick={() => setAccentColor(swatch.color)}
+                  title={swatch.name}
+                  style={{ backgroundColor: swatch.color }}
+                  className={`w-5 h-5 rounded-full border transition-all cursor-pointer shadow-xs ${
+                    accentColor.toLowerCase() === swatch.color.toLowerCase()
+                      ? 'border-white scale-110 ring-2 ring-white/40'
+                      : 'border-white/20 hover:scale-105 active:scale-95'
+                  }`}
+                />
+              ))}
+              <label
+                title="Custom Accent Color"
+                className="relative w-5 h-5 rounded-full border border-white/30 flex items-center justify-center cursor-pointer overflow-hidden bg-gradient-to-tr from-pink-500 via-purple-500 to-cyan-500 hover:scale-105 transition-transform"
+              >
+                <input
+                  type="color"
+                  value={accentColor}
+                  className="opacity-0 absolute inset-0 cursor-pointer w-full h-full"
+                  onChange={(e) => setAccentColor(e.target.value)}
+                />
+              </label>
+            </div>
+
+            {/* Size Adjuster */}
+            <div className="flex items-center gap-1.5 pl-3 border-l border-[#2a2a2a] shrink-0">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold">
+                Size:
+              </span>
+              {[
+                { label: '50%', value: 0.5 },
+                { label: '75%', value: 0.75 },
+                { label: '100%', value: 1.0 },
+                { label: '125%', value: 1.25 },
+                { label: '150%', value: 1.5 },
+              ].map((sz) => (
+                <button
+                  key={sz.label}
+                  type="button"
+                  onClick={() => setDiagramScale(sz.value)}
+                  style={diagramScale === sz.value ? { backgroundColor: accentColor } : {}}
+                  className={`px-2 py-1 rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                    diagramScale === sz.value
+                      ? 'text-white shadow-xs'
+                      : isDarkMode
+                      ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
+                      : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
+                  }`}
+                >
+                  {sz.label}
+                </button>
+              ))}
+              <input
+                type="range"
+                min="0.5"
+                max="2.0"
+                step="0.1"
+                value={diagramScale}
+                onChange={(e) => setDiagramScale(parseFloat(e.target.value))}
+                className="w-16 cursor-pointer"
+                style={{ accentColor }}
+                title={`Scale: ${Math.round(diagramScale * 100)}%`}
+              />
+              <span className="text-[9px] font-mono text-[#81868b] min-w-[32px]">
+                {Math.round(diagramScale * 100)}%
+              </span>
+            </div>
+          </div>
         </div>
 
         {/* Body (Editor + Preview) */}
@@ -2059,13 +2234,14 @@ function DiagramStudioModal({
           <div className={`flex flex-col h-full ${isDarkMode ? 'bg-[#111111]' : 'bg-[#fafafa]'} p-4`}>
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] flex items-center gap-1.5">
-                <Code className="w-3.5 h-3.5 text-[#e73f07]" />
+                <Code className="w-3.5 h-3.5" style={{ color: accentColor }} />
                 Diagram Definition (Mermaid / Aras DSL)
               </span>
               <button
-                onClick={() => renderCurrentDiagram(code, diagramStyle)}
+                onClick={() => renderCurrentDiagram(code, diagramStyle, accentColor)}
                 disabled={isRendering}
-                className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#e73f07] hover:underline cursor-pointer"
+                style={{ color: accentColor }}
+                className="text-[10px] font-mono font-bold uppercase tracking-wider hover:underline cursor-pointer"
               >
                 {isRendering ? 'Rendering...' : 'Re-render'}
               </button>
@@ -2075,9 +2251,10 @@ function DiagramStudioModal({
               onChange={(e) => setCode(e.target.value)}
               placeholder="Enter Mermaid or Aras DSL code..."
               spellCheck={false}
-              className={`flex-1 w-full font-mono text-xs p-3.5 rounded-2xl border outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner ${
+              className={`flex-1 w-full font-mono text-xs p-3.5 rounded-2xl border outline-none transition-all resize-none shadow-inner ${
                 isDarkMode ? 'bg-[#0a0a0a] text-[#f3f3f2] border-[#2a2a2a]' : 'bg-white text-[#0a0a0a] border-[#e5e5e5]'
               }`}
+              style={{ borderColor: undefined }}
             />
             {error && (
               <div className="mt-2.5 p-2.5 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 font-mono text-[10px] leading-tight">
@@ -2110,14 +2287,15 @@ function DiagramStudioModal({
               }`}
             >
               {/* Tactical Corner Marks on Preview Box */}
-              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 border-[#e73f07]/40 pointer-events-none" />
-              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 border-[#e73f07]/40 pointer-events-none" />
-              <div className="absolute bottom-2 left-2 w-2 h-2 border-b-2 border-l-2 border-[#e73f07]/40 pointer-events-none" />
-              <div className="absolute bottom-2 right-2 w-2 h-2 border-b-2 border-r-2 border-[#e73f07]/40 pointer-events-none" />
+              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
+              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
+              <div className="absolute bottom-2 left-2 w-2 h-2 border-b-2 border-l-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
+              <div className="absolute bottom-2 right-2 w-2 h-2 border-b-2 border-r-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
 
               {svgOutput ? (
                 <div
-                  className="w-full h-full flex items-center justify-center [&_svg]:max-w-full [&_svg]:max-h-full [&_svg]:h-auto"
+                  className="w-full h-full flex items-center justify-center [&_svg]:max-w-full [&_svg]:max-h-full [&_svg]:h-auto transition-transform"
+                  style={{ transform: `scale(${Math.min(1.2, diagramScale)})` }}
                   dangerouslySetInnerHTML={{ __html: svgOutput }}
                 />
               ) : (
@@ -2135,9 +2313,15 @@ function DiagramStudioModal({
             isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/80' : 'border-[#e5e5e5] bg-[#f8f9fa]'
           }`}
         >
-          <p className="text-[10px] font-mono text-[#81868b]">
-            Embedded Google Fonts & tactical vector reticles. Fully zoomable and exportable.
-          </p>
+          <div className="flex items-center gap-3 text-[10px] font-mono text-[#81868b]">
+            <span className="hidden sm:inline">
+              Embedded Google Fonts & tactical vector reticles.
+            </span>
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] text-[#f3f3f2]">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: accentColor }} />
+              Scale: {Math.round(diagramScale * 100)}%
+            </span>
+          </div>
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
@@ -2150,11 +2334,12 @@ function DiagramStudioModal({
             <button
               onClick={() => {
                 if (svgOutput) {
-                  onInsertDiagram(code, svgOutput);
+                  onInsertDiagram(code, svgOutput, diagramScale, accentColor);
                 }
               }}
               disabled={!svgOutput || !!error}
-              className="px-5 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider bg-[#e73f07] hover:bg-[#d03806] text-white disabled:opacity-40 transition-all shadow-md shadow-[#e73f07]/20 active:translate-y-px cursor-pointer flex items-center gap-2"
+              style={{ backgroundColor: accentColor }}
+              className="px-5 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-white disabled:opacity-40 transition-all shadow-md active:translate-y-px cursor-pointer flex items-center gap-2"
             >
               <Sparkles className="w-3.5 h-3.5" />
               Insert onto Canvas

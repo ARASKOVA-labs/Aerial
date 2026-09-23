@@ -103,6 +103,7 @@ export interface AerialEngine {
   on_mouse_move: (raw_x: number, raw_y: number) => void;
   on_mouse_up: (raw_x: number, raw_y: number) => void;
   on_double_click: (raw_x: number, raw_y: number) => string | undefined;
+  get_element_at?: (raw_x: number, raw_y: number) => string | undefined;
   get_element_code: (id: bigint) => string | undefined;
   on_wheel: (dx: number, dy: number, ctrl: boolean, sx: number, sy: number) => number;
 
@@ -158,6 +159,8 @@ export interface AerialCanvasProps {
   magicLanguage?: string;
   /** Font family for converted Magic Pen text */
   magicFont?: string;
+  /** Callback when active tool changes programmatically or via shortcut */
+  onToolChange?: (tool: ToolId) => void;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
 }

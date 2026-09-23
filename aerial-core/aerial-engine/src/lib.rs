@@ -260,6 +260,19 @@ impl AerialCanvas {
         None
     }
 
+    pub fn get_element_at(&self, raw_x: f64, raw_y: f64) -> Option<String> {
+        let wx = self.screen_to_world_x(raw_x);
+        let wy = self.screen_to_world_y(raw_y);
+
+        if let Some(el) = self.elements.iter().rev().find(|e| {
+            let pad = if e.kind == "Text" { 16.0 } else { 8.0 };
+            wx >= (e.x - pad) && wx <= (e.x + e.w + pad) && wy >= (e.y - pad) && wy <= (e.y + e.h + pad)
+        }) {
+            return serde_json::to_string(el).ok();
+        }
+        None
+    }
+
     pub fn clear_board(&mut self) {
         if !self.elements.is_empty() {
             self.save_state();
@@ -721,7 +734,8 @@ impl AerialCanvas {
 
         if self.tool == Tool::Select {
             let hit = self.elements.iter().rev().find(|el| {
-                wx >= el.x && wx <= el.x + el.w && wy >= el.y && wy <= el.y + el.h
+                let pad = if el.kind == "Text" { 16.0 } else { 4.0 };
+                wx >= (el.x - pad) && wx <= (el.x + el.w + pad) && wy >= (el.y - pad) && wy <= (el.y + el.h + pad)
             }).map(|el| el.id);
             if let Some(id) = hit {
                 self.selected_id = Some(id);
@@ -954,7 +968,8 @@ impl AerialCanvas {
         let wy = self.screen_to_world_y(raw_y);
 
         if let Some(el) = self.elements.iter().rev().find(|e| {
-            wx >= e.x && wx <= e.x + e.w && wy >= e.y && wy <= e.y + e.h
+            let pad = if e.kind == "Text" { 16.0 } else { 8.0 };
+            wx >= (e.x - pad) && wx <= (e.x + e.w + pad) && wy >= (e.y - pad) && wy <= (e.y + e.h + pad)
         }) {
             self.selected_id = Some(el.id);
             return Some(el.id.to_string());

@@ -715,6 +715,7 @@ export default function App() {
           showToolbar={false}
           onReady={handleCanvasReady}
           onZoomChange={setZoomLevel}
+          onToolChange={(tool) => setActiveTool(tool)}
           onNodeDoubleClick={handleNodeDoubleClick}
           className="w-full h-full"
         />
@@ -1156,7 +1157,7 @@ export default function App() {
                       <ExternalLink className="w-4 h-4" />
                       <span>GitHub Repository</span>
                     </div>
-                    <span className="text-[10px] font-mono text-[var(--muted-foreground)]">v1.2.0</span>
+                    <span className="text-[10px] font-mono text-[var(--muted-foreground)]">v1.2.2</span>
                   </a>
                 </div>
               </div>
@@ -1194,20 +1195,26 @@ export default function App() {
                 onClick={() => setShowMoreTools(!showMoreTools)}
               />
               {showMoreTools && (
-                <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-52 flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-                  <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-2.5 py-1">Special Pens</p>
+                <div className="absolute top-full mt-2 right-0 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-64 max-w-[calc(100vw-2rem)] flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+                  <div className="flex items-center gap-1.5 px-2.5 py-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07]" />
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Special Pens</p>
+                  </div>
                   <DropdownToolBtn icon={Pen} title="Calligraphy Pen (F)" active={activeTool === 'fountain'} onClick={() => { selectTool('fountain'); setShowMoreTools(false); }} />
                   <DropdownToolBtn icon={Highlighter} title="Highlighter (M)" active={activeTool === 'highlighter'} onClick={() => { selectTool('highlighter'); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Wand2} title="Magic Pen (W)" active={activeTool === 'magic_pen'} className="text-[#e73f07]" onClick={() => { selectTool('magic_pen'); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} className="text-[#dc2626]" onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }} />
+                  <DropdownToolBtn icon={Wand2} title="Magic Pen (W)" active={activeTool === 'magic_pen'} variant="accent" onClick={() => { selectTool('magic_pen'); setShowMoreTools(false); }} />
+                  <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} variant="danger" onClick={() => { selectTool('laser_pen'); setShowMoreTools(false); }} />
 
-                  <div className="h-px bg-[var(--border)] my-1" />
-                  <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-2.5 py-1">Insert & Actions</p>
+                  <div className="h-px bg-[var(--border)]/60 my-1 mx-1" />
+                  <div className="flex items-center gap-1.5 px-2.5 py-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--muted-foreground)]/60" />
+                    <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Insert & Actions</p>
+                  </div>
                   <DropdownToolBtn icon={FileText} title="Insert PDF" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }} />
                   <DropdownToolBtn icon={ImageIcon} title="Insert Image" className="sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }} />
                   <DropdownToolBtn icon={Code} title="Mermaid Chart" onClick={() => { setShowDiagramModal(true); setShowMoreTools(false); }} />
                   <DropdownToolBtn icon={Languages} title="Translate Text" onClick={() => { setShowTranslatorModal(true); setShowMoreTools(false); }} />
-                  <DropdownToolBtn icon={Trash2} title="Clear Board" className="text-[#dc2626] hover:text-[#b91c1c]" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }} />
+                  <DropdownToolBtn icon={Trash2} title="Clear Board" variant="danger" onClick={() => { setShowClearConfirm(true); setShowMoreTools(false); }} />
                 </div>
               )}
             </div>

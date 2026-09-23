@@ -17,6 +17,7 @@ import {
   Eraser,
   Highlighter,
   Zap,
+  Wand2,
   ZoomIn,
   ZoomOut,
   Undo,
@@ -141,29 +142,95 @@ export function ToolBtn({
 
 // ── Dropdown Tool Button ────────────────────────────────────────────────────
 
-export function DropdownToolBtn({
-  icon,
-  title,
-  onClick,
-  active,
-  className,
-}: {
+export interface DropdownToolBtnProps {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
+  label?: string;
+  shortcut?: string;
   onClick: () => void;
   active?: boolean;
   className?: string;
-}) {
+  variant?: 'default' | 'danger' | 'accent';
+}
+
+export function DropdownToolBtn({
+  icon,
+  title,
+  label,
+  shortcut,
+  onClick,
+  active,
+  className,
+  variant = 'default',
+}: DropdownToolBtnProps) {
   const [isHovered, setIsHovered] = useState(false);
+
+  // Extract shortcut if title is formatted like "Calligraphy Pen (F)"
+  let displayLabel = label || title;
+  let displayShortcut = shortcut;
+
+  if (!shortcut && title.includes('(') && title.endsWith(')')) {
+    const match = title.match(/^(.*?)\s*\(([^)]+)\)$/);
+    if (match) {
+      displayLabel = match[1];
+      displayShortcut = match[2];
+    }
+  }
+
+  const isDanger = variant === 'danger' || className?.includes('text-[#dc2626]');
+  const isAccent = variant === 'accent' || className?.includes('text-[#e73f07]');
+
   return (
     <button
-      className={`group flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-mono uppercase tracking-wider hover:bg-[var(--accent)] transition-all duration-150 active:scale-98 ${active ? 'bg-[#e73f07]/15 text-[#e73f07] font-bold border border-[#e73f07]/30' : 'text-[var(--foreground)]'} ${className || ''}`}
+      type="button"
+      className={`group w-full flex items-center gap-3 px-2.5 py-2 rounded-xl text-left transition-all duration-200 cursor-pointer active:scale-[0.98] ${
+        active
+          ? 'bg-[#e73f07]/15 border border-[#e73f07]/40 shadow-sm'
+          : isDanger
+          ? 'hover:bg-red-500/10 hover:border-red-500/30 border border-transparent'
+          : 'hover:bg-[var(--accent)] hover:border-[var(--border)]/60 border border-transparent'
+      } ${className || ''}`}
       onClick={onClick}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <AnimatedToolIcon icon={icon} title={title} isHovered={isHovered} className="w-4 h-4" />
-      {title}
+      <div
+        className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all duration-200 ${
+          active
+            ? 'bg-[#e73f07] text-white shadow-sm shadow-[#e73f07]/40 scale-105'
+            : isDanger
+            ? 'bg-red-500/15 text-red-500 group-hover:bg-red-500/25 group-hover:scale-105'
+            : isAccent
+            ? 'bg-[#e73f07]/15 text-[#e73f07] group-hover:bg-[#e73f07]/25 group-hover:scale-105'
+            : 'bg-[var(--secondary)] text-[var(--foreground)]/80 group-hover:text-[var(--foreground)] group-hover:bg-[var(--secondary)] group-hover:scale-105 border border-[var(--border)]/40'
+        }`}
+      >
+        <AnimatedToolIcon icon={icon} title={displayLabel} isHovered={isHovered} className="w-3.5 h-3.5" />
+      </div>
+
+      <span
+        className={`font-sans font-medium text-xs tracking-tight truncate ${
+          active
+            ? 'text-[#e73f07] font-semibold'
+            : isDanger
+            ? 'text-red-500 font-medium'
+            : 'text-[var(--foreground)]'
+        }`}
+      >
+        {displayLabel}
+      </span>
+
+      {displayShortcut && (
+        <kbd
+          className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-mono tracking-wider transition-colors shrink-0 ${
+            active
+              ? 'bg-[#e73f07]/20 text-[#e73f07] border border-[#e73f07]/30 font-bold'
+              : 'bg-[var(--secondary)] text-[var(--muted-foreground)] border border-[var(--border)]/60 group-hover:text-[var(--foreground)] font-semibold'
+          }`}
+        >
+          {displayShortcut}
+        </kbd>
+      )}
     </button>
   );
 }
@@ -202,26 +269,31 @@ export function AerialToolbar({
         <ToolBtn
           icon={MoreHorizontal}
           title="More Tools"
-          active={showMoreTools || ['fountain', 'highlighter', 'laser_pen'].includes(activeTool)}
+          active={showMoreTools || ['fountain', 'magic_pen', 'highlighter', 'laser_pen'].includes(activeTool)}
           onClick={() => setShowMoreTools(!showMoreTools)}
         />
         {showMoreTools && (
-          <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-52 flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-            <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-2.5 py-1">Special Pens</p>
+          <div className="absolute top-full mt-2 right-0 bg-[var(--card)]/95 backdrop-blur-2xl border border-[var(--border)] shadow-2xl rounded-2xl p-2 w-64 max-w-[calc(100vw-2rem)] flex flex-col gap-1 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
+            <div className="flex items-center gap-1.5 px-2.5 py-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07]" />
+              <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Special Pens</p>
+            </div>
             <DropdownToolBtn icon={Pen} title="Calligraphy Pen (F)" active={activeTool === 'fountain'} onClick={() => { onSelectTool('fountain'); setShowMoreTools(false); }} />
             <DropdownToolBtn icon={Highlighter} title="Highlighter (M)" active={activeTool === 'highlighter'} onClick={() => { onSelectTool('highlighter'); setShowMoreTools(false); }} />
-            <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} className="text-[#dc2626]" onClick={() => { onSelectTool('laser_pen'); setShowMoreTools(false); }} />
+            <DropdownToolBtn icon={Wand2} title="Magic Pen (W)" active={activeTool === 'magic_pen'} variant="accent" onClick={() => { onSelectTool('magic_pen'); setShowMoreTools(false); }} />
+            <DropdownToolBtn icon={Zap} title="Laser Pen (Z)" active={activeTool === 'laser_pen'} variant="danger" onClick={() => { onSelectTool('laser_pen'); setShowMoreTools(false); }} />
             {onMoreAction && (
               <>
-                <div className="h-px bg-[var(--border)] my-1" />
-                <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-2.5 py-1">More</p>
-                <button
-                  className="group flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-mono uppercase tracking-wider hover:bg-[var(--accent)] transition-all active:scale-98"
+                <div className="h-px bg-[var(--border)]/60 my-1 mx-1" />
+                <div className="flex items-center gap-1.5 px-2.5 py-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--muted-foreground)]/60" />
+                  <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">More</p>
+                </div>
+                <DropdownToolBtn
+                  icon={MoreHorizontal}
+                  title="More Actions…"
                   onClick={() => { onMoreAction('overflow'); setShowMoreTools(false); }}
-                >
-                  <MoreHorizontal className="w-4 h-4" />
-                  More Actions…
-                </button>
+                />
               </>
             )}
           </div>

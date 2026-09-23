@@ -18,6 +18,7 @@ import {
   AerialSettingsPopover,
 } from './AerialToolbar';
 import { AerialDraggableTextBox } from './AerialDraggableTextBox';
+import { Edit3 } from 'lucide-react';
 import type {
   AerialEngine,
   AerialCanvasProps,
@@ -52,6 +53,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       onChangeBackgroundColor,
       magicLanguage = 'en',
       magicFont = "'Space Grotesk', sans-serif",
+      onToolChange,
       onNodeDoubleClick,
     } = props;
 
@@ -87,6 +89,19 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       color?: string;
       width?: number;
       height?: number;
+    } | null>(null);
+    const [selectedTextEl, setSelectedTextEl] = useState<{
+      id: bigint;
+      screenX: number;
+      screenY: number;
+      worldX: number;
+      worldY: number;
+      value: string;
+      fontSize: number;
+      fontFamily: string;
+      color: string;
+      width: number;
+      height: number;
     } | null>(null);
     const [isConvertingMagic, setIsConvertingMagic] = useState(false);
     const magicDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -265,6 +280,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     // ── Tool selection ────────────────────────────────────────────────────
     const selectTool = useCallback((id: ToolId) => {
       if (readOnly) return;
+      onToolChange?.(id);
       setActiveTool((prev) => {
         if (prev === id) {
           if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow', 'eraser'].includes(id)) {
@@ -438,6 +454,34 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         if (engineRef.current) {
           const screenX = e.clientX - rect.left;
           const screenY = e.clientY - rect.top;
+
+          // Check if an existing text element was clicked
+          const elJson = engineRef.current.get_element_at?.(screenX, screenY);
+          if (elJson) {
+            try {
+              const el = JSON.parse(elJson);
+              if (el.kind && el.kind.toLowerCase() === 'text') {
+                const sx = engineRef.current.world_to_screen_x(el.x);
+                const sy = engineRef.current.world_to_screen_y(el.y);
+                setTypingText({
+                  elementId: BigInt(el.id),
+                  screenX: Math.round(sx),
+                  screenY: Math.round(sy),
+                  worldX: el.x,
+                  worldY: el.y,
+                  value: el.text || '',
+                  fontSize: el.font_size || 28,
+                  fontFamily: el.font_family || "'Inter', sans-serif",
+                  color: el.stroke_color || strokeColor,
+                  width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
+                  height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
+                });
+                setSelectedTextEl(null);
+                return;
+              }
+            } catch (_) {}
+          }
+
           const worldX = engineRef.current.screen_to_world_x(screenX);
           const worldY = engineRef.current.screen_to_world_y(screenY);
           setTypingText({
@@ -529,6 +573,40 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       const rect = canvasRef.current!.getBoundingClientRect();
       engineRef.current?.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
 
+      if (activeTool === 'select') {
+        const elJson = engineRef.current?.get_selected_element_json();
+        if (elJson) {
+          try {
+            const el = JSON.parse(elJson);
+            if (el.kind && el.kind.toLowerCase() === 'text') {
+              const sx = engineRef.current!.world_to_screen_x(el.x);
+              const sy = engineRef.current!.world_to_screen_y(el.y);
+              setSelectedTextEl({
+                id: BigInt(el.id),
+                screenX: Math.round(sx),
+                screenY: Math.round(sy),
+                worldX: el.x,
+                worldY: el.y,
+                value: el.text || '',
+                fontSize: el.font_size || 28,
+                fontFamily: el.font_family || "'Inter', sans-serif",
+                color: el.stroke_color || strokeColor,
+                width: Math.max(260, Math.round((el.w || 260) * (engineRef.current!.get_zoom() || 1))),
+                height: Math.max(100, Math.round((el.h || 100) * (engineRef.current!.get_zoom() || 1))),
+              });
+            } else {
+              setSelectedTextEl(null);
+            }
+          } catch (_) {
+            setSelectedTextEl(null);
+          }
+        } else {
+          setSelectedTextEl(null);
+        }
+      } else {
+        setSelectedTextEl(null);
+      }
+
       if (activeTool === 'magic_pen') {
         if (magicDebounceTimerRef.current) {
           clearTimeout(magicDebounceTimerRef.current);
@@ -537,7 +615,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           convertMagicStrokes();
         }, 1200);
       }
-    }, [engineReady, activeTool, convertMagicStrokes]);
+    }, [engineReady, activeTool, convertMagicStrokes, strokeColor]);
 
     const onPointerLeave = useCallback((e: React.PointerEvent) => {
       if (isDrawingRef.current && activeDrawingPointerIdRef.current === e.pointerId) {
@@ -558,6 +636,35 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       const rect = canvasRef.current!.getBoundingClientRect();
       const rawX = e.clientX - rect.left;
       const rawY = e.clientY - rect.top;
+
+      // 1. Direct hit test on element at double-click position
+      const atElJson = engineRef.current.get_element_at?.(rawX, rawY);
+      if (atElJson) {
+        try {
+          const el = JSON.parse(atElJson);
+          if (el.kind && el.kind.toLowerCase() === 'text') {
+            const screenX = engineRef.current.world_to_screen_x(el.x);
+            const screenY = engineRef.current.world_to_screen_y(el.y);
+            setTypingText({
+              elementId: BigInt(el.id),
+              screenX: Math.round(screenX),
+              screenY: Math.round(screenY),
+              worldX: el.x,
+              worldY: el.y,
+              value: el.text || '',
+              fontSize: el.font_size || 28,
+              fontFamily: el.font_family || "'Inter', sans-serif",
+              color: el.stroke_color || strokeColor,
+              width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
+              height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
+            });
+            setSelectedTextEl(null);
+            return;
+          }
+        } catch (_) {}
+      }
+
+      // 2. Delegate to on_double_click
       const hitIdStr = engineRef.current.on_double_click(rawX, rawY);
       if (hitIdStr) {
         const parts = hitIdStr.split(',');
@@ -573,7 +680,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
           if (elJson) {
             try {
               const el = JSON.parse(elJson);
-              if (el.kind === 'text') {
+              if (el.kind && el.kind.toLowerCase() === 'text') {
                 const screenX = engineRef.current.world_to_screen_x(el.x);
                 const screenY = engineRef.current.world_to_screen_y(el.y);
                 setTypingText({
@@ -589,19 +696,11 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
                   width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
                   height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
                 });
+                setSelectedTextEl(null);
                 return;
               }
             } catch (err) {
               logger.warn('Failed to parse selected element for text edit:', err);
-            }
-          }
-          // Fallback text prompt
-          const text = engineRef.current.get_selected_text();
-          if (text) {
-            const newText = window.prompt('Edit text:', text);
-            if (newText !== null) {
-              engineRef.current.update_selected_text(newText);
-              engineRef.current.render();
             }
           }
         }
@@ -625,6 +724,55 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
         if (e.key === 'Delete' || e.key === 'Backspace') {
           engineRef.current?.delete_selected();
+          setSelectedTextEl(null);
+        }
+        if (e.key === 'Enter') {
+          if (selectedTextEl) {
+            e.preventDefault();
+            setTypingText({
+              elementId: selectedTextEl.id,
+              screenX: selectedTextEl.screenX,
+              screenY: selectedTextEl.screenY,
+              worldX: selectedTextEl.worldX,
+              worldY: selectedTextEl.worldY,
+              value: selectedTextEl.value,
+              fontSize: selectedTextEl.fontSize,
+              fontFamily: selectedTextEl.fontFamily,
+              color: selectedTextEl.color,
+              width: selectedTextEl.width,
+              height: selectedTextEl.height,
+            });
+            setSelectedTextEl(null);
+            return;
+          }
+          if (activeTool === 'select' && engineRef.current) {
+            const elJson = engineRef.current.get_selected_element_json();
+            if (elJson) {
+              try {
+                const el = JSON.parse(elJson);
+                if (el.kind && el.kind.toLowerCase() === 'text') {
+                  e.preventDefault();
+                  const sx = engineRef.current.world_to_screen_x(el.x);
+                  const sy = engineRef.current.world_to_screen_y(el.y);
+                  setTypingText({
+                    elementId: BigInt(el.id),
+                    screenX: Math.round(sx),
+                    screenY: Math.round(sy),
+                    worldX: el.x,
+                    worldY: el.y,
+                    value: el.text || '',
+                    fontSize: el.font_size || 28,
+                    fontFamily: el.font_family || "'Inter', sans-serif",
+                    color: el.stroke_color || strokeColor,
+                    width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
+                    height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
+                  });
+                  setSelectedTextEl(null);
+                  return;
+                }
+              } catch (_) {}
+            }
+          }
         }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
           e.preventDefault();
@@ -643,7 +791,10 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
             engineRef.current?.set_tool_hand();
           }
         }
-        if (e.key === 'Escape') setShowSettings(false);
+        if (e.key === 'Escape') {
+          setShowSettings(false);
+          setSelectedTextEl(null);
+        }
       };
       const handleKeyUp = (e: KeyboardEvent) => {
         if (e.key === ' ') {
@@ -662,7 +813,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         document.removeEventListener('keyup', handleKeyUp);
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [readOnly, activeTool]);
+    }, [readOnly, activeTool, selectedTextEl, strokeColor]);
 
     // ── Cursor class ──────────────────────────────────────────────────────
     const cursorClass =
@@ -877,6 +1028,42 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
               }
             }}
           />
+        )}
+        {selectedTextEl && !typingText && activeTool === 'select' && (
+          <div
+            style={{
+              position: 'absolute',
+              left: `${selectedTextEl.screenX}px`,
+              top: `${Math.max(12, selectedTextEl.screenY - 42)}px`,
+              zIndex: 45,
+            }}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--card)]/95 backdrop-blur-md border border-[#e73f07] shadow-xl text-xs font-mono text-[var(--foreground)] animate-in fade-in zoom-in-95 duration-150"
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setTypingText({
+                  elementId: selectedTextEl.id,
+                  screenX: selectedTextEl.screenX,
+                  screenY: selectedTextEl.screenY,
+                  worldX: selectedTextEl.worldX,
+                  worldY: selectedTextEl.worldY,
+                  value: selectedTextEl.value,
+                  fontSize: selectedTextEl.fontSize,
+                  fontFamily: selectedTextEl.fontFamily,
+                  color: selectedTextEl.color,
+                  width: selectedTextEl.width,
+                  height: selectedTextEl.height,
+                });
+                setSelectedTextEl(null);
+              }}
+              className="flex items-center gap-1.5 text-xs font-sans font-semibold text-[#e73f07] hover:underline cursor-pointer"
+            >
+              <Edit3 size={13} />
+              <span>EDIT TEXT</span>
+            </button>
+            <span className="text-[10px] text-brand-gray font-mono pl-1 border-l border-brand-border">Press ↵ Enter</span>
+          </div>
         )}
 
         {/* Magic Pen Guided Baseline & Handwriting HUD */}

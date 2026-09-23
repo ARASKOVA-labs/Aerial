@@ -124,6 +124,20 @@ export class AerialCanvas {
         }
     }
     /**
+     * @param {number} raw_x
+     * @param {number} raw_y
+     * @returns {string | undefined}
+     */
+    get_element_at(raw_x, raw_y) {
+        const ret = wasm.aerialcanvas_get_element_at(this.__wbg_ptr, raw_x, raw_y);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * @param {bigint} id
      * @returns {string | undefined}
      */

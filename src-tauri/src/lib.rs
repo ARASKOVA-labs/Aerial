@@ -165,11 +165,29 @@ use tauri::{Manager, Emitter};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_http::init());
+
+    #[cfg(desktop)]
+    let builder = builder.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, _shortcut, event| {
+                if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                        let _ = window.emit("quick-canvas:open", ());
+                    }
+                }
+            })
+            .build(),
+    );
+
+    builder
         .setup(|app| {
             let app_data_dir = app
                 .path()
@@ -191,6 +209,19 @@ pub fn run() {
                 db: Arc::new(db),
                 app_data_dir,
             });
+
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                // Register global shortcuts: Alt+Space and Super+Shift+A for instant desktop Quick Canvas
+                if let Ok(shortcut) = "alt+space".parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                    let _ = app.global_shortcut().register(shortcut);
+                }
+                if let Ok(shortcut) = "super+shift+a".parse::<tauri_plugin_global_shortcut::Shortcut>() {
+                    let _ = app.global_shortcut().register(shortcut);
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

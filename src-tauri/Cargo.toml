@@ -32,6 +32,7 @@ tauri-plugin-http = "~2.5.0"
 tauri-plugin-dialog = "~2.7.0"
 tauri-plugin-fs = "~2.5.0"
 tauri-plugin-shell = "~2.3.0"
+tauri-plugin-global-shortcut = "2"
 
 [features]
 default = ["custom-protocol"]

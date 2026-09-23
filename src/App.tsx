@@ -41,12 +41,15 @@ import {
   Bot,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import mermaid from 'mermaid';
 import * as pdfjsLib from 'pdfjs-dist';
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 import './App.css';
 import { AerialMark } from './AerialLogo';
 import { AerialCanvas } from './components/AerialCanvas';
+import { QuickCanvasModal } from './components/QuickCanvasModal';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
 import {
   ToolBtn,
   DropdownToolBtn,
@@ -149,6 +152,8 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const [showQuickCanvas, setShowQuickCanvas] = useState(false);
+  const [showCommandPalette, setShowCommandPalette] = useState(false);
 
   // Refs for dismissing popovers on canvas tap / outside click
   const settingsRef = useRef<HTMLDivElement>(null);
@@ -159,13 +164,30 @@ export default function App() {
   const sidebarBtnRef = useRef<HTMLButtonElement>(null);
 
   const closeAllPopups = useCallback((): boolean => {
-    const wasOpen = showSettings || showMoreTools || isMenuOpen || showWelcome;
+    const wasOpen = showSettings || showMoreTools || isMenuOpen || showWelcome || showQuickCanvas || showCommandPalette;
     if (showSettings) setShowSettings(false);
     if (showMoreTools) setShowMoreTools(false);
     if (isMenuOpen) setIsMenuOpen(false);
     if (showWelcome) setShowWelcome(false);
+    if (showQuickCanvas) setShowQuickCanvas(false);
+    if (showCommandPalette) setShowCommandPalette(false);
     return wasOpen;
-  }, [showSettings, showMoreTools, isMenuOpen, showWelcome]);
+  }, [showSettings, showMoreTools, isMenuOpen, showWelcome, showQuickCanvas, showCommandPalette]);
+
+  // ── Global Shortcut Event Listener (Tauri) ─────────────────────────────────
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen('quick-canvas:open', () => {
+      setShowQuickCanvas(true);
+    }).then((fn) => {
+      unlisten = fn;
+    }).catch((err) => {
+      logger.debug('Tauri event listen not available (web mode):', err);
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   // ── Dismiss Popovers on Outside Tap / Click ─────────────────────────────────
   useEffect(() => {
@@ -461,6 +483,80 @@ export default function App() {
     }
   }, [isDarkMode]);
 
+  // ── Quick Canvas Note Stamping & Promotion Handlers ─────────────────────────
+  const handleStampSketch = useCallback(async (pngBlob: Blob) => {
+    const engine = canvasRef.current?.getEngine();
+    if (!engine) return;
+
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const dataUrl = ev.target?.result as string;
+      const assetId = crypto.randomUUID();
+      try {
+        await invoke('save_asset', { id: assetId, base64Data: dataUrl });
+      } catch (err) {
+        logger.error('Failed to save stamped quick note asset:', err);
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+        const maxW = 600;
+        if (w > maxW) {
+          h = (maxW / w) * h;
+          w = maxW;
+        }
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        const wx = engine.screen_to_world_x(cx - w / 2);
+        const wy = engine.screen_to_world_y(cy - h / 2);
+        canvasRef.current?.addImage(img, wx, wy, w, h, assetId);
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(pngBlob);
+  }, []);
+
+  const handleStampText = useCallback((text: string) => {
+    canvasRef.current?.addText(text);
+  }, []);
+
+  const handleSaveQuickNoteAsBoard = useCallback(async (name: string, canvasState?: Uint8Array, textContent?: string) => {
+    const newId = 'board_' + Date.now();
+    const newBoard: BoardInfo = {
+      id: newId,
+      name: name || `Quick Note ${boards.length + 1}`,
+      updatedAt: Date.now(),
+      bgColor: canvasBgColor,
+      gridType: gridType,
+    };
+    const updatedList = [...boards, newBoard];
+    setBoards(updatedList);
+    localStorage.setItem('aerial_board_list', JSON.stringify(updatedList));
+
+    if (canvasState && canvasState.length > 0) {
+      let binary = '';
+      for (let i = 0; i < canvasState.length; i++) {
+        binary += String.fromCharCode(canvasState[i]);
+      }
+      const b64 = btoa(binary);
+      try {
+        await invoke('save_board', { payloadB64: b64, boardId: newId });
+      } catch (e) {
+        logger.error('Failed to save quick note board to DB:', e);
+      }
+    }
+
+    await switchBoard(newId);
+
+    if (textContent) {
+      setTimeout(() => {
+        canvasRef.current?.addText(textContent);
+      }, 100);
+    }
+  }, [boards, canvasBgColor, gridType, switchBoard]);
+
   // ── Image Upload ──────────────────────────────────────────────────────────
   const handleImageUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -652,29 +748,149 @@ export default function App() {
         setShowDiagramModal(false);
         setShowTranslatorModal(false);
         setShowShortcutsModal(false);
+        setShowQuickCanvas(false);
+        setShowCommandPalette(false);
         return;
       }
 
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
 
       if (isCmdOrCtrl) {
+        // Cmd + Shift + N : Quick Canvas (Instant Note)
+        if (e.shiftKey && e.key.toLowerCase() === 'n') {
+          e.preventDefault();
+          setShowQuickCanvas(s => !s);
+          return;
+        }
+
+        // Cmd + J : Quick Note alternative
+        if (e.key.toLowerCase() === 'j') {
+          e.preventDefault();
+          setShowQuickCanvas(s => !s);
+          return;
+        }
+
+        // Cmd + K : Spotlight Command Palette
+        if (e.key.toLowerCase() === 'k') {
+          e.preventDefault();
+          setShowCommandPalette(s => !s);
+          return;
+        }
+
+        // Cmd + Shift + S : Export SVG
+        if (e.shiftKey && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          handleExportSvg();
+          return;
+        }
+
+        // Cmd + S : Export PNG Image / Save
+        if (e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          handleExportImage();
+          return;
+        }
+
+        // Cmd + E : Export Image
         if (e.key.toLowerCase() === 'e') {
           e.preventDefault();
           handleExportImage();
-        } else if (e.key.toLowerCase() === 'n') {
+          return;
+        }
+
+        // Cmd + N : Create New Board
+        if (e.key.toLowerCase() === 'n') {
+          e.preventDefault();
+          createNewBoard();
+          return;
+        }
+
+        // Cmd + O : Open / Import Image (or Shift+O for PDF)
+        if (e.key.toLowerCase() === 'o') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            pdfInputRef.current?.click();
+          } else {
+            imageInputRef.current?.click();
+          }
+          return;
+        }
+
+        // Cmd + B or Cmd + \ : Toggle Sidebar Drawer
+        if (e.key.toLowerCase() === 'b' || e.key === '\\') {
+          e.preventDefault();
+          setIsMenuOpen(s => !s);
+          return;
+        }
+
+        // Cmd + , : Toggle Settings Popover
+        if (e.key === ',') {
+          e.preventDefault();
+          setShowSettings(s => !s);
+          return;
+        }
+
+        // Cmd + Shift + Backspace / Delete : Clear Board Confirm
+        if ((e.key === 'Backspace' || e.key === 'Delete') && e.shiftKey) {
           e.preventDefault();
           setShowClearConfirm(true);
-        } else if (e.key === '0') {
+          return;
+        }
+
+        // Cmd + [ / Cmd + ] : Previous / Next Board
+        if (e.key === '[') {
+          e.preventDefault();
+          const currIdx = boards.findIndex(b => b.id === activeBoardId);
+          if (currIdx > 0) switchBoard(boards[currIdx - 1].id);
+          return;
+        }
+        if (e.key === ']') {
+          e.preventDefault();
+          const currIdx = boards.findIndex(b => b.id === activeBoardId);
+          if (currIdx >= 0 && currIdx < boards.length - 1) switchBoard(boards[currIdx + 1].id);
+          return;
+        }
+
+        // Cmd + 1..9 : Switch to board by index
+        if (/^[1-9]$/.test(e.key)) {
+          const boardIndex = parseInt(e.key, 10) - 1;
+          if (boards[boardIndex]) {
+            e.preventDefault();
+            switchBoard(boards[boardIndex].id);
+            return;
+          }
+        }
+
+        // Zoom shortcuts: Cmd+0, Cmd+=, Cmd+-
+        if (e.key === '0') {
           e.preventDefault();
           canvasRef.current?.resetView();
-        } else if (e.key === '=' || e.key === '+') {
+          return;
+        }
+        if (e.key === '=' || e.key === '+') {
           e.preventDefault();
           canvasRef.current?.zoomIn();
-        } else if (e.key === '-') {
+          return;
+        }
+        if (e.key === '-') {
           e.preventDefault();
           canvasRef.current?.zoomOut();
+          return;
         }
-        return;
+
+        // Fullscreen: Cmd+Ctrl+F
+        if (e.ctrlKey && e.key.toLowerCase() === 'f') {
+          e.preventDefault();
+          toggleFullscreen();
+          return;
+        }
+
+        // Shortcuts modal: Cmd+/
+        if (e.key === '/') {
+          e.preventDefault();
+          setShowShortcutsModal(s => !s);
+          return;
+        }
       }
 
       // Help modal on '?'
@@ -750,7 +966,7 @@ export default function App() {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [handleExportImage, selectTool, activeTool, eraserMode]);
+  }, [handleExportImage, handleExportSvg, createNewBoard, switchBoard, boards, activeBoardId, toggleFullscreen, selectTool, activeTool, eraserMode]);
 
   return (
     <div
@@ -1323,8 +1539,10 @@ export default function App() {
                     <div className="h-px bg-[var(--border)]/60 my-1 mx-1" />
                     <div className="flex items-center gap-1.5 px-2.5 py-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--muted-foreground)]/60" />
-                      <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Insert & Actions</p>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">Quick Notes & Actions</p>
                     </div>
+                    <DropdownToolBtn icon={Sparkles} title="Quick Canvas Note (⌘⇧N)" onClick={() => { setShowQuickCanvas(true); setShowMoreTools(false); }} />
+                    <DropdownToolBtn icon={Command} title="Command Palette (⌘K)" onClick={() => { setShowCommandPalette(true); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={FileText} title="Insert PDF" onClick={() => { pdfInputRef.current?.click(); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={ImageIcon} title="Insert Image" className="sm:hidden" onClick={() => { imageInputRef.current?.click(); setShowMoreTools(false); }} />
                     <DropdownToolBtn icon={Code} title="Mermaid Chart" onClick={() => { setShowDiagramModal(true); setShowMoreTools(false); }} />
@@ -1336,8 +1554,18 @@ export default function App() {
             </div>
           </div>
 
-          {/* Top Right: Fullscreen Toggle */}
-          <div className={`pointer-events-auto absolute top-4 right-4 flex items-center gap-1 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-md rounded-2xl px-2 py-2 transition-opacity duration-300 ${isFullscreen ? 'opacity-20 hover:opacity-100' : 'opacity-100'}`}>
+          {/* Top Right: Quick Canvas & Fullscreen Toggle */}
+          <div className={`pointer-events-auto absolute top-4 right-4 flex items-center gap-1.5 bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-md rounded-2xl px-2 py-2 transition-opacity duration-300 ${isFullscreen ? 'opacity-20 hover:opacity-100' : 'opacity-100'}`}>
+            <button
+              onClick={() => setShowQuickCanvas(true)}
+              title="Quick Canvas // Instant Note (⌘⇧N)"
+              className="h-9 px-3 rounded-xl flex items-center gap-2 bg-[#e73f07]/10 hover:bg-[#e73f07]/20 border border-[#e73f07]/30 text-[#e73f07] transition-all hover:scale-105 active:scale-95 cursor-pointer font-mono font-bold text-xs"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Quick Note</span>
+              <kbd className="hidden md:inline px-1 py-0.5 rounded text-[9px] bg-[#e73f07]/20 border border-[#e73f07]/30">⌘⇧N</kbd>
+            </button>
+            <div className="w-px h-5 bg-[var(--border)] mx-0.5" />
             <ToolBtn icon={isFullscreen ? Minimize : Maximize} title="Toggle Fullscreen" onClick={toggleFullscreen} />
           </div>
 
@@ -1729,6 +1957,38 @@ export default function App() {
         </div>
       )}
 
+      {/* ── Quick Canvas Instant Note Modal ── */}
+      {showQuickCanvas && (
+        <QuickCanvasModal
+          isDarkMode={isDarkMode}
+          onClose={() => setShowQuickCanvas(false)}
+          onStampSketch={handleStampSketch}
+          onStampText={handleStampText}
+          onSaveAsBoard={handleSaveQuickNoteAsBoard}
+        />
+      )}
+
+      {/* ── Spotlight Command Palette ── */}
+      {showCommandPalette && (
+        <CommandPaletteModal
+          isDarkMode={isDarkMode}
+          onClose={() => setShowCommandPalette(false)}
+          onSelectTool={selectTool}
+          onOpenQuickCanvas={() => setShowQuickCanvas(true)}
+          onNewBoard={createNewBoard}
+          boards={boards}
+          onSwitchBoard={switchBoard}
+          onOpenDiagramModal={() => setShowDiagramModal(true)}
+          onOpenTranslatorModal={() => setShowTranslatorModal(true)}
+          onExportPng={handleExportImage}
+          onExportSvg={handleExportSvg}
+          onToggleFullscreen={toggleFullscreen}
+          onToggleTheme={() => setIsDarkMode(!isDarkMode)}
+          onClearBoard={() => setShowClearConfirm(true)}
+          onOpenShortcuts={() => setShowShortcutsModal(true)}
+        />
+      )}
+
       {/* ── Keyboard Shortcuts Modal ── */}
       {showShortcutsModal && (
         <KeyboardShortcutsModal onClose={() => setShowShortcutsModal(false)} />
@@ -1763,46 +2023,64 @@ export default function App() {
 // ── Keyboard Shortcuts Dialog ───────────────────────────────────────────────
 
 function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
-  const toolShortcuts = [
-    { name: 'Select', keys: ['V', '1'] },
-    { name: 'Pan / Hand', keys: ['H', '2'] },
-    { name: 'Rectangle', keys: ['R', '3'] },
-    { name: 'Ellipse', keys: ['O', '4'] },
-    { name: 'Line', keys: ['L', '5'] },
-    { name: 'Arrow', keys: ['A', '6'] },
-    { name: 'Draw / Pen', keys: ['P', '7'] },
-    { name: 'Text', keys: ['T', '8'] },
-    { name: 'Eraser', keys: ['E', '9'] },
-    { name: 'Calligraphy Pen', keys: ['F'] },
-    { name: 'Highlighter', keys: ['M'] },
-    { name: 'Magic Pen (AI)', keys: ['W'] },
-    { name: 'Laser Pen', keys: ['Z'] },
+  const quickNoteShortcuts = [
+    { name: 'Quick Canvas (Instant Note)', keys: ['⌘', '⇧', 'N'] },
+    { name: 'Quick Note (Alternative)', keys: ['⌘', 'J'] },
+    { name: 'Spotlight Command Palette', keys: ['⌘', 'K'] },
+    { name: 'Stamp Note to Main Canvas', keys: ['⌘', '↵'] },
+    { name: 'Save Note as Board', keys: ['⌘', 'S'] },
   ];
 
-  const actionShortcuts = [
-    { name: 'New Canvas / Clear', keys: ['⌘ / Ctrl', 'N'] },
-    { name: 'Export Image', keys: ['⌘ / Ctrl', 'E'] },
-    { name: 'Reset View / Zoom', keys: ['⌘ / Ctrl', '0'] },
-    { name: 'Zoom In', keys: ['⌘ / Ctrl', '+'] },
-    { name: 'Zoom Out', keys: ['⌘ / Ctrl', '-'] },
-    { name: 'Undo', keys: ['⌘ / Ctrl', 'Z'] },
-    { name: 'Redo', keys: ['⌘ / Ctrl', '⇧', 'Z'] },
-    { name: 'Toggle Settings', keys: ['S'] },
-    { name: 'Close Dialogs / Escape', keys: ['Esc'] },
-    { name: 'Keyboard Shortcuts', keys: ['?'] },
+  const boardShortcuts = [
+    { name: 'Create New Canvas Board', keys: ['⌘', 'N'] },
+    { name: 'Toggle Boards Drawer / Sidebar', keys: ['⌘', 'B'] },
+    { name: 'Switch to Board 1 – 9', keys: ['⌘', '1..9'] },
+    { name: 'Previous Canvas Board', keys: ['⌘', '['] },
+    { name: 'Next Canvas Board', keys: ['⌘', ']'] },
+    { name: 'Clear Canvas Board (Confirm)', keys: ['⌘', '⇧', '⌫'] },
+  ];
+
+  const fileShortcuts = [
+    { name: 'Export PNG Image / Save', keys: ['⌘', 'S'] },
+    { name: 'Export Vector SVG', keys: ['⌘', '⇧', 'S'] },
+    { name: 'Import Image', keys: ['⌘', 'O'] },
+    { name: 'Import PDF Document', keys: ['⌘', '⇧', 'O'] },
+    { name: 'Toggle Fullscreen Mode', keys: ['⌃', '⌘', 'F'] },
+    { name: 'Reset View (100%)', keys: ['⌘', '0'] },
+    { name: 'Zoom In', keys: ['⌘', '+'] },
+    { name: 'Zoom Out', keys: ['⌘', '-'] },
+    { name: 'Undo Operation', keys: ['⌘', 'Z'] },
+    { name: 'Redo Operation', keys: ['⌘', '⇧', 'Z'] },
+    { name: 'Color & Tool Settings', keys: ['⌘', ','] },
+  ];
+
+  const toolShortcuts = [
+    { name: 'Select Tool', keys: ['V', '1'] },
+    { name: 'Pan / Hand Tool', keys: ['H', '2'] },
+    { name: 'Rectangle Shape', keys: ['R', '3'] },
+    { name: 'Ellipse Shape', keys: ['O', '4'] },
+    { name: 'Line Shape', keys: ['L', '5'] },
+    { name: 'Arrow Shape', keys: ['A', '6'] },
+    { name: 'Draw / Freehand Pen', keys: ['P', '7'] },
+    { name: 'Text Tool', keys: ['T', '8'] },
+    { name: 'Eraser (cycles mode)', keys: ['E', '9'] },
+    { name: 'Calligraphy Fountain Pen', keys: ['F'] },
+    { name: 'Highlighter', keys: ['M'] },
+    { name: 'Magic Pen (AI Handwriting)', keys: ['W'] },
+    { name: 'Laser Pen (Transient Glow)', keys: ['Z'] },
   ];
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-sm pointer-events-auto animate-in fade-in duration-150">
-      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl p-6 max-w-xl w-full mx-4 max-h-[85vh] flex flex-col">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-sm pointer-events-auto animate-in fade-in duration-150 p-4">
+      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl p-6 max-w-2xl w-full max-h-[85vh] flex flex-col">
         <div className="flex items-center justify-between pb-4 mb-4 border-b border-[var(--border)]">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/10 flex items-center justify-center">
               <Command className="w-5 h-5 text-[#e73f07]" />
             </div>
             <div>
-              <h2 className="text-base font-sans font-black uppercase tracking-wider text-[var(--foreground)]">Keyboard Shortcuts</h2>
-              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">Quick navigation & tool commands</p>
+              <h2 className="text-base font-sans font-black uppercase tracking-wider text-[var(--foreground)]">Mac Desktop Shortcuts</h2>
+              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">Fast muscle-memory controls & instant note-taking</p>
             </div>
           </div>
           <button
@@ -1815,9 +2093,27 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
 
         <div className="overflow-y-auto pr-1 flex flex-col gap-5 text-xs font-mono">
           <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">Drawing Tools</h3>
+            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">⚡ Instant Note & Quick Canvas</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {toolShortcuts.map(item => (
+              {quickNoteShortcuts.map(item => (
+                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
+                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
+                  <div className="flex items-center gap-1">
+                    {item.keys.map((k, i) => (
+                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[#e73f07] shadow-xs">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">📋 Board Management & Navigation</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {boardShortcuts.map(item => (
                 <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
                   <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
                   <div className="flex items-center gap-1">
@@ -1833,9 +2129,27 @@ function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">Actions & Navigation</h3>
+            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">💾 File Operations & Viewport</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {actionShortcuts.map(item => (
+              {fileShortcuts.map(item => (
+                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
+                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
+                  <div className="flex items-center gap-1">
+                    {item.keys.map((k, i) => (
+                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">✏️ Drawing Tools & Pens</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {toolShortcuts.map(item => (
                 <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
                   <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
                   <div className="flex items-center gap-1">

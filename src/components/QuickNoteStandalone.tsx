@@ -13,6 +13,16 @@ export function QuickNoteStandalone() {
   });
 
   useEffect(() => {
+    // Ensure 100% transparency for standalone floating card
+    document.documentElement.classList.add('quicknote-window');
+    document.body.classList.add('quicknote-window');
+    document.documentElement.style.backgroundColor = 'transparent';
+    document.body.style.backgroundColor = 'transparent';
+    const root = document.getElementById('root');
+    if (root) {
+      root.style.backgroundColor = 'transparent';
+    }
+
     // Sync theme class to html/root
     if (isDarkMode) {
       document.documentElement.classList.add('dark');
@@ -105,7 +115,7 @@ export function QuickNoteStandalone() {
       onPointerUp={(e) => e.stopPropagation()}
       onMouseUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className="w-screen h-screen flex items-center justify-center p-1 bg-transparent select-none overflow-hidden"
+      className="w-screen h-screen flex items-center justify-center p-0 bg-transparent select-none overflow-hidden"
     >
       <QuickCanvasModal
         isDarkMode={isDarkMode}

@@ -139,6 +139,16 @@
     overflow-x: hidden;
   }
 
+  html.quicknote-window,
+  body.quicknote-window,
+  body.quicknote-window #root {
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    outline: none !important;
+  }
+
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);

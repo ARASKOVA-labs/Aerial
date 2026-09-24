@@ -16,6 +16,11 @@ import {
   ArrowRightCircle,
   X,
   History,
+  Lightbulb,
+  CheckSquare,
+  Code,
+  Clock,
+  Trash2,
 } from 'lucide-react';
 import { AerialCanvas } from './AerialCanvas';
 import type { AerialCanvasRef, ToolId } from '../lib/types';
@@ -231,8 +236,7 @@ export function QuickCanvasModal({
         setStamped(true);
         setTimeout(() => {
           setStamped(false);
-          handleDismiss();
-        }, 150);
+        }, 1500);
       } catch (err) {
         logger.error('Failed to stamp sketch to canvas:', err);
       }
@@ -243,10 +247,9 @@ export function QuickCanvasModal({
       setStamped(true);
       setTimeout(() => {
         setStamped(false);
-        handleDismiss();
-      }, 150);
+      }, 1500);
     }
-  }, [activeTab, textContent, onStampSketch, onStampText, archiveCurrentNote, handleDismiss]);
+  }, [activeTab, textContent, onStampSketch, onStampText, archiveCurrentNote]);
 
   // Handle Promote to Dedicated Board in Sidebar (⌘S)
   const handlePromoteToBoard = useCallback(() => {
@@ -262,8 +265,7 @@ export function QuickCanvasModal({
       archiveCurrentNote();
       onSaveAsBoard(boardName, undefined, textContent.trim());
     }
-    handleDismiss();
-  }, [activeTab, textContent, onSaveAsBoard, archiveCurrentNote, handleDismiss]);
+  }, [activeTab, textContent, onSaveAsBoard, archiveCurrentNote]);
 
   // Handle Copy to Clipboard
   const handleCopy = useCallback(async () => {
@@ -484,9 +486,10 @@ export function QuickCanvasModal({
           </button>
 
           <button
+            type="button"
             onClick={handleDismiss}
-            className="p-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-            title="Dismiss (Esc)"
+            className="p-1 rounded-md text-[var(--muted-foreground)] hover:text-white hover:bg-red-500/80 transition-colors cursor-pointer"
+            title="Close Note (Esc)"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -556,47 +559,52 @@ export function QuickCanvasModal({
         {activeTab === 'text' ? (
           <div className="flex items-center gap-1.5">
             <button
+              type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => insertTextPrefix('- [ ] ')}
-              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-              title="Todo item"
+              className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Add todo checkbox"
             >
-              [ ]
+              <CheckSquare className="w-3.5 h-3.5" />
             </button>
             <button
+              type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => insertTextPrefix('💡 ')}
-              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-              title="Idea note"
+              onClick={() => insertTextPrefix('* Idea: ')}
+              className="p-1 rounded text-[var(--muted-foreground)] hover:text-amber-400 hover:bg-amber-400/10 transition-colors cursor-pointer"
+              title="Add idea note"
             >
-              💡
+              <Lightbulb className="w-3.5 h-3.5" />
             </button>
             <button
+              type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => insertTextPrefix('```\n', '\n```')}
-              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-              title="Code snippet"
+              className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Insert code snippet"
             >
-              &lt;/&gt;
+              <Code className="w-3.5 h-3.5" />
             </button>
             <button
+              type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 const now = new Date();
                 insertTextPrefix(`[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}] `);
               }}
-              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-              title="Timestamp"
+              className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Insert timestamp"
             >
-              🕒
+              <Clock className="w-3.5 h-3.5" />
             </button>
             <div className="w-px h-3 bg-[var(--border)] mx-0.5" />
             <button
+              type="button"
               onClick={handleClear}
-              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-red-500/70 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+              className="p-1 rounded text-red-500/70 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
               title="Clear note"
             >
-              clear
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (
@@ -728,7 +736,6 @@ export function QuickCanvasModal({
   // Inside the main app, render with soft backdrop
   return (
     <div
-      onClick={handleDismiss}
       className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0a0a0a]/50 backdrop-blur-sm pointer-events-auto p-4 animate-in fade-in duration-150"
     >
       {cardContent}

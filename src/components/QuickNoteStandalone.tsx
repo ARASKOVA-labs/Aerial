@@ -32,8 +32,7 @@ export function QuickNoteStandalone() {
     } catch (e) {
       logger.debug('open_main_canvas failed:', e);
     }
-    handleClose();
-  }, [handleClose]);
+  }, []);
 
   const handleStampSketch = useCallback(async (pngBlob: Blob) => {
     try {
@@ -51,8 +50,7 @@ export function QuickNoteStandalone() {
     } catch (e) {
       logger.debug('open_main_canvas failed:', e);
     }
-    handleClose();
-  }, [handleClose]);
+  }, []);
 
   const handleSaveAsBoard = useCallback(async (name: string, canvasState?: Uint8Array, textContent?: string) => {
     const newId = 'board_' + Date.now();
@@ -98,8 +96,7 @@ export function QuickNoteStandalone() {
     } catch (e) {
       logger.debug('open_main_canvas failed:', e);
     }
-    handleClose();
-  }, [isDarkMode, handleClose]);
+  }, [isDarkMode]);
 
   return (
     <div className="w-screen h-screen flex items-center justify-center bg-transparent select-none">

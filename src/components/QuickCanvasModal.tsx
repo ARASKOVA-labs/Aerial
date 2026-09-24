@@ -156,6 +156,7 @@ export function QuickCanvasModal({
   // Switch mode tabs seamlessly
   const handleSwitchTab = useCallback((tab: 'text' | 'sketch') => {
     setActiveTab(tab);
+    localStorage.setItem('aerial_quick_note_mode', tab);
     if (tab === 'sketch') {
       requestAnimationFrame(() => {
         canvasRef.current?.getEngine()?.render();
@@ -376,9 +377,9 @@ export function QuickCanvasModal({
       onMouseUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       className={`relative w-full flex flex-col rounded-2xl border shadow-2xl overflow-hidden transition-all duration-200 ${
-        activeTab === 'text'
-          ? 'max-w-[490px] h-[285px]'
-          : 'max-w-[580px] h-[380px]'
+        isStandalone
+          ? 'w-full h-full max-w-full max-h-full'
+          : 'max-w-[540px] h-[320px]'
       } ${
         isDarkMode
           ? 'bg-[#111111]/95 border-[#2a2a2a] text-[#f3f3f2] shadow-black/80'
@@ -501,7 +502,7 @@ export function QuickCanvasModal({
       </div>
 
       {/* ── 2. Content Area (Zero distractions) ── */}
-      <div className="flex-1 relative overflow-hidden">
+      <div className="flex-1 min-h-0 relative overflow-hidden">
         {/* Sketch Layer */}
         <div
           className="absolute inset-0 w-full h-full"
@@ -737,7 +738,7 @@ export function QuickCanvasModal({
         onPointerUp={(e) => e.stopPropagation()}
         onMouseUp={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
-        className="w-screen h-screen flex items-center justify-center p-2 bg-transparent select-none"
+        className="w-full h-full flex items-center justify-center bg-transparent select-none overflow-hidden"
       >
         {cardContent}
       </div>

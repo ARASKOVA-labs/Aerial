@@ -105,7 +105,7 @@ export function QuickNoteStandalone() {
       onPointerUp={(e) => e.stopPropagation()}
       onMouseUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className="w-screen h-screen flex items-center justify-center bg-transparent select-none"
+      className="w-screen h-screen flex items-center justify-center p-1 bg-transparent select-none overflow-hidden"
     >
       <QuickCanvasModal
         isDarkMode={isDarkMode}

@@ -1,30 +1,21 @@
-// ── Aerial Canvas — Quick Canvas (Instant Note Taking) ──────────────────────
-// Laptop-optimized, shortcut-driven instant scratchpad with dual Ink/Sketch & Markdown Note modes.
-// Complies with Araskova brutalist design invariants (Roboto, Space Mono, zero Orbitron).
+// ── Aerial Canvas — Quick Canvas (Simple, Short-Sized Instant Notes) ──────────
+// Laptop-optimized, lightweight floating scratchpad with dual Ink & Text modes.
+// Complies with Araskova brutalist design invariants (Space Mono, zero Orbitron).
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Pen,
   Highlighter,
   Wand2,
-  Type,
   Eraser,
   Undo,
   Redo,
-  Trash2,
   Copy,
   Check,
   Sparkles,
   ArrowRightCircle,
   X,
-  ListTodo,
-  Clock,
-  Code2,
-  Plus,
-  Minimize2,
   History,
-  Lightbulb,
-  Link2,
 } from 'lucide-react';
 import { AerialCanvas } from './AerialCanvas';
 import type { AerialCanvasRef, ToolId } from '../lib/types';
@@ -35,6 +26,7 @@ const logger = createLogger('QuickCanvasModal');
 export interface QuickCanvasModalProps {
   isDarkMode: boolean;
   isOpenedFromBackground?: boolean;
+  isStandalone?: boolean;
   onClose: () => void;
   onStampSketch: (pngBlob: Blob) => void;
   onStampText: (text: string) => void;
@@ -51,6 +43,7 @@ interface StoredQuickNote {
 export function QuickCanvasModal({
   isDarkMode,
   isOpenedFromBackground = false,
+  isStandalone = false,
   onClose,
   onStampSketch,
   onStampText,
@@ -147,21 +140,13 @@ export function QuickCanvasModal({
     }
   }, [activeTab]);
 
-  // Dismiss & Go Away (hides window if invoked from background or requested)
+  // Dismiss / Hide handler
   const handleDismiss = useCallback(() => {
     onClose();
-    if (isOpenedFromBackground && onHideWindow) {
+    if ((isOpenedFromBackground || isStandalone) && onHideWindow) {
       onHideWindow();
     }
-  }, [onClose, isOpenedFromBackground, onHideWindow]);
-
-  // Explicitly hide window (dock / tray)
-  const handleHide = useCallback(() => {
-    onClose();
-    if (onHideWindow) {
-      onHideWindow();
-    }
-  }, [onClose, onHideWindow]);
+  }, [onClose, isOpenedFromBackground, isStandalone, onHideWindow]);
 
   // Switch mode tabs seamlessly
   const handleSwitchTab = useCallback((tab: 'text' | 'sketch') => {
@@ -221,7 +206,7 @@ export function QuickCanvasModal({
     };
     setRecentNotes((prev) => {
       const filtered = prev.filter((n) => n.text !== newEntry.text);
-      const updated = [newEntry, ...filtered].slice(0, 10);
+      const updated = [newEntry, ...filtered].slice(0, 8);
       localStorage.setItem('aerial_quick_notes_archive', JSON.stringify(updated));
       return updated;
     });
@@ -236,16 +221,6 @@ export function QuickCanvasModal({
     });
   }, []);
 
-  // Handle New Blank Note (⌘N)
-  const handleNewNote = useCallback(() => {
-    archiveCurrentNote();
-    setTextContent('');
-    localStorage.removeItem('aerial_quick_note_text');
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
-  }, [archiveCurrentNote]);
-
   // Handle Stamp to Main Canvas (⌘↵)
   const handleStamp = useCallback(async () => {
     if (activeTab === 'sketch') {
@@ -257,7 +232,7 @@ export function QuickCanvasModal({
         setTimeout(() => {
           setStamped(false);
           handleDismiss();
-        }, 200);
+        }, 150);
       } catch (err) {
         logger.error('Failed to stamp sketch to canvas:', err);
       }
@@ -269,7 +244,7 @@ export function QuickCanvasModal({
       setTimeout(() => {
         setStamped(false);
         handleDismiss();
-      }, 200);
+      }, 150);
     }
   }, [activeTab, textContent, onStampSketch, onStampText, archiveCurrentNote, handleDismiss]);
 
@@ -299,8 +274,6 @@ export function QuickCanvasModal({
           await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
-        } else {
-          throw new Error('Clipboard write not supported');
         }
       } catch (err) {
         logger.error('Failed to copy quick canvas PNG:', err);
@@ -310,19 +283,16 @@ export function QuickCanvasModal({
         if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(textContent);
         } else {
-          throw new Error('Clipboard writeText not supported');
+          throw new Error('No writeText');
         }
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       } catch {
-        // Fallback for Safari/restricted webview contexts
         if (textareaRef.current) {
           textareaRef.current.select();
           document.execCommand('copy');
           setCopied(true);
           setTimeout(() => setCopied(false), 2000);
-        } else {
-          logger.error('Failed to copy quick note text');
         }
       }
     }
@@ -362,51 +332,6 @@ export function QuickCanvasModal({
     });
   }, []);
 
-  // Handle Paste event inside Quick Canvas (Screenshots & Images)
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.type.startsWith('image/')) {
-          const file = item.getAsFile();
-          if (file) {
-            e.preventDefault();
-            e.stopPropagation();
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-              const dataUrl = ev.target?.result as string;
-              if (dataUrl) {
-                if (activeTab === 'sketch' && canvasRef.current) {
-                  const img = new Image();
-                  img.onload = () => {
-                    const w = Math.min(img.width, 500);
-                    const h = (w / img.width) * img.height;
-                    const assetId = crypto.randomUUID();
-                    canvasRef.current?.addImage(img, 50, 50, w, h, assetId);
-                  };
-                  img.src = dataUrl;
-                } else {
-                  onStampSketch(file);
-                  setStamped(true);
-                  setTimeout(() => {
-                    setStamped(false);
-                    handleDismiss();
-                  }, 250);
-                }
-              }
-            };
-            reader.readAsDataURL(file);
-            return;
-          }
-        }
-      }
-    };
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [activeTab, onStampSketch, handleDismiss]);
-
   // Keyboard shortcut handler inside Quick Canvas
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -429,469 +354,384 @@ export function QuickCanvasModal({
         } else if (e.key.toLowerCase() === 's') {
           e.preventDefault();
           handlePromoteToBoard();
-        } else if (e.key.toLowerCase() === 'n' && activeTab === 'text') {
-          e.preventDefault();
-          handleNewNote();
-        } else if (e.key.toLowerCase() === 'h') {
-          e.preventDefault();
-          handleHide();
         }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleStamp, handlePromoteToBoard, handleNewNote, handleDismiss, handleHide, handleSwitchTab, activeTab]);
+  }, [handleStamp, handlePromoteToBoard, handleDismiss, handleSwitchTab]);
 
-  const paletteColors = ['#e73f07', '#f3f3f2', '#06b6d4', '#10b981', '#f59e0b', '#a855f7'];
+  const paletteColors = ['#e73f07', '#f3f3f2', '#06b6d4', '#10b981'];
 
-  return (
+  // Word count calculation
+  const wordCount = textContent.trim() ? textContent.trim().split(/\s+/).length : 0;
+
+  const cardContent = (
     <div
-      onClick={handleDismiss}
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0a0a0a]/75 backdrop-blur-md pointer-events-auto p-4 animate-in fade-in duration-150"
+      onClick={(e) => e.stopPropagation()}
+      className={`relative w-full flex flex-col rounded-2xl border shadow-2xl overflow-hidden transition-all duration-200 ${
+        activeTab === 'text'
+          ? 'max-w-[490px] h-[285px]'
+          : 'max-w-[580px] h-[380px]'
+      } ${
+        isDarkMode
+          ? 'bg-[#111111]/95 border-[#2a2a2a] text-[#f3f3f2] shadow-black/80'
+          : 'bg-[#ffffff]/95 border-[#e5e5e5] text-[#0a0a0a] shadow-xl'
+      } backdrop-blur-2xl`}
     >
+      {/* Tactical Corner Reticles */}
+      <div className="absolute top-2 left-2 w-2 h-2 border-t border-l border-[#e73f07]/50 pointer-events-none z-20" />
+      <div className="absolute top-2 right-2 w-2 h-2 border-t border-r border-[#e73f07]/50 pointer-events-none z-20" />
+      <div className="absolute bottom-2 left-2 w-2 h-2 border-b border-l border-[#e73f07]/50 pointer-events-none z-20" />
+      <div className="absolute bottom-2 right-2 w-2 h-2 border-b border-r border-[#e73f07]/50 pointer-events-none z-20" />
+
+      {/* ── 1. Minimal 34px Header Bar ── */}
       <div
-        onClick={(e) => e.stopPropagation()}
-        className={`relative w-full flex flex-col rounded-3xl border shadow-2xl overflow-hidden transition-all duration-300 ${
-          activeTab === 'text'
-            ? 'max-w-2xl h-[520px]'
-            : 'max-w-4xl h-[78vh]'
-        } ${
-          isDarkMode
-            ? 'bg-[#111111] border-[#2a2a2a] text-[#f3f3f2]'
-            : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a]'
+        className={`flex items-center justify-between px-3.5 py-2 border-b shrink-0 select-none ${
+          isDarkMode ? 'border-[#222222] bg-[#0c0c0c]/80' : 'border-[#eeeeee] bg-[#f8f9fa]/80'
         }`}
       >
-        {/* Tactical Corner Reticles */}
-        <div className="absolute top-2 left-2 w-2.5 h-2.5 border-t-2 border-l-2 border-[#e73f07]/60 pointer-events-none z-20" />
-        <div className="absolute top-2 right-2 w-2.5 h-2.5 border-t-2 border-r-2 border-[#e73f07]/60 pointer-events-none z-20" />
-        <div className="absolute bottom-2 left-2 w-2.5 h-2.5 border-b-2 border-l-2 border-[#e73f07]/60 pointer-events-none z-20" />
-        <div className="absolute bottom-2 right-2 w-2.5 h-2.5 border-b-2 border-r-2 border-[#e73f07]/60 pointer-events-none z-20" />
-
-        {/* ── Modal Header ── */}
-        <div
-          className={`flex items-center justify-between px-5 py-3 border-b shrink-0 ${
-            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/90' : 'border-[#e5e5e5] bg-[#f8f9fa]'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-[#e73f07] animate-pulse" />
-              <h2 className="text-xs font-mono font-black uppercase tracking-wider text-[#e73f07]">
-                Quick Note
-              </h2>
-            </div>
-            <span className="px-2 py-0.5 rounded text-[10px] font-mono tracking-widest uppercase bg-[#e73f07]/15 text-[#e73f07] border border-[#e73f07]/30">
-              ⌥Space · ⌘⇧N
-            </span>
-            <span className="hidden sm:inline-flex text-[9px] font-mono text-[var(--muted-foreground)]">
-              ● Auto-saved
-            </span>
-          </div>
-
-          {/* Mode Switcher Tabs */}
-          <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--secondary)] border border-[var(--border)]">
-            <button
-              onClick={() => handleSwitchTab('text')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                activeTab === 'text'
-                  ? 'bg-[#e73f07] text-white shadow-xs'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-              title="Quick Text Note (⌘1)"
-            >
-              <Type className="w-3 h-3" />
-              Text <span className="opacity-60 text-[9px]">⌘1</span>
-            </button>
-            <button
-              onClick={() => handleSwitchTab('sketch')}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                activeTab === 'sketch'
-                  ? 'bg-[#e73f07] text-white shadow-xs'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-              title="Ink / Sketch Canvas (⌘2)"
-            >
-              <Pen className="w-3 h-3" />
-              Sketch <span className="opacity-60 text-[9px]">⌘2</span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-1">
-            {onHideWindow && (
-              <button
-                onClick={handleHide}
-                className="h-8 px-2.5 rounded-lg flex items-center gap-1 hover:bg-[var(--accent)] transition-colors cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--foreground)] text-[10px] font-mono"
-                title="Dismiss & Hide to Background (Esc / ⌘H)"
-              >
-                <Minimize2 className="w-3.5 h-3.5" />
-                <span className="hidden md:inline">Hide</span>
-                <kbd className="px-1 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-[9px]">
-                  ⌘H
-                </kbd>
-              </button>
-            )}
-            <button
-              onClick={handleDismiss}
-              className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--accent)] transition-colors cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-              title="Close (Esc)"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+        <div className="flex items-center gap-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07] animate-pulse" />
+          <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[var(--foreground)]">
+            Quick Note
+          </span>
+          <span className="text-[9px] font-mono text-[var(--muted-foreground)] opacity-70">
+            ⌥Space
+          </span>
         </div>
 
-        {/* ── Sub-Toolbar for Sketch or Text ── */}
-        {activeTab === 'sketch' ? (
-          <div
-            className={`flex items-center justify-between px-5 py-2 border-b shrink-0 flex-wrap gap-2 ${
-              isDarkMode ? 'border-[#2a2a2a] bg-[#141414]' : 'border-[#e5e5e5] bg-[#fafafa]'
+        {/* Minimal Mode Pills: Text vs Ink */}
+        <div className="flex items-center p-0.5 rounded-lg bg-[var(--secondary)] border border-[var(--border)]">
+          <button
+            onClick={() => handleSwitchTab('text')}
+            className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
+              activeTab === 'text'
+                ? 'bg-[#e73f07] text-white shadow-xs'
+                : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
             }`}
+            title="Text Note (⌘1)"
           >
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => handleSelectTool('freedraw')}
-                className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
-                  activeTool === 'freedraw'
-                    ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-                title="Pen"
-              >
-                <Pen className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => handleSelectTool('highlighter')}
-                className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
-                  activeTool === 'highlighter'
-                    ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-                title="Highlighter"
-              >
-                <Highlighter className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => handleSelectTool('magic_pen')}
-                className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
-                  activeTool === 'magic_pen'
-                    ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-                title="Magic Pen (Handwriting to Text)"
-              >
-                <Wand2 className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => handleSelectTool('text')}
-                className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
-                  activeTool === 'text'
-                    ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-                title="Canvas Text"
-              >
-                <Type className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => handleSelectTool('eraser')}
-                className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
-                  activeTool === 'eraser'
-                    ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-                title="Eraser"
-              >
-                <Eraser className="w-3.5 h-3.5" />
-              </button>
-
-              <div className="h-4 w-px bg-[var(--border)] mx-1" />
-
-              {/* Color Swatches */}
-              <div className="flex items-center gap-1">
-                {paletteColors.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => handleSelectColor(c)}
-                    style={{ backgroundColor: c }}
-                    className={`w-4 h-4 rounded-full transition-transform cursor-pointer ${
-                      strokeColor === c ? 'scale-125 ring-2 ring-white/50' : 'opacity-80 hover:opacity-100'
-                    }`}
-                  />
-                ))}
-              </div>
-
-              <div className="h-4 w-px bg-[var(--border)] mx-1" />
-
-              {/* Stroke sizes */}
-              <div className="flex items-center gap-1">
-                {[1.5, 2.5, 5, 8].map((sz) => (
-                  <button
-                    key={sz}
-                    onClick={() => handleSelectWidth(sz)}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer ${
-                      strokeWidth === sz
-                        ? 'bg-[var(--accent)] text-[var(--foreground)] font-bold'
-                        : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {sz}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => canvasRef.current?.undo?.()}
-                className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-                title="Undo (⌘Z)"
-              >
-                <Undo className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => canvasRef.current?.redo?.()}
-                className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-                title="Redo (⌘⇧Z / ⌘Y)"
-              >
-                <Redo className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div
-            className={`flex items-center justify-between px-5 py-2 border-b shrink-0 flex-wrap gap-2 ${
-              isDarkMode ? 'border-[#2a2a2a] bg-[#141414]' : 'border-[#e5e5e5] bg-[#fafafa]'
+            Text
+          </button>
+          <button
+            onClick={() => handleSwitchTab('sketch')}
+            className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
+              activeTab === 'sketch'
+                ? 'bg-[#e73f07] text-white shadow-xs'
+                : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
             }`}
+            title="Ink Sketch (⌘2)"
           >
-            {/* Quick-insert pills for rapid laptop note taking */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertTextPrefix('- [ ] ')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
-                title="Insert Todo item"
-              >
-                <ListTodo className="w-3 h-3 text-[#e73f07]" />
-                Todo
-              </button>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertTextPrefix('💡 ')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
-                title="Insert Idea note"
-              >
-                <Lightbulb className="w-3 h-3 text-amber-500" />
-                Idea
-              </button>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertTextPrefix('[', '](url)')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
-                title="Insert Markdown Link"
-              >
-                <Link2 className="w-3 h-3 text-cyan-500" />
-                Link
-              </button>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  const now = new Date();
-                  const time = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}] `;
-                  insertTextPrefix(time);
-                }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
-                title="Insert Timestamp"
-              >
-                <Clock className="w-3 h-3 text-emerald-500" />
-                Time
-              </button>
-              <button
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertTextPrefix('```\n', '\n```')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
-                title="Insert Code block"
-              >
-                <Code2 className="w-3 h-3 text-purple-500" />
-                Code
-              </button>
-            </div>
+            Ink
+          </button>
+        </div>
 
-            {/* Note Archive & New Note */}
-            <div className="flex items-center gap-2 relative">
+        {/* Subtle quick tools */}
+        <div className="flex items-center gap-1">
+          {recentNotes.length > 0 && (
+            <div className="relative" ref={recentMenuRef}>
               <button
-                onClick={handleNewNote}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
-                title="Start a new blank quick note (⌘N)"
+                onClick={() => setShowRecentMenu((v) => !v)}
+                className="p-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+                title={`Recent Notes (${recentNotes.length})`}
               >
-                <Plus className="w-3 h-3 text-[#e73f07]" />
-                New Note <span className="opacity-60 text-[9px]">⌘N</span>
+                <History className="w-3.5 h-3.5" />
               </button>
 
-              {recentNotes.length > 0 && (
-                <div className="relative" ref={recentMenuRef}>
-                  <button
-                    onClick={() => setShowRecentMenu((v) => !v)}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
-                    title="View Recent Notes"
-                  >
-                    <History className="w-3 h-3" />
-                    <span>Notes ({recentNotes.length})</span>
-                  </button>
-
-                  {showRecentMenu && (
+              {showRecentMenu && (
+                <div
+                  className={`absolute right-0 top-full mt-1.5 w-60 max-h-48 overflow-y-auto rounded-xl border shadow-xl z-50 p-1.5 ${
+                    isDarkMode ? 'bg-[#181818] border-[#2a2a2a]' : 'bg-white border-gray-200'
+                  }`}
+                >
+                  <div className="text-[9px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] px-2 py-1 border-b border-[var(--border)] flex justify-between">
+                    <span>Recent Scratchpads</span>
+                  </div>
+                  {recentNotes.map((note) => (
                     <div
-                      className={`absolute right-0 top-full mt-1.5 w-64 max-h-56 overflow-y-auto rounded-xl border shadow-xl z-50 p-1.5 ${
-                        isDarkMode ? 'bg-[#181818] border-[#2a2a2a]' : 'bg-white border-gray-200'
-                      }`}
+                      key={note.id}
+                      onClick={() => {
+                        archiveCurrentNote();
+                        setTextContent(note.text);
+                        setShowRecentMenu(false);
+                        textareaRef.current?.focus();
+                      }}
+                      className="px-2 py-1.5 rounded-lg text-xs font-mono hover:bg-[var(--accent)] transition-colors cursor-pointer flex items-center justify-between gap-1 group"
                     >
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] px-2 py-1 border-b border-[var(--border)] flex justify-between items-center">
-                        <span>Recent Scratchpads</span>
-                        <span className="text-[9px]">Click to load</span>
-                      </div>
-                      {recentNotes.map((note) => (
-                        <div
-                          key={note.id}
-                          onClick={() => {
-                            archiveCurrentNote();
-                            setTextContent(note.text);
-                            setShowRecentMenu(false);
-                            textareaRef.current?.focus();
-                          }}
-                          className="px-2 py-1.5 rounded-lg text-xs font-mono hover:bg-[var(--accent)] transition-colors cursor-pointer flex items-center justify-between gap-1 group"
-                        >
-                          <div className="flex flex-col gap-0.5 truncate flex-1 min-w-0">
-                            <span className="truncate text-[var(--foreground)]">
-                              {note.text.split('\n')[0] || 'Untitled Note'}
-                            </span>
-                            <span className="text-[9px] text-[var(--muted-foreground)]">
-                              {note.timeStr}
-                            </span>
-                          </div>
-                          <button
-                            onClick={(e) => handleDeleteRecentNote(e, note.id)}
-                            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-red-500 transition-opacity"
-                            title="Delete this note"
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      ))}
+                      <span className="truncate text-[var(--foreground)] text-[11px] flex-1">
+                        {note.text.split('\n')[0] || 'Untitled Note'}
+                      </span>
+                      <button
+                        onClick={(e) => handleDeleteRecentNote(e, note.id)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-red-500 transition-opacity"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
                     </div>
-                  )}
+                  ))}
                 </div>
               )}
             </div>
+          )}
+
+          <button
+            onClick={handleCopy}
+            className="p-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+            title="Copy (⌘C)"
+          >
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
+            onClick={handleDismiss}
+            className="p-1 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+            title="Dismiss (Esc)"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── 2. Content Area (Zero distractions) ── */}
+      <div className="flex-1 relative overflow-hidden">
+        {/* Sketch Layer */}
+        <div
+          className="absolute inset-0 w-full h-full"
+          style={{
+            visibility: activeTab === 'sketch' ? 'visible' : 'hidden',
+            pointerEvents: activeTab === 'sketch' ? 'auto' : 'none',
+            zIndex: activeTab === 'sketch' ? 10 : 0,
+          }}
+        >
+          <AerialCanvas
+            ref={canvasRef}
+            theme={isDarkMode ? 'dark' : 'light'}
+            showToolbar={false}
+            eraserSize={eraserSize}
+            onReady={(api) => {
+              api.setTool(activeTool);
+              api.setStrokeColor(strokeColor);
+              api.setStrokeWidth(strokeWidth);
+              const savedSketch = localStorage.getItem('aerial_quick_note_state');
+              if (savedSketch) {
+                try {
+                  const bytes = Uint8Array.from(atob(savedSketch), (c) => c.charCodeAt(0));
+                  api.importFullState(bytes);
+                } catch (e) {
+                  logger.error('Failed to restore quick sketch:', e);
+                }
+              }
+            }}
+          />
+        </div>
+
+        {/* Text Layer */}
+        <div
+          className="absolute inset-0 w-full h-full"
+          style={{
+            visibility: activeTab === 'text' ? 'visible' : 'hidden',
+            pointerEvents: activeTab === 'text' ? 'auto' : 'none',
+            zIndex: activeTab === 'text' ? 10 : 0,
+          }}
+        >
+          <textarea
+            ref={textareaRef}
+            value={textContent}
+            onChange={(e) => setTextContent(e.target.value)}
+            placeholder="Type instant notes, tasks, code... (Auto-saved · ⌘↵ to Stamp, ⎋ to dismiss)"
+            className={`w-full h-full p-4 outline-none font-mono text-[13px] leading-relaxed resize-none bg-transparent ${
+              isDarkMode ? 'text-[#f3f3f2] placeholder-neutral-600' : 'text-[#0a0a0a] placeholder-neutral-400'
+            }`}
+          />
+        </div>
+      </div>
+
+      {/* ── 3. Single Streamlined 32px Action Strip ── */}
+      <div
+        className={`flex items-center justify-between px-3 py-1.5 border-t shrink-0 select-none ${
+          isDarkMode ? 'border-[#222222] bg-[#0c0c0c]/90' : 'border-[#eeeeee] bg-[#f8f9fa]/90'
+        }`}
+      >
+        {activeTab === 'text' ? (
+          <div className="flex items-center gap-1.5">
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertTextPrefix('- [ ] ')}
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Todo item"
+            >
+              [ ]
+            </button>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertTextPrefix('💡 ')}
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Idea note"
+            >
+              💡
+            </button>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertTextPrefix('```\n', '\n```')}
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Code snippet"
+            >
+              &lt;/&gt;
+            </button>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const now = new Date();
+                insertTextPrefix(`[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}] `);
+              }}
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
+              title="Timestamp"
+            >
+              🕒
+            </button>
+            <div className="w-px h-3 bg-[var(--border)] mx-0.5" />
+            <button
+              onClick={handleClear}
+              className="px-1.5 py-0.5 rounded text-[10px] font-mono text-red-500/70 hover:text-red-500 hover:bg-red-500/10 transition-colors cursor-pointer"
+              title="Clear note"
+            >
+              clear
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => handleSelectTool('freedraw')}
+              className={`p-1 rounded text-xs cursor-pointer ${
+                activeTool === 'freedraw' ? 'text-[#e73f07] bg-[#e73f07]/20' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+              title="Pen"
+            >
+              <Pen className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => handleSelectTool('highlighter')}
+              className={`p-1 rounded text-xs cursor-pointer ${
+                activeTool === 'highlighter' ? 'text-[#e73f07] bg-[#e73f07]/20' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+              title="Highlighter"
+            >
+              <Highlighter className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => handleSelectTool('magic_pen')}
+              className={`p-1 rounded text-xs cursor-pointer ${
+                activeTool === 'magic_pen' ? 'text-[#e73f07] bg-[#e73f07]/20' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+              title="Magic Pen"
+            >
+              <Wand2 className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => handleSelectTool('eraser')}
+              className={`p-1 rounded text-xs cursor-pointer ${
+                activeTool === 'eraser' ? 'text-[#e73f07] bg-[#e73f07]/20' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+              title="Eraser"
+            >
+              <Eraser className="w-3 h-3" />
+            </button>
+            <div className="w-px h-3 bg-[var(--border)] mx-1" />
+            <div className="flex items-center gap-1">
+              {paletteColors.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => handleSelectColor(c)}
+                  style={{ backgroundColor: c }}
+                  className={`w-3 h-3 rounded-full cursor-pointer transition-transform ${
+                    strokeColor === c ? 'scale-125 ring-1 ring-white/60' : 'opacity-70 hover:opacity-100'
+                  }`}
+                />
+              ))}
+            </div>
+            <div className="w-px h-3 bg-[var(--border)] mx-1" />
+            <div className="flex items-center gap-0.5">
+              {[1.5, 3, 6].map((w) => (
+                <button
+                  key={w}
+                  onClick={() => handleSelectWidth(w)}
+                  className={`px-1 rounded text-[9px] font-mono cursor-pointer transition-colors ${
+                    strokeWidth === w
+                      ? 'bg-[#e73f07] text-white font-bold'
+                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                  title={`${w}px stroke`}
+                >
+                  {w}
+                </button>
+              ))}
+            </div>
+            <div className="w-px h-3 bg-[var(--border)] mx-1" />
+            <button
+              onClick={() => canvasRef.current?.undo?.()}
+              className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] cursor-pointer"
+              title="Undo (⌘Z)"
+            >
+              <Undo className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => canvasRef.current?.redo?.()}
+              className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] cursor-pointer"
+              title="Redo (⌘⇧Z)"
+            >
+              <Redo className="w-3 h-3" />
+            </button>
           </div>
         )}
 
-        {/* ── Main Content Area (Dual persistent layers keep WASM & Text live) ── */}
-        <div className="flex-1 relative overflow-hidden">
-          {/* Sketch Layer */}
-          <div
-            className="absolute inset-0 w-full h-full"
-            style={{
-              visibility: activeTab === 'sketch' ? 'visible' : 'hidden',
-              pointerEvents: activeTab === 'sketch' ? 'auto' : 'none',
-              zIndex: activeTab === 'sketch' ? 10 : 0,
-            }}
+        {/* Center: word counter */}
+        {activeTab === 'text' && (
+          <span className="text-[9px] font-mono text-[var(--muted-foreground)] opacity-60">
+            {wordCount} {wordCount === 1 ? 'word' : 'words'}
+          </span>
+        )}
+
+        {/* Right: Primary actions (Stamp & Board) */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handlePromoteToBoard}
+            className="h-6 px-2 rounded-md border border-[var(--border)] text-[10px] font-mono font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer flex items-center gap-1"
+            title="Save as dedicated board (⌘S)"
           >
-            <AerialCanvas
-              ref={canvasRef}
-              theme={isDarkMode ? 'dark' : 'light'}
-              showToolbar={false}
-              eraserSize={eraserSize}
-              onReady={(api) => {
-                api.setTool(activeTool);
-                api.setStrokeColor(strokeColor);
-                api.setStrokeWidth(strokeWidth);
-                const savedSketch = localStorage.getItem('aerial_quick_note_state');
-                if (savedSketch) {
-                  try {
-                    const bytes = Uint8Array.from(atob(savedSketch), (c) => c.charCodeAt(0));
-                    api.importFullState(bytes);
-                  } catch (e) {
-                    logger.error('Failed to restore quick sketch on ready:', e);
-                  }
-                }
-              }}
-            />
-          </div>
+            <Sparkles className="w-3 h-3 text-[#e73f07]" />
+            Board
+          </button>
 
-          {/* Text Layer */}
-          <div
-            className="absolute inset-0 w-full h-full"
-            style={{
-              visibility: activeTab === 'text' ? 'visible' : 'hidden',
-              pointerEvents: activeTab === 'text' ? 'auto' : 'none',
-              zIndex: activeTab === 'text' ? 10 : 0,
-            }}
+          <button
+            onClick={handleStamp}
+            className="h-6 px-2.5 rounded-md bg-[#e73f07] hover:bg-[#d03806] text-white text-[10px] font-mono font-bold shadow-xs transition-all active:scale-95 cursor-pointer flex items-center gap-1"
+            title="Stamp to active canvas (⌘↵)"
           >
-            <textarea
-              ref={textareaRef}
-              value={textContent}
-              onChange={(e) => setTextContent(e.target.value)}
-              placeholder="Type instant thoughts, tasks, scratchpad, code... (Auto-saved · ⌘↵ to Stamp, ⎋ to Dismiss)"
-              className={`w-full h-full p-6 outline-none font-mono text-sm leading-relaxed resize-none ${
-                isDarkMode ? 'bg-[#0e0e0e] text-[#f3f3f2]' : 'bg-[#ffffff] text-[#0a0a0a]'
-              }`}
-            />
-          </div>
-        </div>
-
-        {/* ── Modal Footer with Instant Actions ── */}
-        <div
-          className={`flex items-center justify-between px-5 py-3 border-t shrink-0 ${
-            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/90' : 'border-[#e5e5e5] bg-[#f8f9fa]'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleClear}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-red-500/10 hover:border-red-500/30 text-red-500 text-xs font-mono font-bold transition-colors cursor-pointer"
-              title="Clear Scratchpad"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Clear
-            </button>
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--accent)] text-[var(--foreground)] text-xs font-mono font-bold transition-colors cursor-pointer"
-              title="Copy to Clipboard"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-              {copied ? 'Copied!' : activeTab === 'sketch' ? 'Copy PNG' : 'Copy Text'}
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleDismiss}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-[var(--border)] hover:bg-[var(--accent)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] text-xs font-mono font-bold transition-colors cursor-pointer"
-              title="Dismiss & Hide Note (Esc)"
-            >
-              Dismiss (⎋)
-            </button>
-
-            <button
-              onClick={handlePromoteToBoard}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[var(--foreground)] text-xs font-mono font-bold transition-colors cursor-pointer"
-              title="Save note as a permanent board in sidebar (⌘S)"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-[#e73f07]" />
-              Save as Board (⌘S)
-            </button>
-
-            <button
-              onClick={handleStamp}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl bg-[#e73f07] hover:bg-[#d03806] text-white text-xs font-mono font-bold shadow-md shadow-[#e73f07]/20 transition-all active:translate-y-px cursor-pointer"
-              title="Stamp onto active canvas and dismiss (⌘↵)"
-            >
-              <ArrowRightCircle className="w-4 h-4" />
-              {stamped ? 'Stamped!' : 'Stamp to Canvas (⌘↵)'}
-            </button>
-          </div>
+            <ArrowRightCircle className="w-3 h-3" />
+            {stamped ? 'Stamped!' : 'Stamp'}
+          </button>
         </div>
       </div>
+    </div>
+  );
+
+  // If running in standalone window mode, render directly without fullscreen backdrop
+  if (isStandalone) {
+    return (
+      <div className="w-screen h-screen flex items-center justify-center p-2 bg-transparent select-none">
+        {cardContent}
+      </div>
+    );
+  }
+
+  // Inside the main app, render with soft backdrop
+  return (
+    <div
+      onClick={handleDismiss}
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0a0a0a]/50 backdrop-blur-sm pointer-events-auto p-4 animate-in fade-in duration-150"
+    >
+      {cardContent}
     </div>
   );
 }

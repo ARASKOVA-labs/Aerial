@@ -500,6 +500,44 @@ export default function App() {
     showToastNotification('Quick Note saved as new board');
   }, [boards, canvasBgColor, gridType, switchBoard, isDarkMode, showToastNotification]);
 
+  // ── Sync Incoming Stamps from Standalone Quick Note Window ───────────────
+  useEffect(() => {
+    const checkIncomingStamps = () => {
+      const stampText = localStorage.getItem('aerial_quick_stamp_text');
+      if (stampText) {
+        localStorage.removeItem('aerial_quick_stamp_text');
+        handleStampText(stampText);
+      }
+      const stampSketch = localStorage.getItem('aerial_quick_stamp_sketch');
+      if (stampSketch) {
+        localStorage.removeItem('aerial_quick_stamp_sketch');
+        fetch(stampSketch)
+          .then((res) => res.blob())
+          .then((blob) => handleStampSketch(blob))
+          .catch((e) => logger.error('Failed to convert stamp sketch blob:', e));
+      }
+      const targetBoardId = localStorage.getItem('aerial_active_board_id');
+      if (targetBoardId && targetBoardId !== activeBoardId) {
+        const stored = localStorage.getItem('aerial_board_list');
+        if (stored) {
+          try {
+            setBoards(JSON.parse(stored));
+          } catch {
+            // ignore
+          }
+        }
+        switchBoard(targetBoardId);
+      }
+    };
+
+    window.addEventListener('focus', checkIncomingStamps);
+    window.addEventListener('storage', checkIncomingStamps);
+    return () => {
+      window.removeEventListener('focus', checkIncomingStamps);
+      window.removeEventListener('storage', checkIncomingStamps);
+    };
+  }, [handleStampText, handleStampSketch, activeBoardId, switchBoard]);
+
   // ── Mouse Position Tracking (for placing pasted screenshots right at the cursor) ──
   const mousePosRef = useRef<{ x: number; y: number }>({
     x: window.innerWidth / 2,

@@ -1,21 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 80" fill="none">
-  <!-- Aerial wordmark: stylized thin-weight display letterforms -->
-  <!-- The "horizon line" accent - evokes sky/aerial perspective -->
-  <line x1="0" y1="72" x2="280" y2="72" stroke="currentColor" stroke-width="0.6" stroke-opacity="0.25"/>
-  
-  <!-- AERIAL text using geometric paths for a custom feel -->
-  <!-- We use text with precise tracking for the wordmark -->
+  <defs>
+    <linearGradient id="logo-left" x1="16" y1="56" x2="36" y2="16" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c02602" />
+      <stop offset="0.6" stop-color="#e73f07" />
+      <stop offset="1" stop-color="#ff5722" />
+    </linearGradient>
+    <linearGradient id="logo-right" x1="56" y1="56" x2="36" y2="16" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e73f07" />
+      <stop offset="0.5" stop-color="#ff6b35" />
+      <stop offset="1" stop-color="#ff8c5a" />
+    </linearGradient>
+  </defs>
+
+  <!-- Aerodynamic Delta Mark -->
+  <g transform="translate(8, 8)">
+    <rect width="64" height="64" rx="16" fill="#0e0e0f" stroke="#262628" stroke-width="1.5" />
+    <path d="M 32 12 L 14 50 L 23 47 L 32 34 Z" fill="url(#logo-left)" />
+    <path d="M 32 12 L 32 34 L 41 47 L 50 50 Z" fill="url(#logo-right)" />
+    <line x1="20" y1="37" x2="44" y2="37" stroke="#f3f3f2" stroke-width="2.5" stroke-linecap="round" />
+    <polygon points="32,9 34,12 32,15 30,12" fill="#ffffff" />
+  </g>
+
+  <!-- AERIAL Wordmark in Rephen -->
   <text 
-    x="50%" 
-    y="56" 
-    text-anchor="middle"
-    font-family="'Rephen', 'Georgia', serif"
-    font-size="42"
-    letter-spacing="12"
+    x="92" 
+    y="52" 
+    font-family="'Rephen', 'Roboto', sans-serif"
+    font-size="34" 
+    letter-spacing="8" 
     fill="currentColor"
-    font-weight="400"
+    font-weight="700"
   >AERIAL</text>
   
-  <!-- Thin accent dot after the wordmark -->
-  <circle cx="264" cy="55" r="2.5" fill="#6366f1" opacity="0.9"/>
+  <!-- Supersonic Horizon Accent -->
+  <line x1="92" y1="62" x2="260" y2="62" stroke="#e73f07" stroke-width="1.5" stroke-opacity="0.6"/>
+  <circle cx="266" cy="62" r="2" fill="#e73f07" />
 </svg>

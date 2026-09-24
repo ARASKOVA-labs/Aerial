@@ -432,9 +432,25 @@ export default function App() {
     reader.readAsDataURL(pngBlob);
   }, []);
 
-  const handleStampText = useCallback((text: string) => {
-    canvasRef.current?.addText(text);
+  // ── Toast Notification HUD ────────────────────────────────────────────────
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const showToastNotification = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((cur) => (cur === msg ? null : cur));
+    }, 2500);
   }, []);
+
+  const handleStampText = useCallback((text: string) => {
+    const engine = canvasRef.current?.getEngine();
+    const cx = window.innerWidth / 2;
+    const cy = window.innerHeight / 2;
+    const wx = engine ? engine.screen_to_world_x(cx - 150) : 250;
+    const wy = engine ? engine.screen_to_world_y(cy - 50) : 250;
+    const textColor = isDarkMode ? '#f3f3f2' : '#0a0a0a';
+    canvasRef.current?.addText(text, wx, wy, 24, textColor);
+    showToastNotification('Note stamped to canvas');
+  }, [isDarkMode, showToastNotification]);
 
   const handleSaveQuickNoteAsBoard = useCallback(async (name: string, canvasState?: Uint8Array, textContent?: string) => {
     const newId = 'board_' + Date.now();
@@ -461,11 +477,28 @@ export default function App() {
     await switchBoard(newId);
 
     if (textContent) {
-      setTimeout(() => {
-        canvasRef.current?.addText(textContent);
-      }, 100);
+      const textColor = isDarkMode ? '#f3f3f2' : '#0a0a0a';
+      canvasRef.current?.addText(textContent, 100, 100, 24, textColor);
+      setTimeout(async () => {
+        const engine = canvasRef.current?.getEngine();
+        if (engine) {
+          try {
+            const stateBytes = engine.export_full_state();
+            let binary = '';
+            const chunkSize = 8192;
+            for (let i = 0; i < stateBytes.length; i += chunkSize) {
+              binary += String.fromCharCode.apply(null, stateBytes.subarray(i, i + chunkSize) as unknown as number[]);
+            }
+            const b64 = window.btoa(binary);
+            await invoke('save_board', { payloadB64: b64, boardId: newId });
+          } catch (err) {
+            logger.error('Failed to persist text board:', err);
+          }
+        }
+      }, 200);
     }
-  }, [boards, canvasBgColor, gridType, switchBoard]);
+    showToastNotification('Quick Note saved as new board');
+  }, [boards, canvasBgColor, gridType, switchBoard, isDarkMode, showToastNotification]);
 
   // ── Mouse Position Tracking (for placing pasted screenshots right at the cursor) ──
   const mousePosRef = useRef<{ x: number; y: number }>({
@@ -479,15 +512,6 @@ export default function App() {
     };
     window.addEventListener('pointermove', onPointerMove, { passive: true });
     return () => window.removeEventListener('pointermove', onPointerMove);
-  }, []);
-
-  // ── Toast Notification HUD ────────────────────────────────────────────────
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const showToastNotification = useCallback((msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => {
-      setToastMessage((cur) => (cur === msg ? null : cur));
-    }, 2500);
   }, []);
 
   // ── Universal Image & Screenshot Insertion (Pastes, Drops, Files) ─────────
@@ -566,6 +590,8 @@ export default function App() {
   // Global window paste listener for direct ⌘V screenshot insertion
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
+      if (showQuickCanvas || showDiagramModal || showTranslatorModal) return;
+
       const items = e.clipboardData?.items;
       if (!items) return;
 
@@ -598,7 +624,7 @@ export default function App() {
 
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [insertImageFile]);
+  }, [insertImageFile, showQuickCanvas, showDiagramModal, showTranslatorModal]);
 
   // ── Drag & Drop Screenshots & Image Files directly onto Canvas ─────────────
   const [isDraggingFile, setIsDraggingFile] = useState(false);

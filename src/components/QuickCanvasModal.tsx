@@ -82,6 +82,7 @@ export function QuickCanvasModal({
     }
   });
   const [showRecentMenu, setShowRecentMenu] = useState(false);
+  const recentMenuRef = useRef<HTMLDivElement>(null);
 
   const [copied, setCopied] = useState(false);
   const [stamped, setStamped] = useState(false);
@@ -89,18 +90,17 @@ export function QuickCanvasModal({
   const canvasRef = useRef<AerialCanvasRef>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // Restore sketch from localStorage
+  // Close recent notes dropdown when clicking outside
   useEffect(() => {
-    const savedSketch = localStorage.getItem('aerial_quick_note_state');
-    if (savedSketch && canvasRef.current) {
-      try {
-        const bytes = Uint8Array.from(atob(savedSketch), (c) => c.charCodeAt(0));
-        canvasRef.current.importFullState(bytes);
-      } catch (e) {
-        logger.error('Failed to restore quick sketch:', e);
+    if (!showRecentMenu) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (recentMenuRef.current && !recentMenuRef.current.contains(e.target as Node)) {
+        setShowRecentMenu(false);
       }
-    }
-  }, []);
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
+  }, [showRecentMenu]);
 
   // Save mode preference
   useEffect(() => {
@@ -115,7 +115,7 @@ export function QuickCanvasModal({
   // Periodic autosave for sketch
   useEffect(() => {
     const interval = setInterval(() => {
-      if (canvasRef.current && activeTab === 'sketch') {
+      if (canvasRef.current) {
         try {
           const state = canvasRef.current.exportFullState();
           if (state && state.length > 0) {
@@ -131,9 +131,9 @@ export function QuickCanvasModal({
       }
     }, 2000);
     return () => clearInterval(interval);
-  }, [activeTab]);
+  }, []);
 
-  // Instant Auto-Focus on Textarea for Laptop Users
+  // Instant Auto-Focus on Textarea when switching to text
   useEffect(() => {
     if (activeTab === 'text') {
       const timer = setTimeout(() => {
@@ -155,6 +155,60 @@ export function QuickCanvasModal({
     }
   }, [onClose, isOpenedFromBackground, onHideWindow]);
 
+  // Explicitly hide window (dock / tray)
+  const handleHide = useCallback(() => {
+    onClose();
+    if (onHideWindow) {
+      onHideWindow();
+    }
+  }, [onClose, onHideWindow]);
+
+  // Switch mode tabs seamlessly
+  const handleSwitchTab = useCallback((tab: 'text' | 'sketch') => {
+    setActiveTab(tab);
+    if (tab === 'sketch') {
+      requestAnimationFrame(() => {
+        canvasRef.current?.getEngine()?.render();
+      });
+    } else {
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          const len = textareaRef.current.value.length;
+          textareaRef.current.setSelectionRange(len, len);
+        }
+      });
+    }
+  }, []);
+
+  // Tool Selection Handlers
+  const handleSelectTool = useCallback((tool: ToolId) => {
+    setActiveTool(tool);
+    canvasRef.current?.setTool(tool);
+    if (tool !== 'eraser') {
+      canvasRef.current?.setStrokeColor(strokeColor);
+      canvasRef.current?.setStrokeWidth(strokeWidth);
+    }
+  }, [strokeColor, strokeWidth]);
+
+  const handleSelectColor = useCallback((color: string) => {
+    setStrokeColor(color);
+    if (activeTool === 'eraser') {
+      setActiveTool('freedraw');
+      canvasRef.current?.setTool('freedraw');
+    }
+    canvasRef.current?.setStrokeColor(color);
+  }, [activeTool]);
+
+  const handleSelectWidth = useCallback((width: number) => {
+    setStrokeWidth(width);
+    if (activeTool === 'eraser') {
+      setActiveTool('freedraw');
+      canvasRef.current?.setTool('freedraw');
+    }
+    canvasRef.current?.setStrokeWidth(width);
+  }, [activeTool]);
+
   // Save current note into Recent Archive
   const archiveCurrentNote = useCallback(() => {
     if (!textContent.trim()) return;
@@ -172,6 +226,15 @@ export function QuickCanvasModal({
       return updated;
     });
   }, [textContent]);
+
+  const handleDeleteRecentNote = useCallback((e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setRecentNotes((prev) => {
+      const updated = prev.filter((n) => n.id !== id);
+      localStorage.setItem('aerial_quick_notes_archive', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
 
   // Handle New Blank Note (⌘N)
   const handleNewNote = useCallback(() => {
@@ -194,7 +257,7 @@ export function QuickCanvasModal({
         setTimeout(() => {
           setStamped(false);
           handleDismiss();
-        }, 250);
+        }, 200);
       } catch (err) {
         logger.error('Failed to stamp sketch to canvas:', err);
       }
@@ -206,7 +269,7 @@ export function QuickCanvasModal({
       setTimeout(() => {
         setStamped(false);
         handleDismiss();
-      }, 250);
+      }, 200);
     }
   }, [activeTab, textContent, onStampSketch, onStampText, archiveCurrentNote, handleDismiss]);
 
@@ -220,30 +283,47 @@ export function QuickCanvasModal({
       const state = canvasRef.current.exportFullState();
       onSaveAsBoard(boardName, state, undefined);
     } else {
+      if (!textContent.trim()) return;
       archiveCurrentNote();
-      onSaveAsBoard(boardName, undefined, textContent);
+      onSaveAsBoard(boardName, undefined, textContent.trim());
     }
     handleDismiss();
   }, [activeTab, textContent, onSaveAsBoard, archiveCurrentNote, handleDismiss]);
 
-  // Handle Copy
+  // Handle Copy to Clipboard
   const handleCopy = useCallback(async () => {
     if (activeTab === 'sketch' && canvasRef.current) {
       try {
         const blob = await canvasRef.current.exportPngBlob();
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (navigator.clipboard?.write) {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } else {
+          throw new Error('Clipboard write not supported');
+        }
       } catch (err) {
         logger.error('Failed to copy quick canvas PNG:', err);
       }
     } else {
       try {
-        await navigator.clipboard.writeText(textContent);
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(textContent);
+        } else {
+          throw new Error('Clipboard writeText not supported');
+        }
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-      } catch (err) {
-        logger.error('Failed to copy quick note text:', err);
+      } catch {
+        // Fallback for Safari/restricted webview contexts
+        if (textareaRef.current) {
+          textareaRef.current.select();
+          document.execCommand('copy');
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        } else {
+          logger.error('Failed to copy quick note text');
+        }
       }
     }
   }, [activeTab, textContent]);
@@ -261,22 +341,25 @@ export function QuickCanvasModal({
     }
   }, [activeTab, archiveCurrentNote]);
 
-  // Text markdown helper actions
+  // Text markdown helper actions — retains cursor and selection
   const insertTextPrefix = useCallback((prefix: string, wrapSuffix = '') => {
-    if (!textareaRef.current) return;
     const el = textareaRef.current;
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
+    if (!el) return;
+    el.focus();
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
     const val = el.value;
     const selected = val.substring(start, end);
     const replacement = prefix + selected + wrapSuffix;
     const nextVal = val.substring(0, start) + replacement + val.substring(end);
     setTextContent(nextVal);
-    setTimeout(() => {
-      el.focus();
-      const cursorTarget = start + prefix.length + selected.length;
-      el.setSelectionRange(cursorTarget, cursorTarget);
-    }, 0);
+    const cursorTarget = start + prefix.length + selected.length;
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(cursorTarget, cursorTarget);
+      }
+    });
   }, []);
 
   // Handle Paste event inside Quick Canvas (Screenshots & Images)
@@ -290,6 +373,7 @@ export function QuickCanvasModal({
           const file = item.getAsFile();
           if (file) {
             e.preventDefault();
+            e.stopPropagation();
             const reader = new FileReader();
             reader.onload = (ev) => {
               const dataUrl = ev.target?.result as string;
@@ -335,28 +419,28 @@ export function QuickCanvasModal({
       if (isCmdOrCtrl) {
         if (e.key === '1') {
           e.preventDefault();
-          setActiveTab('text');
+          handleSwitchTab('text');
         } else if (e.key === '2') {
           e.preventDefault();
-          setActiveTab('sketch');
+          handleSwitchTab('sketch');
         } else if (e.key === 'Enter') {
           e.preventDefault();
           handleStamp();
         } else if (e.key.toLowerCase() === 's') {
           e.preventDefault();
           handlePromoteToBoard();
-        } else if (e.key.toLowerCase() === 'n') {
+        } else if (e.key.toLowerCase() === 'n' && activeTab === 'text') {
           e.preventDefault();
           handleNewNote();
         } else if (e.key.toLowerCase() === 'h') {
           e.preventDefault();
-          handleDismiss();
+          handleHide();
         }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleStamp, handlePromoteToBoard, handleNewNote, handleDismiss]);
+  }, [handleStamp, handlePromoteToBoard, handleNewNote, handleDismiss, handleHide, handleSwitchTab, activeTab]);
 
   const paletteColors = ['#e73f07', '#f3f3f2', '#06b6d4', '#10b981', '#f59e0b', '#a855f7'];
 
@@ -407,7 +491,7 @@ export function QuickCanvasModal({
           {/* Mode Switcher Tabs */}
           <div className="flex items-center gap-1 p-1 rounded-xl bg-[var(--secondary)] border border-[var(--border)]">
             <button
-              onClick={() => setActiveTab('text')}
+              onClick={() => handleSwitchTab('text')}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
                 activeTab === 'text'
                   ? 'bg-[#e73f07] text-white shadow-xs'
@@ -419,7 +503,7 @@ export function QuickCanvasModal({
               Text <span className="opacity-60 text-[9px]">⌘1</span>
             </button>
             <button
-              onClick={() => setActiveTab('sketch')}
+              onClick={() => handleSwitchTab('sketch')}
               className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
                 activeTab === 'sketch'
                   ? 'bg-[#e73f07] text-white shadow-xs'
@@ -435,14 +519,14 @@ export function QuickCanvasModal({
           <div className="flex items-center gap-1">
             {onHideWindow && (
               <button
-                onClick={handleDismiss}
+                onClick={handleHide}
                 className="h-8 px-2.5 rounded-lg flex items-center gap-1 hover:bg-[var(--accent)] transition-colors cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--foreground)] text-[10px] font-mono"
                 title="Dismiss & Hide to Background (Esc / ⌘H)"
               >
                 <Minimize2 className="w-3.5 h-3.5" />
                 <span className="hidden md:inline">Hide</span>
                 <kbd className="px-1 py-0.5 rounded bg-[var(--secondary)] border border-[var(--border)] text-[9px]">
-                  ⎋
+                  ⌘H
                 </kbd>
               </button>
             )}
@@ -465,10 +549,7 @@ export function QuickCanvasModal({
           >
             <div className="flex items-center gap-1">
               <button
-                onClick={() => {
-                  setActiveTool('freedraw');
-                  canvasRef.current?.setTool('freedraw');
-                }}
+                onClick={() => handleSelectTool('freedraw')}
                 className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
                   activeTool === 'freedraw'
                     ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
@@ -479,10 +560,7 @@ export function QuickCanvasModal({
                 <Pen className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => {
-                  setActiveTool('highlighter');
-                  canvasRef.current?.setTool('highlighter');
-                }}
+                onClick={() => handleSelectTool('highlighter')}
                 className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
                   activeTool === 'highlighter'
                     ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
@@ -493,10 +571,7 @@ export function QuickCanvasModal({
                 <Highlighter className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => {
-                  setActiveTool('magic_pen');
-                  canvasRef.current?.setTool('magic_pen');
-                }}
+                onClick={() => handleSelectTool('magic_pen')}
                 className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
                   activeTool === 'magic_pen'
                     ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
@@ -507,10 +582,7 @@ export function QuickCanvasModal({
                 <Wand2 className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => {
-                  setActiveTool('text');
-                  canvasRef.current?.setTool('text');
-                }}
+                onClick={() => handleSelectTool('text')}
                 className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
                   activeTool === 'text'
                     ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
@@ -521,10 +593,7 @@ export function QuickCanvasModal({
                 <Type className="w-3.5 h-3.5" />
               </button>
               <button
-                onClick={() => {
-                  setActiveTool('eraser');
-                  canvasRef.current?.setTool('eraser');
-                }}
+                onClick={() => handleSelectTool('eraser')}
                 className={`p-1.5 rounded-lg border text-xs cursor-pointer ${
                   activeTool === 'eraser'
                     ? 'border-[#e73f07] bg-[#e73f07]/20 text-[#e73f07]'
@@ -542,10 +611,7 @@ export function QuickCanvasModal({
                 {paletteColors.map((c) => (
                   <button
                     key={c}
-                    onClick={() => {
-                      setStrokeColor(c);
-                      canvasRef.current?.setStrokeColor?.(c);
-                    }}
+                    onClick={() => handleSelectColor(c)}
                     style={{ backgroundColor: c }}
                     className={`w-4 h-4 rounded-full transition-transform cursor-pointer ${
                       strokeColor === c ? 'scale-125 ring-2 ring-white/50' : 'opacity-80 hover:opacity-100'
@@ -561,10 +627,7 @@ export function QuickCanvasModal({
                 {[1.5, 2.5, 5, 8].map((sz) => (
                   <button
                     key={sz}
-                    onClick={() => {
-                      setStrokeWidth(sz);
-                      canvasRef.current?.setStrokeWidth?.(sz);
-                    }}
+                    onClick={() => handleSelectWidth(sz)}
                     className={`px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer ${
                       strokeWidth === sz
                         ? 'bg-[var(--accent)] text-[var(--foreground)] font-bold'
@@ -581,14 +644,14 @@ export function QuickCanvasModal({
               <button
                 onClick={() => canvasRef.current?.undo?.()}
                 className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-                title="Undo"
+                title="Undo (⌘Z)"
               >
                 <Undo className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => canvasRef.current?.redo?.()}
                 className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] transition-colors cursor-pointer"
-                title="Redo"
+                title="Redo (⌘⇧Z / ⌘Y)"
               >
                 <Redo className="w-3.5 h-3.5" />
               </button>
@@ -603,44 +666,49 @@ export function QuickCanvasModal({
             {/* Quick-insert pills for rapid laptop note taking */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <button
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => insertTextPrefix('- [ ] ')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
                 title="Insert Todo item"
               >
                 <ListTodo className="w-3 h-3 text-[#e73f07]" />
                 Todo
               </button>
               <button
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => insertTextPrefix('💡 ')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
                 title="Insert Idea note"
               >
                 <Lightbulb className="w-3 h-3 text-amber-500" />
                 Idea
               </button>
               <button
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => insertTextPrefix('[', '](url)')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
                 title="Insert Markdown Link"
               >
                 <Link2 className="w-3 h-3 text-cyan-500" />
                 Link
               </button>
               <button
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   const now = new Date();
                   const time = `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}] `;
                   insertTextPrefix(time);
                 }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
                 title="Insert Timestamp"
               >
                 <Clock className="w-3 h-3 text-emerald-500" />
                 Time
               </button>
               <button
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => insertTextPrefix('```\n', '\n```')}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer select-none"
                 title="Insert Code block"
               >
                 <Code2 className="w-3 h-3 text-purple-500" />
@@ -660,7 +728,7 @@ export function QuickCanvasModal({
               </button>
 
               {recentNotes.length > 0 && (
-                <div className="relative">
+                <div className="relative" ref={recentMenuRef}>
                   <button
                     onClick={() => setShowRecentMenu((v) => !v)}
                     className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[var(--border)] bg-[var(--secondary)] hover:bg-[var(--accent)] text-[11px] font-mono text-[var(--foreground)] transition-colors cursor-pointer"
@@ -689,14 +757,23 @@ export function QuickCanvasModal({
                             setShowRecentMenu(false);
                             textareaRef.current?.focus();
                           }}
-                          className="px-2 py-1.5 rounded-lg text-xs font-mono hover:bg-[var(--accent)] transition-colors cursor-pointer flex flex-col gap-0.5 truncate"
+                          className="px-2 py-1.5 rounded-lg text-xs font-mono hover:bg-[var(--accent)] transition-colors cursor-pointer flex items-center justify-between gap-1 group"
                         >
-                          <span className="truncate text-[var(--foreground)]">
-                            {note.text.split('\n')[0] || 'Untitled Note'}
-                          </span>
-                          <span className="text-[9px] text-[var(--muted-foreground)]">
-                            {note.timeStr}
-                          </span>
+                          <div className="flex flex-col gap-0.5 truncate flex-1 min-w-0">
+                            <span className="truncate text-[var(--foreground)]">
+                              {note.text.split('\n')[0] || 'Untitled Note'}
+                            </span>
+                            <span className="text-[9px] text-[var(--muted-foreground)]">
+                              {note.timeStr}
+                            </span>
+                          </div>
+                          <button
+                            onClick={(e) => handleDeleteRecentNote(e, note.id)}
+                            className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-red-500 transition-opacity"
+                            title="Delete this note"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -707,18 +784,48 @@ export function QuickCanvasModal({
           </div>
         )}
 
-        {/* ── Main Content Area ── */}
+        {/* ── Main Content Area (Dual persistent layers keep WASM & Text live) ── */}
         <div className="flex-1 relative overflow-hidden">
-          {activeTab === 'sketch' ? (
-            <div className="w-full h-full relative">
-              <AerialCanvas
-                ref={canvasRef}
-                theme={isDarkMode ? 'dark' : 'light'}
-                showToolbar={false}
-                eraserSize={eraserSize}
-              />
-            </div>
-          ) : (
+          {/* Sketch Layer */}
+          <div
+            className="absolute inset-0 w-full h-full"
+            style={{
+              visibility: activeTab === 'sketch' ? 'visible' : 'hidden',
+              pointerEvents: activeTab === 'sketch' ? 'auto' : 'none',
+              zIndex: activeTab === 'sketch' ? 10 : 0,
+            }}
+          >
+            <AerialCanvas
+              ref={canvasRef}
+              theme={isDarkMode ? 'dark' : 'light'}
+              showToolbar={false}
+              eraserSize={eraserSize}
+              onReady={(api) => {
+                api.setTool(activeTool);
+                api.setStrokeColor(strokeColor);
+                api.setStrokeWidth(strokeWidth);
+                const savedSketch = localStorage.getItem('aerial_quick_note_state');
+                if (savedSketch) {
+                  try {
+                    const bytes = Uint8Array.from(atob(savedSketch), (c) => c.charCodeAt(0));
+                    api.importFullState(bytes);
+                  } catch (e) {
+                    logger.error('Failed to restore quick sketch on ready:', e);
+                  }
+                }
+              }}
+            />
+          </div>
+
+          {/* Text Layer */}
+          <div
+            className="absolute inset-0 w-full h-full"
+            style={{
+              visibility: activeTab === 'text' ? 'visible' : 'hidden',
+              pointerEvents: activeTab === 'text' ? 'auto' : 'none',
+              zIndex: activeTab === 'text' ? 10 : 0,
+            }}
+          >
             <textarea
               ref={textareaRef}
               value={textContent}
@@ -728,7 +835,7 @@ export function QuickCanvasModal({
                 isDarkMode ? 'bg-[#0e0e0e] text-[#f3f3f2]' : 'bg-[#ffffff] text-[#0a0a0a]'
               }`}
             />
-          )}
+          </div>
         </div>
 
         {/* ── Modal Footer with Instant Actions ── */}

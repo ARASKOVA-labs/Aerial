@@ -37,3 +37,9 @@ tauri-plugin-global-shortcut = "2"
 default = ["custom-protocol"]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

@@ -171,8 +171,9 @@ def create_app_icon(size=512):
     return final_img
 
 def main():
+    import subprocess
     print("Generating Aerial Supersonic Delta icons...")
-    # Tray Icons (macOS template: crisp transparent PNGs)
+    # 1. Tray Icons (macOS template: crisp transparent PNGs)
     tray_32 = create_tray_icon(32)
     tray_32.save(os.path.join(OUTPUT_DIR, "tray-icon.png"), "PNG")
     with open(os.path.join(OUTPUT_DIR, "tray-icon.rgba"), "wb") as f:
@@ -181,25 +182,33 @@ def main():
     tray_64.save(os.path.join(OUTPUT_DIR, "tray-icon@2x.png"), "PNG")
     print("  ✓ Saved tray-icon.png (32x32), tray-icon.rgba & tray-icon@2x.png (64x64)")
 
-    # App Icons
-    app_512 = create_app_icon(512)
-    app_512.save(os.path.join(OUTPUT_DIR, "icon.png"), "PNG")
-    app_512.save(os.path.join(OUTPUT_DIR, "app-icon-fixed.png"), "PNG")
-    app_512.save(os.path.join(OUTPUT_DIR, "app-icon.png"), "PNG")
+    # 2. Master App Icon (1024x1024 Retina)
+    app_1024 = create_app_icon(1024)
+    master_path = os.path.join(OUTPUT_DIR, "icon-1024.png")
+    app_1024.save(master_path, "PNG")
+    app_1024.save(os.path.join(OUTPUT_DIR, "icon.png"), "PNG")
+    app_1024.save(os.path.join(OUTPUT_DIR, "app-icon.png"), "PNG")
+    app_1024.save(os.path.join(OUTPUT_DIR, "app-icon-fixed.png"), "PNG")
+    print("  ✓ Saved master 1024x1024 app icon")
 
-    app_128 = create_app_icon(128)
-    app_128.save(os.path.join(OUTPUT_DIR, "128x128.png"), "PNG")
+    # 3. Generate native platform icons (.icns for macOS, .ico for Windows, all PNG sizes)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    print("  ✓ Compiling native platform icons (.icns & .ico) via @tauri-apps/cli...")
+    subprocess.run(
+        ["npx", "@tauri-apps/cli", "icon", master_path, "--output", OUTPUT_DIR],
+        cwd=project_root,
+        check=True
+    )
 
-    app_256 = create_app_icon(256)
-    app_256.save(os.path.join(OUTPUT_DIR, "128x128@2x.png"), "PNG")
+    # 4. Re-ensure tray icon RGBA bytes are untouched
+    with open(os.path.join(OUTPUT_DIR, "tray-icon.rgba"), "wb") as f:
+        f.write(tray_32.tobytes())
 
+    # 5. Also save favicon in public/
+    public_dir = os.path.join(project_root, "public")
     app_32 = create_app_icon(32)
-    app_32.save(os.path.join(OUTPUT_DIR, "32x32.png"), "PNG")
-
-    # Also save favicon in public/
-    public_dir = os.path.join(os.path.dirname(__file__), "..", "public")
     app_32.save(os.path.join(public_dir, "favicon.png"), "PNG")
-    print("  ✓ Saved app icon set: icon.png, 128x128, 128x128@2x, 32x32")
+    print("  ✓ Final installation icons successfully updated!")
 
 if __name__ == "__main__":
     main()

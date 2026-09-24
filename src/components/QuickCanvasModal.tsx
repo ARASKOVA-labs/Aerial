@@ -110,18 +110,24 @@ export function QuickCanvasModal({
     localStorage.setItem('aerial_quick_note_text', textContent);
   }, [textContent]);
 
-  // Periodic autosave for sketch
+  // Periodic autosave for sketch (runs ONLY when in sketch mode and canvas modified)
   useEffect(() => {
+    if (activeTab !== 'sketch') return;
     const interval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (canvasRef.current) {
         try {
-          const state = canvasRef.current.exportFullState();
-          if (state && state.length > 0) {
-            let binary = '';
-            for (let i = 0; i < state.length; i++) {
-              binary += String.fromCharCode(state[i]);
+          const engine = canvasRef.current.getEngine();
+          if (engine && engine.check_and_clear_dirty()) {
+            const state = canvasRef.current.exportFullState();
+            if (state && state.length > 0) {
+              let binary = '';
+              const chunkSize = 8192;
+              for (let i = 0; i < state.length; i += chunkSize) {
+                binary += String.fromCharCode.apply(null, state.subarray(i, i + chunkSize) as unknown as number[]);
+              }
+              localStorage.setItem('aerial_quick_note_state', btoa(binary));
             }
-            localStorage.setItem('aerial_quick_note_state', btoa(binary));
           }
         } catch (e) {
           logger.error('Failed to autosave quick sketch:', e);
@@ -129,7 +135,7 @@ export function QuickCanvasModal({
       }
     }, 2000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeTab]);
 
   // Instant Auto-Focus on Textarea when switching to text
   useEffect(() => {

@@ -370,6 +370,10 @@ export function QuickCanvasModal({
 
   const cardContent = (
     <div
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
       className={`relative w-full flex flex-col rounded-2xl border shadow-2xl overflow-hidden transition-all duration-200 ${
         activeTab === 'text'
@@ -727,7 +731,14 @@ export function QuickCanvasModal({
   // If running in standalone window mode, render directly without fullscreen backdrop
   if (isStandalone) {
     return (
-      <div className="w-screen h-screen flex items-center justify-center p-2 bg-transparent select-none">
+      <div
+        onPointerDown={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        className="w-screen h-screen flex items-center justify-center p-2 bg-transparent select-none"
+      >
         {cardContent}
       </div>
     );
@@ -736,6 +747,11 @@ export function QuickCanvasModal({
   // Inside the main app, render with soft backdrop
   return (
     <div
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
       className="fixed inset-0 z-[90] flex items-center justify-center bg-[#0a0a0a]/50 backdrop-blur-sm pointer-events-auto p-4 animate-in fade-in duration-150"
     >
       {cardContent}

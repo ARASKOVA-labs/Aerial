@@ -21,7 +21,9 @@ import {
   Code,
   Clock,
   Trash2,
+  GripHorizontal,
 } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { AerialCanvas } from './AerialCanvas';
 import type { AerialCanvasRef, ToolId } from '../lib/types';
 import { createLogger } from '../lib/logger';
@@ -375,22 +377,39 @@ export function QuickCanvasModal({
   // Word count calculation
   const wordCount = textContent.trim() ? textContent.trim().split(/\s+/).length : 0;
 
+  // Drag window handler for standalone mode
+  const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button') || target.closest('input') || target.closest('select') || target.closest('textarea')) {
+      return;
+    }
+    if (isStandalone) {
+      try {
+        getCurrentWindow().startDragging();
+      } catch (err) {
+        logger.debug('startDragging failed:', err);
+      }
+    }
+  }, [isStandalone]);
+
   const cardContent = (
     <div
-      onPointerDown={(e) => e.stopPropagation()}
-      onMouseDown={(e) => e.stopPropagation()}
-      onPointerUp={(e) => e.stopPropagation()}
-      onMouseUp={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => {
+        if (!isStandalone) e.stopPropagation();
+      }}
+      onClick={(e) => {
+        if (!isStandalone) e.stopPropagation();
+      }}
       className={`relative w-full flex flex-col rounded-2xl border shadow-2xl overflow-hidden transition-all duration-200 ${
         isStandalone
           ? 'w-full h-full max-w-full max-h-full'
           : 'max-w-[540px] h-[320px]'
       } ${
         isDarkMode
-          ? 'bg-[#111111]/95 border-[#2a2a2a] text-[#f3f3f2] shadow-black/80'
-          : 'bg-[#ffffff]/95 border-[#e5e5e5] text-[#0a0a0a] shadow-xl'
-      } backdrop-blur-2xl`}
+          ? 'bg-[#000000] border-[#2a2a2a] text-[#f3f3f2] shadow-black'
+          : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a] shadow-xl'
+      }`}
     >
       {/* Tactical Corner Reticles */}
       <div className="absolute top-2 left-2 w-2 h-2 border-t border-l border-[#e73f07]/50 pointer-events-none z-20" />
@@ -400,22 +419,31 @@ export function QuickCanvasModal({
 
       {/* ── 1. Minimal 34px Header Bar ── */}
       <div
+        data-tauri-drag-region
+        onMouseDown={handleHeaderMouseDown}
         className={`flex items-center justify-between px-3.5 py-2 border-b shrink-0 select-none ${
-          isDarkMode ? 'border-[#222222] bg-[#0c0c0c]/80' : 'border-[#eeeeee] bg-[#f8f9fa]/80'
+          isStandalone ? 'cursor-grab active:cursor-grabbing' : ''
+        } ${
+          isDarkMode ? 'border-[#1f1f1f] bg-[#000000]' : 'border-[#eeeeee] bg-[#f8f9fa]'
         }`}
       >
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07] animate-pulse" />
-          <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[var(--foreground)]">
+        <div data-tauri-drag-region className="flex items-center gap-2">
+          {isStandalone && (
+            <GripHorizontal className="w-3.5 h-3.5 text-neutral-500 opacity-60 pointer-events-none" />
+          )}
+          <span className="w-1.5 h-1.5 rounded-full bg-[#e73f07] animate-pulse pointer-events-none" />
+          <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-[var(--foreground)] pointer-events-none">
             Quick Note
           </span>
-          <span className="text-[9px] font-mono text-[var(--muted-foreground)] opacity-70">
+          <span className="text-[9px] font-mono text-[var(--muted-foreground)] opacity-70 pointer-events-none">
             ⌥Space
           </span>
         </div>
 
         {/* Minimal Mode Pills: Text vs Ink */}
-        <div className="flex items-center p-0.5 rounded-lg bg-[var(--secondary)] border border-[var(--border)]">
+        <div className={`flex items-center p-0.5 rounded-lg border ${
+          isDarkMode ? 'bg-[#111111] border-[#222222]' : 'bg-[var(--secondary)] border-[var(--border)]'
+        }`}>
           <button
             onClick={() => handleSwitchTab('text')}
             className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
@@ -508,7 +536,7 @@ export function QuickCanvasModal({
       </div>
 
       {/* ── 2. Content Area (Zero distractions) ── */}
-      <div className="flex-1 min-h-0 relative overflow-hidden">
+      <div className={`flex-1 min-h-0 relative overflow-hidden ${isDarkMode ? 'bg-[#000000]' : 'bg-white'}`}>
         {/* Sketch Layer */}
         <div
           className="absolute inset-0 w-full h-full"
@@ -554,8 +582,8 @@ export function QuickCanvasModal({
             value={textContent}
             onChange={(e) => setTextContent(e.target.value)}
             placeholder="Type instant notes, tasks, code... (Auto-saved · ⌘↵ to Stamp, ⎋ to dismiss)"
-            className={`w-full h-full p-4 outline-none font-mono text-[13px] leading-relaxed resize-none bg-transparent ${
-              isDarkMode ? 'text-[#f3f3f2] placeholder-neutral-600' : 'text-[#0a0a0a] placeholder-neutral-400'
+            className={`w-full h-full p-4 outline-none font-mono text-[13px] leading-relaxed resize-none ${
+              isDarkMode ? 'bg-[#000000] text-[#f3f3f2] placeholder-neutral-600' : 'bg-white text-[#0a0a0a] placeholder-neutral-400'
             }`}
           />
         </div>
@@ -564,7 +592,7 @@ export function QuickCanvasModal({
       {/* ── 3. Single Streamlined 32px Action Strip ── */}
       <div
         className={`flex items-center justify-between px-3 py-1.5 border-t shrink-0 select-none ${
-          isDarkMode ? 'border-[#222222] bg-[#0c0c0c]/90' : 'border-[#eeeeee] bg-[#f8f9fa]/90'
+          isDarkMode ? 'border-[#1f1f1f] bg-[#000000]' : 'border-[#eeeeee] bg-[#f8f9fa]'
         }`}
       >
         {activeTab === 'text' ? (
@@ -738,14 +766,7 @@ export function QuickCanvasModal({
   // If running in standalone window mode, render directly without fullscreen backdrop
   if (isStandalone) {
     return (
-      <div
-        onPointerDown={(e) => e.stopPropagation()}
-        onMouseDown={(e) => e.stopPropagation()}
-        onPointerUp={(e) => e.stopPropagation()}
-        onMouseUp={(e) => e.stopPropagation()}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full h-full flex items-center justify-center bg-transparent select-none overflow-hidden"
-      >
+      <div className="w-full h-full flex items-center justify-center bg-transparent select-none overflow-hidden">
         {cardContent}
       </div>
     );

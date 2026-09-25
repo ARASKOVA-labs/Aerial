@@ -147,6 +147,7 @@
     box-shadow: none !important;
     border: none !important;
     outline: none !important;
+    overscroll-behavior: none !important;
   }
 
   body {

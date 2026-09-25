@@ -36,7 +36,18 @@ When opening Quick Notes on macOS in standalone mode, a sharp rectangular border
    - The card now maps directly to the window boundaries with its own `rounded-2xl border border-[#2a2a2a]`.
    - Outside the curved corner radius of the card, all pixels are 100% transparent alpha (`rgba(0,0,0,0)`), allowing the macOS desktop wallpaper to show through cleanly without any boxy artifacts.
 
+4. **WKWebView Native Transparency (`macos-private-api` & `macOSPrivateApi: true`)**:
+   - In macOS WebKit, WKWebView defaults to `drawsBackground = YES` (solid white background). On frameless transparent windows with rounded borders, any transparent pixels outside the corner radius displayed as white wedges ("weird white corners").
+   - Added `"macOSPrivateApi": true` in `tauri.conf.json` under `"app"` and enabled the `"macos-private-api"` feature flag on `tauri` in `src-tauri/Cargo.toml`. This activates `wry/transparent`, allowing Tauri to set WKWebView `drawsBackground = NO`.
+   - Programmatically set `q_win.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)))` in `lib.rs`.
+5. **Pure Pitch-Black Invariant (`#000000`)**:
+   - Replaced all translucent/greyish backgrounds (`bg-[#111111]/95`, `backdrop-blur-2xl`, `bg-[#0c0c0c]/80`) with solid pitch black (`bg-[#000000]`) on the card frame, header bar, textarea layer, and bottom action strip.
+6. **Native Window Dragging**:
+   - Attached `data-tauri-drag-region` and `onMouseDown={handleHeaderMouseDown}` (`getCurrentWindow().startDragging()`) to the header bar.
+   - Added a tactical drag grip (`GripHorizontal`) with `cursor-grab active:cursor-grabbing` on the header, while properly exempting interactive controls (buttons, mode pills, inputs) so clicking tools remains responsive.
+
 ## Consequences
-- The sharp rectangular outer border and black corner wedges are completely eliminated.
-- The curvy panel with its military-grade reticles and rounded corners floats natively on the macOS desktop.
-- 100% compliant with Araskova brutalist design specifications.
+- The sharp rectangular outer border, black corner wedges, and WKWebView white corners are 100% eliminated.
+- The panel renders in pure pitch black (`#000000`), with zero greyish bleedthrough.
+- The Quick Note window is fully draggable anywhere on the screen by its header bar.
+- Fully compliant with Araskova brutalist design standards.

@@ -23,6 +23,7 @@
   "identifier": "com.araskova.aerial",
   "plugins": {},
   "app": {
+    "macOSPrivateApi": true,
     "security": {
       "csp": {
         "default-src": "'self'",

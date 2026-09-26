@@ -479,12 +479,14 @@ export function applyAraskovaDiagramAesthetics(
     });
 
     // 4. Update Node fills, strokes, and texts in DOM to guarantee theme sync
-    const nodeShapes = doc.querySelectorAll('.node rect, .node circle, .node polygon, .node path');
+    const nodeShapes = doc.querySelectorAll(
+      '.node rect, .node circle, .node polygon, .node path, .stateGroup rect, .statediagram-state rect, .statediagram-state circle, .classGroup rect'
+    );
     nodeShapes.forEach((el) => {
-      const nodeGroup = el.closest('g.node') || el.closest('.node');
+      const nodeGroup = el.closest('g.node') || el.closest('.node') || el.closest('.stateGroup') || el.closest('.statediagram-state') || el.closest('.classGroup');
       const classes = (nodeGroup?.getAttribute('class') || '').split(/\s+/);
       const isCustomClass = classes.some(
-        (c) => c && c !== 'node' && c !== 'default' && !c.startsWith('flowchart-')
+        (c) => c && c !== 'node' && c !== 'default' && !c.startsWith('flowchart-') && !c.startsWith('statediagram-')
       );
 
       let inlineFill = el.getAttribute('fill') || '';
@@ -518,10 +520,12 @@ export function applyAraskovaDiagramAesthetics(
       el.removeAttribute('filter');
     });
 
-    const nodeTexts = doc.querySelectorAll('.node text, .nodeLabel, .node span, text.actor');
+    const nodeTexts = doc.querySelectorAll(
+      '.node text, .nodeLabel, .node span, text.actor, .stateGroup text, .stateGroup .state-title, .statediagram-state text, .classTitleText, .classText'
+    );
     nodeTexts.forEach((el) => {
       // Dynamic Contrast Guard: Inspect parent node's background fill
-      const nodeGroup = el.closest('g.node') || el.closest('.node');
+      const nodeGroup = el.closest('g.node') || el.closest('.node') || el.closest('.stateGroup') || el.closest('.statediagram-state') || el.closest('.classGroup');
       let shapeFill = '';
       if (nodeGroup) {
         const shape = nodeGroup.querySelector('rect, circle, polygon, path');
@@ -553,21 +557,27 @@ export function applyAraskovaDiagramAesthetics(
       r.removeAttribute('filter');
     });
 
-    // 6. Update Edges and Labels
-    const edgePaths = doc.querySelectorAll('.edgePath .path, .flowchart-link');
+    // 6. Update Edges and Labels (Flowcharts & State Diagrams)
+    const edgePaths = doc.querySelectorAll('.edgePath .path, .flowchart-link, .transition, path.transition');
     edgePaths.forEach((p) => {
       p.setAttribute('stroke', lineCol);
     });
 
-    const edgeLabelRects = doc.querySelectorAll('.edgeLabel rect');
+    const edgeLabelRects = doc.querySelectorAll('.edgeLabel rect, .statediagram-transition rect');
     edgeLabelRects.forEach((r) => {
       r.setAttribute('fill', isDark ? '#27272a' : '#ffffff');
       r.setAttribute('stroke', brandBorder);
     });
 
+    const edgeLabelTexts = doc.querySelectorAll('.edgeLabel text, .edgeLabel span, .statediagram-transition text');
+    edgeLabelTexts.forEach((t) => {
+      t.setAttribute('fill', brandAccent);
+      (t as HTMLElement).style.color = brandAccent;
+    });
+
     // 7. Purge all drop-shadow filters from the SVG DOM to guarantee crispness
     const elementsWithFilter = doc.querySelectorAll('[filter]');
-    elementsWithFilter.forEach(el => el.removeAttribute('filter'));
+    elementsWithFilter.forEach((el) => el.removeAttribute('filter'));
 
     // 8. Inject precision sharp arrowhead marker with chosen accent color
     let markerEl = doc.querySelector('#araskova-arrow-head');

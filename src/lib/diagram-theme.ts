@@ -133,8 +133,8 @@ export function getAraskovaMermaidConfig(
       font-weight: 700 !important;
       font-size: 13px !important;
       letter-spacing: -0.01em !important;
-      fill: ${textPrimary} !important;
-      color: ${textPrimary} !important;
+      fill: ${textPrimary};
+      color: ${textPrimary};
     }
 
     /* Edge Connectors & Technical Lines */
@@ -301,6 +301,101 @@ export function getAraskovaMermaidConfig(
   };
 }
 
+// ── Color Utilities for Dual-Theme Adaptations ──────────────────────────────
+function hexToHsl(hex: string): [number, number, number] {
+  hex = hex.replace('#', '').trim();
+  if (hex.length === 3) hex = hex.split('').map((x) => x + x).join('');
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b),
+    min = Math.min(r, g, b);
+  let h = 0,
+    s = 0,
+    l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r:
+        h = (g - b) / d + (g < b ? 6 : 0);
+        break;
+      case g:
+        h = (b - r) / d + 2;
+        break;
+      case b:
+        h = (r - g) / d + 4;
+        break;
+    }
+    h /= 6;
+  }
+  return [h * 360, s, l];
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  h = ((h % 360) + 360) % 360;
+  h /= 360;
+  const hue2rgb = (p: number, q: number, t: number) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  let r: number, g: number, b: number;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  const toHex = (x: number) => Math.round(Math.max(0, Math.min(255, x * 255))).toString(16).padStart(2, '0');
+  return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+
+function parseColorToHsl(colorStr: string): [number, number, number] | null {
+  if (!colorStr) return null;
+  const c = colorStr.trim().toLowerCase();
+  if (c.startsWith('#')) {
+    return hexToHsl(c);
+  }
+  if (c.startsWith('rgb')) {
+    const m = c.match(/\d+/g);
+    if (m && m.length >= 3) {
+      const r = parseInt(m[0], 10) / 255;
+      const g = parseInt(m[1], 10) / 255;
+      const b = parseInt(m[2], 10) / 255;
+      const max = Math.max(r, g, b),
+        min = Math.min(r, g, b);
+      let h = 0,
+        s = 0,
+        l = (max + min) / 2;
+      if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+          case r:
+            h = (g - b) / d + (g < b ? 6 : 0);
+            break;
+          case g:
+            h = (b - r) / d + 2;
+            break;
+          case b:
+            h = (r - g) / d + 4;
+            break;
+        }
+        h /= 6;
+      }
+      return [h * 360, s, l];
+    }
+  }
+  return null;
+}
+
 /**
  * Architectural SVG Post-Processor:
  * 1. Enforces explicit pixel width & height from viewBox so Image loading in canvas never produces 0x0.
@@ -365,17 +460,58 @@ export function applyAraskovaDiagramAesthetics(
     }
     themeStyleEl.textContent = themeCSS;
 
+    // 3b. Adapt light-mode pastel classDef fills in SVG <style> blocks when in dark mode
+    const styleTags = doc.querySelectorAll('style:not(#araskova-theme-override)');
+    styleTags.forEach((styleTag) => {
+      let content = styleTag.textContent || '';
+      if (isDark) {
+        content = content.replace(/fill\s*:\s*(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\))/gi, (match, color) => {
+          const hsl = parseColorToHsl(color);
+          if (hsl && hsl[2] >= 0.55) {
+            // Light pastel fill detected in dark mode: map to rich dark machinery surface
+            const darkHex = hslToHex(hsl[0], Math.min(hsl[1], 0.65), 0.12);
+            return `fill: ${darkHex}`;
+          }
+          return match;
+        });
+      }
+      styleTag.textContent = content;
+    });
+
     // 4. Update Node fills, strokes, and texts in DOM to guarantee theme sync
     const nodeShapes = doc.querySelectorAll('.node rect, .node circle, .node polygon, .node path');
     nodeShapes.forEach((el) => {
+      const nodeGroup = el.closest('g.node') || el.closest('.node');
+      const classes = (nodeGroup?.getAttribute('class') || '').split(/\s+/);
+      const isCustomClass = classes.some(
+        (c) => c && c !== 'node' && c !== 'default' && !c.startsWith('flowchart-')
+      );
+
+      let inlineFill = el.getAttribute('fill') || '';
+      const styleAttr = el.getAttribute('style') || '';
+      const fillMatch = styleAttr.match(/fill\s*:\s*([^;]+)/i);
+      if (fillMatch) inlineFill = fillMatch[1].trim();
+
+      if (isDark && inlineFill) {
+        const hsl = parseColorToHsl(inlineFill);
+        if (hsl && hsl[2] >= 0.55) {
+          const darkHex = hslToHex(hsl[0], Math.min(hsl[1], 0.65), 0.12);
+          el.setAttribute('fill', darkHex);
+          if (styleAttr) {
+            el.setAttribute('style', styleAttr.replace(/fill\s*:\s*[^;]+/i, `fill: ${darkHex}`));
+          }
+        }
+      }
+
       const currentStroke = el.getAttribute('stroke') || '';
       const isAccent =
         currentStroke.toLowerCase().includes('e73f07') ||
         currentStroke.toLowerCase().includes('orange') ||
         (customAccent && currentStroke.toLowerCase() === customAccent.toLowerCase());
+
       if (isAccent) {
         el.setAttribute('stroke', brandAccent);
-      } else {
+      } else if (!isCustomClass && !inlineFill) {
         el.setAttribute('fill', brandSurface);
         el.setAttribute('stroke', brandBorder);
       }
@@ -384,8 +520,29 @@ export function applyAraskovaDiagramAesthetics(
 
     const nodeTexts = doc.querySelectorAll('.node text, .nodeLabel, .node span, text.actor');
     nodeTexts.forEach((el) => {
-      el.setAttribute('fill', textPrimary);
-      (el as HTMLElement).style.color = textPrimary;
+      // Dynamic Contrast Guard: Inspect parent node's background fill
+      const nodeGroup = el.closest('g.node') || el.closest('.node');
+      let shapeFill = '';
+      if (nodeGroup) {
+        const shape = nodeGroup.querySelector('rect, circle, polygon, path');
+        if (shape) {
+          shapeFill = shape.getAttribute('fill') || '';
+          const sAttr = shape.getAttribute('style') || '';
+          const m = sAttr.match(/fill\s*:\s*([^;]+)/i);
+          if (m) shapeFill = m[1].trim();
+        }
+      }
+
+      const hsl = parseColorToHsl(shapeFill);
+      // If effective background is light (lightness > 0.50), force high-contrast dark text
+      if (hsl && hsl[2] > 0.50) {
+        el.setAttribute('fill', '#0a0a0a');
+        (el as HTMLElement).style.color = '#0a0a0a';
+        (el as HTMLElement).style.fontWeight = '700';
+      } else {
+        el.setAttribute('fill', textPrimary);
+        (el as HTMLElement).style.color = textPrimary;
+      }
     });
 
     // 5. Update Clusters

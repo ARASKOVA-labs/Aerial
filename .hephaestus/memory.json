@@ -95,5 +95,17 @@
     "timestamp": "2026-09-27T04:00:23.377Z",
     "learned": true,
     "source_project": "Aerial"
+  },
+  {
+    "domain": "web",
+    "category": "General",
+    "title": "React State Initializer Temporal Dead Zone (TDZ) ReferenceError",
+    "symptom": "ReferenceError: Cannot access 'isDarkMode' before initialization causing blank white screen on startup",
+    "root_cause": "Unspecified root cause.",
+    "solution": "Hoist theme calculation const isDarkMode = theme === 'dark' to top of component body before any useState calls",
+    "id": "LEARN-009",
+    "timestamp": "2026-09-27T04:24:04.483Z",
+    "learned": true,
+    "source_project": "Aerial"
   }
 ]

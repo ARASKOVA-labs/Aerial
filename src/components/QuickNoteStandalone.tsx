@@ -88,13 +88,8 @@ export function QuickNoteStandalone() {
 
     // Save canvas state to DB if present
     if (canvasState && canvasState.length > 0) {
-      let binary = '';
-      for (let i = 0; i < canvasState.length; i++) {
-        binary += String.fromCharCode(canvasState[i]);
-      }
-      const b64 = btoa(binary);
       try {
-        await invoke('save_board', { payloadB64: b64, boardId: newId });
+        await invoke('save_board', { payloadBytes: Array.from(canvasState), boardId: newId });
       } catch (e) {
         logger.error('Failed to save board to DB:', e);
       }

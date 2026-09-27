@@ -107,5 +107,17 @@
     "timestamp": "2026-09-27T04:24:04.483Z",
     "learned": true,
     "source_project": "Aerial"
+  },
+  {
+    "domain": "desktop-tauri",
+    "category": "General",
+    "title": "macOS Asynchronous Architecture & Idle Power Throttling",
+    "symptom": "UI stutter during 500ms auto-save, battery drain from continuous 120Hz rAF polling, and Safari page zoom on trackpad pinch",
+    "root_cause": "Unspecified root cause.",
+    "solution": "Convert Redb transactions to async tokio::task::spawn_blocking with raw payloadBytes; prevent WebKit gesturestart/change; govern 120Hz rAF loop with 90-frame idle settling to 0% CPU",
+    "id": "LEARN-010",
+    "timestamp": "2026-09-27T04:40:20.707Z",
+    "learned": true,
+    "source_project": "Aerial"
   }
 ]

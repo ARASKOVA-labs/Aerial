@@ -123,12 +123,14 @@ export function QuickCanvasModal({
           if (engine && engine.check_and_clear_dirty()) {
             const state = canvasRef.current.exportFullState();
             if (state && state.length > 0) {
-              let binary = '';
-              const chunkSize = 8192;
-              for (let i = 0; i < state.length; i += chunkSize) {
-                binary += String.fromCharCode.apply(null, state.subarray(i, i + chunkSize) as unknown as number[]);
-              }
-              localStorage.setItem('aerial_quick_note_state', btoa(binary));
+              const blob = new Blob([state]);
+              const reader = new FileReader();
+              reader.onload = () => {
+                const res = reader.result as string;
+                const base64 = res.split(',')[1] || '';
+                localStorage.setItem('aerial_quick_note_state', base64);
+              };
+              reader.readAsDataURL(blob);
             }
           }
         } catch (e) {

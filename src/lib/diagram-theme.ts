@@ -32,7 +32,6 @@ export function getAraskovaMermaidConfig(
   const brandSurface = isBlueprint ? '#0c1524' : isDark ? '#18181b' : '#ffffff';
   const brandSurfaceElevated = isBlueprint ? '#132138' : isDark ? '#27272a' : '#f4f4f5';
   const brandBorder = isBlueprint ? '#2563eb' : isDark ? '#3f3f46' : '#18181b';
-  const brandBorderActive = brandAccent;
   const textPrimary = isBlueprint ? '#ffffff' : isDark ? '#f4f4f5' : '#09090b';
   const textSecondary = isBlueprint ? '#93c5fd' : isDark ? '#a1a1aa' : '#52525b';
   const lineCol = isBlueprint ? '#38bdf8' : isDark ? '#a1a1aa' : '#27272a';
@@ -74,22 +73,25 @@ export function getAraskovaMermaidConfig(
     edgeLabelBackground: isDark ? '#27272a' : '#ffffff',
     arrowheadColor: brandAccent,
 
-    // Sequence Diagram
-    actorBkg: brandSurface,
-    actorBorder: brandBorder,
+    // Sequence Diagram (Machinery-Grade Telemetry & Flows)
+    actorBkg: isDark ? '#18181b' : '#ffffff',
+    actorBorder: isDark ? '#f4f4f5' : '#18181b',
     actorTextColor: textPrimary,
-    actorLineColor: brandBorder,
-    signalColor: lineCol,
+    actorLineColor: isDark ? 'rgba(244, 244, 245, 0.3)' : 'rgba(24, 24, 27, 0.25)',
+    signalColor: isDark ? '#f4f4f5' : '#18181b',
     signalTextColor: textPrimary,
+    messageColor: textPrimary,
+    messageTextColor: textPrimary,
     labelBoxBkgColor: brandSurfaceElevated,
     labelBoxBorderColor: brandBorder,
-    labelTextColor: textPrimary,
-    loopTextColor: textSecondary,
-    noteBorderColor: brandBorderActive,
-    noteBkgColor: isDark ? '#261712' : '#fff7ed',
-    noteTextColor: isDark ? '#ffffff' : '#7c2d12',
+    labelTextColor: brandAccent,
+    loopTextColor: textPrimary,
+    noteBorderColor: brandAccent,
+    noteBkgColor: isDark ? '#18181b' : '#fff7ed',
+    noteTextColor: isDark ? '#f4f4f5' : '#7c2d12',
     activationBorderColor: brandAccent,
-    activationBkgColor: isDark ? '#3d1b11' : '#ffedd5',
+    activationBkgColor: isDark ? `${brandAccent}26` : '#ffedd5',
+    sequenceNumberColor: brandAccent,
 
     // Class & State Diagram
     classText: textPrimary,
@@ -145,7 +147,7 @@ export function getAraskovaMermaidConfig(
     }
 
     /* Sharp Arrowheads with Configurable Accent */
-    marker path, #flowchart-pointEnd, #statediagram-barbEnd, [id*="pointEnd"], [id*="arrowhead"] path {
+    marker path, #flowchart-pointEnd, #statediagram-barbEnd, [id*="pointEnd"], [id*="arrowhead"] path, [id*="crosshead"] path {
       fill: ${brandAccent} !important;
       stroke: ${brandAccent} !important;
       stroke-width: 1px !important;
@@ -192,37 +194,104 @@ export function getAraskovaMermaidConfig(
       color: ${brandAccent} !important;
     }
 
-    /* Sequence Diagrams — Telemetry Cards */
+    /* Sequence Diagrams — Full High-Contrast Araskova Brutalist Engine */
     .actor {
+      stroke: ${isDark ? '#f4f4f5' : '#18181b'} !important;
+      fill: ${brandSurface} !important;
+      stroke-width: 1.5px !important;
+    }
+    line.actor, line.actor-man, line[class*="actor"] {
+      stroke: ${isDark ? '#f4f4f5' : '#18181b'} !important;
+      stroke-width: 1.5px !important;
+      fill: none !important;
+    }
+    circle.actor, circle.actor-man, circle[class*="actor"] {
+      stroke: ${isDark ? '#f4f4f5' : '#18181b'} !important;
+      fill: ${isDark ? '#27272a' : '#ffffff'} !important;
+      stroke-width: 1.5px !important;
+    }
+    rect.actor {
       fill: ${brandSurface} !important;
       stroke: ${brandBorder} !important;
       stroke-width: 1.5px !important;
       rx: 3px !important;
-      filter: none !important;
     }
-    .actor text, text.actor {
+    .actor text, text.actor, text.actor-man, text.actor-top, text.actor-bottom,
+    text.actor tspan, text.actor-man tspan, .actor tspan, [class*="actor"] text, [class*="actor"] tspan {
       font-family: 'Inter', 'Roboto', sans-serif !important;
       font-weight: 700 !important;
       font-size: 12px !important;
       text-transform: uppercase !important;
       letter-spacing: 0.05em !important;
       fill: ${textPrimary} !important;
+      color: ${textPrimary} !important;
     }
-    .actor-line {
+    .actor-line, line.actor-line {
+      stroke: ${isDark ? 'rgba(244, 244, 245, 0.3)' : 'rgba(24, 24, 27, 0.25)'} !important;
+      stroke-dasharray: 4 4 !important;
+      stroke-width: 1.5px !important;
+    }
+    .messageLine0, .messageLine1, line[class*="messageLine"], path[class*="messageLine"] {
+      stroke: ${isDark ? '#f4f4f5' : '#18181b'} !important;
+      stroke-width: 1.5px !important;
+    }
+    .messageText, text.messageText, text.messageText tspan, .messageText tspan, g.messageText text, g.messageText tspan {
+      font-family: 'Space Mono', 'SF Mono', ui-monospace, monospace !important;
+      font-size: 11px !important;
+      font-weight: 700 !important;
+      letter-spacing: 0.02em !important;
+      fill: ${textPrimary} !important;
+      color: ${textPrimary} !important;
+    }
+    .note, rect.note {
+      fill: ${isDark ? '#18181b' : '#fff7ed'} !important;
+      stroke: ${brandAccent} !important;
+      stroke-width: 1.5px !important;
+      rx: 4px !important;
+      filter: none !important;
+    }
+    .noteText, text.noteText, text.noteText tspan, .noteText tspan, .note text, .note tspan {
+      font-family: 'Inter', 'Roboto', sans-serif !important;
+      font-size: 11.5px !important;
+      font-weight: 700 !important;
+      letter-spacing: 0.02em !important;
+      fill: ${isDark ? '#f4f4f5' : '#7c2d12'} !important;
+      color: ${isDark ? '#f4f4f5' : '#7c2d12'} !important;
+    }
+    .sequenceNumber, circle.sequenceNumber {
+      fill: ${isDark ? '#18181b' : '#ffffff'} !important;
+      stroke: ${brandAccent} !important;
+      stroke-width: 1.5px !important;
+    }
+    text.sequenceNumber, .sequenceNumber tspan, text.sequenceNumber tspan {
+      font-family: 'Space Mono', monospace !important;
+      font-weight: 800 !important;
+      font-size: 10px !important;
+      fill: ${brandAccent} !important;
+      color: ${brandAccent} !important;
+    }
+    .labelBox, rect.labelBox {
+      fill: ${isDark ? '#18181b' : '#f4f4f5'} !important;
       stroke: ${brandBorder} !important;
-      stroke-dasharray: 3 3 !important;
       stroke-width: 1.5px !important;
+      rx: 3px !important;
     }
-    .messageLine0, .messageLine1 {
-      stroke: ${lineCol} !important;
-      stroke-width: 1.5px !important;
-    }
-    .messageText {
+    .labelText, text.labelText, .labelText tspan {
       font-family: 'Space Mono', monospace !important;
       font-size: 10px !important;
       font-weight: 700 !important;
-      letter-spacing: 0.06em !important;
+      fill: ${brandAccent} !important;
+      color: ${brandAccent} !important;
+    }
+    .loopText, text.loopText, .loopText tspan {
+      font-family: 'Space Mono', monospace !important;
+      font-size: 10px !important;
       fill: ${textPrimary} !important;
+      color: ${textPrimary} !important;
+    }
+    .loopLine, line.loopLine {
+      stroke: ${brandBorder} !important;
+      stroke-dasharray: 3 3 !important;
     }
 
     /* Class Diagrams */
@@ -411,6 +480,15 @@ export function applyAraskovaDiagramAesthetics(
 ): string {
   if (!svgString || typeof svgString !== 'string') return svgString;
 
+  let raw = svgString.trim();
+  if (raw.startsWith('data:image/svg+xml;base64,')) {
+    try {
+      raw = decodeURIComponent(escape(atob(raw.replace('data:image/svg+xml;base64,', ''))));
+    } catch (_) {}
+  } else if (raw.startsWith('data:image/svg+xml;utf8,')) {
+    raw = decodeURIComponent(raw.replace('data:image/svg+xml;utf8,', ''));
+  }
+
   const isDark = style === 'industrial_light' ? false : style === 'blueprint' ? true : isDarkMode;
   const isBlueprint = style === 'blueprint';
 
@@ -421,13 +499,13 @@ export function applyAraskovaDiagramAesthetics(
   const lineCol = isBlueprint ? '#38bdf8' : isDark ? '#a1a1aa' : '#27272a';
   const clusterBkg = isBlueprint ? '#09101d' : isDark ? '#101012' : '#fafafa';
 
-  if (typeof DOMParser === 'undefined') return svgString;
+  if (typeof DOMParser === 'undefined') return raw;
 
   try {
     const parser = new DOMParser();
-    const doc = parser.parseFromString(svgString, 'image/svg+xml');
+    const doc = parser.parseFromString(raw, 'image/svg+xml');
     const svgEl = doc.querySelector('svg');
-    if (!svgEl) return svgString;
+    if (!svgEl) return raw;
 
     // Remove any hardcoded background colors on root SVG
     svgEl.removeAttribute('style');
@@ -474,6 +552,11 @@ export function applyAraskovaDiagramAesthetics(
           }
           return match;
         });
+
+        // Ensure internal style tags don't force dark text on sequence diagrams in dark mode
+        content = content.replace(/(\.messageText[^{]*\{[^}]*fill\s*:\s*)[^;}]+/gi, `$1${textPrimary}`);
+        content = content.replace(/(text\.actor[^{]*\{[^}]*fill\s*:\s*)[^;}]+/gi, `$1${textPrimary}`);
+        content = content.replace(/(\.noteText[^{]*\{[^}]*fill\s*:\s*)[^;}]+/gi, `$1${textPrimary}`);
       }
       styleTag.textContent = content;
     });
@@ -575,6 +658,108 @@ export function applyAraskovaDiagramAesthetics(
       (t as HTMLElement).style.color = brandAccent;
     });
 
+    // 6b. Sequence Diagram Specific DOM Synchronizations
+    // Stick figures (lines, circles, paths)
+    const actorLines = doc.querySelectorAll('.actor line, .actor-man line, line.actor, line.actor-man, .actor path, .actor-man path');
+    actorLines.forEach((l) => {
+      l.setAttribute('stroke', isDark ? '#f4f4f5' : '#18181b');
+      l.setAttribute('stroke-width', '1.5');
+    });
+
+    const actorCircles = doc.querySelectorAll('.actor circle, .actor-man circle, circle.actor, circle.actor-man');
+    actorCircles.forEach((c) => {
+      c.setAttribute('stroke', isDark ? '#f4f4f5' : '#18181b');
+      c.setAttribute('fill', isDark ? '#27272a' : '#ffffff');
+      c.setAttribute('stroke-width', '1.5');
+    });
+
+    const actorRects = doc.querySelectorAll('rect.actor, .actor rect');
+    actorRects.forEach((r) => {
+      r.setAttribute('fill', brandSurface);
+      r.setAttribute('stroke', isDark ? '#f4f4f5' : brandBorder);
+      r.setAttribute('stroke-width', '1.5');
+      r.setAttribute('rx', '3');
+      r.removeAttribute('filter');
+    });
+
+    // Actor text & tspans
+    const actorTexts = doc.querySelectorAll(
+      '.actor text, text.actor, text.actor-man, text.actor-top, text.actor-bottom, .actor-man text, text.actor tspan, text.actor-man tspan, [class*="actor"] text, [class*="actor"] tspan'
+    );
+    actorTexts.forEach((t) => {
+      t.setAttribute('fill', textPrimary);
+      (t as HTMLElement).style.fill = textPrimary;
+      (t as HTMLElement).style.color = textPrimary;
+    });
+
+    // Lifelines (vertical actor lines)
+    const lifelines = doc.querySelectorAll('.actor-line, line.actor-line');
+    lifelines.forEach((l) => {
+      l.setAttribute('stroke', isDark ? 'rgba(244, 244, 245, 0.3)' : 'rgba(24, 24, 27, 0.25)');
+      l.setAttribute('stroke-width', '1.5');
+      l.setAttribute('stroke-dasharray', '4 4');
+    });
+
+    // Message lines (signals)
+    const messageLines = doc.querySelectorAll(
+      '.messageLine0, .messageLine1, line.messageLine0, line.messageLine1, path.messageLine0, path.messageLine1, line[class*="messageLine"], path[class*="messageLine"]'
+    );
+    messageLines.forEach((m) => {
+      m.setAttribute('stroke', isDark ? '#f4f4f5' : '#18181b');
+      m.setAttribute('stroke-width', '1.5');
+    });
+
+    // Message text & tspans (ALL arrow labels!)
+    const messageTexts = doc.querySelectorAll(
+      '.messageText, text.messageText, text.messageText tspan, .messageText tspan, g.messageText text, g.messageText tspan'
+    );
+    messageTexts.forEach((mt) => {
+      mt.setAttribute('fill', textPrimary);
+      (mt as HTMLElement).style.fill = textPrimary;
+      (mt as HTMLElement).style.color = textPrimary;
+      (mt as HTMLElement).style.fontFamily = "'Space Mono', monospace";
+      (mt as HTMLElement).style.fontWeight = '700';
+    });
+
+    // Note boxes & note texts
+    const noteRects = doc.querySelectorAll('.note, rect.note');
+    noteRects.forEach((nr) => {
+      nr.setAttribute('fill', isDark ? '#18181b' : '#fff7ed');
+      nr.setAttribute('stroke', brandAccent);
+      nr.setAttribute('stroke-width', '1.5');
+      nr.setAttribute('rx', '4');
+      nr.removeAttribute('filter');
+    });
+
+    const noteTexts = doc.querySelectorAll(
+      '.noteText, text.noteText, text.noteText tspan, .noteText tspan, .note text, .note tspan'
+    );
+    noteTexts.forEach((nt) => {
+      const col = isDark ? '#f4f4f5' : '#7c2d12';
+      nt.setAttribute('fill', col);
+      (nt as HTMLElement).style.fill = col;
+      (nt as HTMLElement).style.color = col;
+      (nt as HTMLElement).style.fontWeight = '700';
+    });
+
+    // Sequence numbers
+    const seqCircles = doc.querySelectorAll('.sequenceNumber, circle.sequenceNumber');
+    seqCircles.forEach((sc) => {
+      sc.setAttribute('fill', isDark ? '#18181b' : '#ffffff');
+      sc.setAttribute('stroke', brandAccent);
+      sc.setAttribute('stroke-width', '1.5');
+    });
+
+    const seqTexts = doc.querySelectorAll(
+      'text.sequenceNumber, text.sequenceNumber tspan, .sequenceNumber text, .sequenceNumber tspan'
+    );
+    seqTexts.forEach((st) => {
+      st.setAttribute('fill', brandAccent);
+      (st as HTMLElement).style.fill = brandAccent;
+      (st as HTMLElement).style.color = brandAccent;
+      (st as HTMLElement).style.fontWeight = '800';
+    });
+
     // 7. Purge all drop-shadow filters from the SVG DOM to guarantee crispness
     const elementsWithFilter = doc.querySelectorAll('[filter]');
     elementsWithFilter.forEach((el) => el.removeAttribute('filter'));
@@ -601,7 +786,7 @@ export function applyAraskovaDiagramAesthetics(
     }
 
     // 9. Update all line markers to the configured accent
-    const pathsWithMarker = doc.querySelectorAll('path[marker-end]');
+    const pathsWithMarker = doc.querySelectorAll('path[marker-end], line[marker-end]');
     pathsWithMarker.forEach(p => {
       p.setAttribute('marker-end', 'url(#araskova-arrow-head)');
     });

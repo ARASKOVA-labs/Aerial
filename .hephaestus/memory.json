@@ -71,5 +71,17 @@
     "timestamp": "2026-09-23T12:49:15.048Z",
     "learned": true,
     "source_project": "Aerial"
+  },
+  {
+    "domain": "web",
+    "category": "General",
+    "title": "Mermaid Sequence Diagram Contrast Collapse in Dark Mode Canvas",
+    "symptom": "Sequence diagram actor stick figures and message labels remain dark and illegible on canvas theme switch to dark mode",
+    "root_cause": "Unspecified root cause.",
+    "solution": "Traverse sequence diagram DOM (.actor-man, line.actor, .messageText tspan, rect.note, .noteText) in applyAraskovaDiagramAesthetics, inject high-specificity themeCSS, and decode base64 data URLs before DOM parsing",
+    "id": "LEARN-007",
+    "timestamp": "2026-09-27T03:49:11.901Z",
+    "learned": true,
+    "source_project": "Aerial"
   }
 ]

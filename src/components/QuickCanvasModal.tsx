@@ -372,7 +372,7 @@ export function QuickCanvasModal({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [handleStamp, handlePromoteToBoard, handleDismiss, handleSwitchTab]);
 
-  const paletteColors = ['#e73f07', '#f3f3f2', '#06b6d4', '#10b981'];
+  const paletteColors = ['#e73f07', isDarkMode ? '#f3f3f2' : '#0a0a0a', '#3b82f6', '#10b981'];
 
   // Word count calculation
   const wordCount = textContent.trim() ? textContent.trim().split(/\s+/).length : 0;
@@ -404,19 +404,13 @@ export function QuickCanvasModal({
       className={`relative w-full flex flex-col rounded-2xl border shadow-2xl overflow-hidden transition-all duration-200 ${
         isStandalone
           ? 'w-full h-full max-w-full max-h-full'
-          : 'max-w-[540px] h-[320px]'
+          : 'max-w-[560px] h-[340px]'
       } ${
         isDarkMode
-          ? 'bg-[#000000] border-[#2a2a2a] text-[#f3f3f2] shadow-black'
+          ? 'bg-[#0a0a0a] border-[#2a2a2a] text-[#f3f3f2] shadow-black/80 ring-1 ring-white/5'
           : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a] shadow-xl'
       }`}
     >
-      {/* Tactical Corner Reticles */}
-      <div className="absolute top-2 left-2 w-2 h-2 border-t border-l border-[#e73f07]/50 pointer-events-none z-20" />
-      <div className="absolute top-2 right-2 w-2 h-2 border-t border-r border-[#e73f07]/50 pointer-events-none z-20" />
-      <div className="absolute bottom-2 left-2 w-2 h-2 border-b border-l border-[#e73f07]/50 pointer-events-none z-20" />
-      <div className="absolute bottom-2 right-2 w-2 h-2 border-b border-r border-[#e73f07]/50 pointer-events-none z-20" />
-
       {/* ── 1. Minimal 34px Header Bar ── */}
       <div
         data-tauri-drag-region
@@ -424,7 +418,7 @@ export function QuickCanvasModal({
         className={`flex items-center justify-between px-3.5 py-2 border-b shrink-0 select-none ${
           isStandalone ? 'cursor-grab active:cursor-grabbing' : ''
         } ${
-          isDarkMode ? 'border-[#1f1f1f] bg-[#000000]' : 'border-[#eeeeee] bg-[#f8f9fa]'
+          isDarkMode ? 'border-[#1f1f1f] bg-[#111111]' : 'border-[#eeeeee] bg-[#f8f9fa]'
         }`}
       >
         <div data-tauri-drag-region className="flex items-center gap-2">
@@ -582,8 +576,9 @@ export function QuickCanvasModal({
             value={textContent}
             onChange={(e) => setTextContent(e.target.value)}
             placeholder="Type instant notes, tasks, code... (Auto-saved · ⌘↵ to Stamp, ⎋ to dismiss)"
-            className={`w-full h-full p-4 outline-none font-mono text-[13px] leading-relaxed resize-none ${
-              isDarkMode ? 'bg-[#000000] text-[#f3f3f2] placeholder-neutral-600' : 'bg-white text-[#0a0a0a] placeholder-neutral-400'
+            style={{ caretColor: '#e73f07' }}
+            className={`w-full h-full p-4 outline-none font-mono text-[13px] leading-relaxed resize-none selection:bg-[#e73f07]/30 selection:text-current ${
+              isDarkMode ? 'bg-[#0a0a0a] text-[#f3f3f2] placeholder-neutral-600' : 'bg-white text-[#0a0a0a] placeholder-neutral-400'
             }`}
           />
         </div>
@@ -592,7 +587,7 @@ export function QuickCanvasModal({
       {/* ── 3. Single Streamlined 32px Action Strip ── */}
       <div
         className={`flex items-center justify-between px-3 py-1.5 border-t shrink-0 select-none ${
-          isDarkMode ? 'border-[#1f1f1f] bg-[#000000]' : 'border-[#eeeeee] bg-[#f8f9fa]'
+          isDarkMode ? 'border-[#1f1f1f] bg-[#111111]' : 'border-[#eeeeee] bg-[#f8f9fa]'
         }`}
       >
         {activeTab === 'text' ? (

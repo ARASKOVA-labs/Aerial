@@ -32,14 +32,18 @@ const FONT_OPTIONS = [
   { label: 'Rephen (Brand)', value: "'Rephen', 'Roboto', sans-serif" },
 ];
 
-const COLOR_SWATCHES = [
-  '#e73f07', // Araskova Orange
-  '#f3f3f2', // Light
-  '#0a0a0a', // Dark
-  '#3b82f6', // Electric Blue
-  '#10b981', // Emerald Green
-  '#f59e0b', // Amber
-];
+export function resolveThemeContrastColor(rawColor?: string, isDark: boolean = true): string {
+  const themeDefault = isDark ? '#f3f3f2' : '#0a0a0a';
+  if (!rawColor) return themeDefault;
+
+  const c = rawColor.trim().toLowerCase();
+  const neutralDark = ['#000000', '#0a0a0a', '#111111', '#18181b', '#1a1a2e', '#222222', '#2a2a2a', '#333333'];
+  const neutralLight = ['#ffffff', '#f3f3f2', '#f4f4f5', '#f8fafc', '#fafafa', '#f5f5f5', '#eeeeee', '#e5e5e5'];
+
+  if (isDark && neutralDark.includes(c)) return '#f3f3f2';
+  if (!isDark && neutralLight.includes(c)) return '#0a0a0a';
+  return rawColor;
+}
 
 export const AerialDraggableTextBox: React.FC<AerialDraggableTextBoxProps> = ({
   initialText = '',
@@ -60,7 +64,24 @@ export const AerialDraggableTextBox: React.FC<AerialDraggableTextBoxProps> = ({
   const [text, setText] = useState(initialText);
   const [fontSize, setFontSize] = useState(initialFontSize);
   const [fontFamily, setFontFamily] = useState(initialFontFamily);
-  const [color, setColor] = useState(initialColor || (isDarkMode ? '#f3f3f2' : '#0a0a0a'));
+
+  const [color, setColor] = useState(() => resolveThemeContrastColor(initialColor, isDarkMode));
+  const isCustomColorPicked = useRef(false);
+
+  // Dynamically react when theme changes while textbox is active
+  useEffect(() => {
+    setColor((prev) => {
+      const c = prev.trim().toLowerCase();
+      const neutralDark = ['#000000', '#0a0a0a', '#111111', '#18181b', '#1a1a2e', '#222222', '#2a2a2a', '#333333'];
+      const neutralLight = ['#ffffff', '#f3f3f2', '#f4f4f5', '#f8fafc', '#fafafa', '#f5f5f5', '#eeeeee', '#e5e5e5'];
+      
+      // If user hasn't explicitly chosen a colored accent, always sync with active theme
+      if (!isCustomColorPicked.current || neutralDark.includes(c) || neutralLight.includes(c)) {
+        return isDarkMode ? '#f3f3f2' : '#0a0a0a';
+      }
+      return prev;
+    });
+  }, [isDarkMode]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dragStartRef = useRef<{ pointerX: number; pointerY: number; initX: number; initY: number } | null>(null);
@@ -234,22 +255,33 @@ export const AerialDraggableTextBox: React.FC<AerialDraggableTextBoxProps> = ({
             </button>
           </div>
 
-          {/* Color Swatches */}
+          {/* Dynamic Theme Color Swatches */}
           <div className="flex items-center gap-1 ml-0.5">
-            {COLOR_SWATCHES.slice(0, 3).map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setColor(c)}
-                style={{ backgroundColor: c }}
-                className={`w-3.5 h-3.5 rounded-full border transition-transform ${
-                  color.toLowerCase() === c.toLowerCase()
-                    ? 'scale-125 border-white ring-1 ring-[#e73f07]'
-                    : 'border-white/20 hover:scale-110'
-                }`}
-                title={c}
-              />
-            ))}
+            {[
+              isDarkMode ? '#f3f3f2' : '#0a0a0a',
+              '#e73f07',
+              '#3b82f6',
+              isDarkMode ? '#0a0a0a' : '#f3f3f2',
+            ].map((c) => {
+              const isSelected = color.trim().toLowerCase() === c.trim().toLowerCase();
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => {
+                    isCustomColorPicked.current = true;
+                    setColor(c);
+                  }}
+                  style={{ backgroundColor: c }}
+                  className={`w-3.5 h-3.5 rounded-full border transition-transform cursor-pointer ${
+                    isSelected
+                      ? 'scale-125 border-white ring-2 ring-[#e73f07]'
+                      : 'border-white/30 hover:scale-110'
+                  }`}
+                  title={c}
+                />
+              );
+            })}
           </div>
 
           {/* Action buttons */}
@@ -257,7 +289,7 @@ export const AerialDraggableTextBox: React.FC<AerialDraggableTextBoxProps> = ({
             <button
               type="button"
               onClick={handleCommit}
-              className="p-1 bg-[#e73f07] text-white rounded-md hover:bg-[#ff4e12] active:scale-95 transition-all shadow-sm"
+              className="p-1 bg-[#e73f07] text-white rounded-md hover:bg-[#ff4e12] active:scale-95 transition-all shadow-sm cursor-pointer"
               title="Done (Enter)"
             >
               <Check className="w-3 h-3 stroke-[3]" />
@@ -265,7 +297,7 @@ export const AerialDraggableTextBox: React.FC<AerialDraggableTextBoxProps> = ({
             <button
               type="button"
               onClick={onCancel}
-              className="p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] rounded-md active:scale-95 transition-all"
+              className="p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--accent)] rounded-md active:scale-95 transition-all cursor-pointer"
               title="Cancel (Esc)"
             >
               <X className="w-3 h-3" />
@@ -288,8 +320,9 @@ export const AerialDraggableTextBox: React.FC<AerialDraggableTextBoxProps> = ({
             color,
             lineHeight: 1.25,
             minHeight: `${Math.max(60, size.h - 50)}px`,
+            caretColor: '#e73f07',
           }}
-          className="w-full h-full bg-transparent resize-none outline-none border-none placeholder:text-neutral-500 font-medium"
+          className="w-full h-full bg-transparent resize-none outline-none border-none placeholder:text-neutral-500 font-medium selection:bg-[#e73f07]/30 selection:text-current"
         />
 
         {/* Readjustment Helper footer info & Corner Resize Handle */}

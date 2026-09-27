@@ -83,5 +83,17 @@
     "timestamp": "2026-09-27T03:49:11.901Z",
     "learned": true,
     "source_project": "Aerial"
+  },
+  {
+    "domain": "web",
+    "category": "General",
+    "title": "Text Tool Contrast Inversion and Toolbar QuickNote Integration",
+    "symptom": "Typing text is black and fails to adapt on theme change; Quick Note floating pill cluttered the top right",
+    "root_cause": "Unspecified root cause.",
+    "solution": "Route text tool stroke colors through resolveThemeContrastColor, sync strokeColor on theme toggles, and embed Quick Note as an integrated ToolBtn in the main toolbox",
+    "id": "LEARN-008",
+    "timestamp": "2026-09-27T04:00:23.377Z",
+    "learned": true,
+    "source_project": "Aerial"
   }
 ]

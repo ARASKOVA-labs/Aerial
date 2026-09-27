@@ -32,7 +32,16 @@ import type {
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-export const STROKE_COLORS = ['#000000', '#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#0ea5e9'];
+export const getStrokeColors = (isDarkMode: boolean) => [
+  isDarkMode ? '#f3f3f2' : '#0a0a0a',
+  '#e73f07', // Araskova Orange
+  '#3b82f6', // Electric Blue
+  '#10b981', // Emerald Green
+  '#f59e0b', // Amber
+  '#a855f7', // Purple
+];
+
+export const STROKE_COLORS = ['#f3f3f2', '#e73f07', '#3b82f6', '#10b981', '#f59e0b', '#a855f7'];
 
 // ── Animated Icon ───────────────────────────────────────────────────────────
 

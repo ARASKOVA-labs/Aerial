@@ -83,7 +83,7 @@ const sizeMap = {
 };
 
 /**
- * Full wordmark: optional mark + "AERIAL" in Rephen + indigo dot.
+ * Full wordmark: optional mark + "AERIAL" in Rephen + orange dot.
  */
 export function AerialWordmark({ className = '', showMark = false, size = 'md', isDarkMode }: AerialWordmarkProps) {
   const s = sizeMap[size];
@@ -118,12 +118,12 @@ export function AerialWordmark({ className = '', showMark = false, size = 'md', 
         style={{ fontFamily: 'Rephen, serif' }}
       >AERIAL PREMIUM</text>
 
-      {/* Indigo dot */}
+      {/* Accent dot */}
       <circle
         cx={totalW - 2}
         cy={h * 0.3}
         r={s.dot / 3.5}
-        fill="#6366f1"
+        fill="#e73f07"
       />
     </svg>
   );

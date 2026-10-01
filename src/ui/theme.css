@@ -1,20 +1,21 @@
 /* ── Aerial UI ──────────────────────────────────────────────────────────────
  * Excalidraw-style editor chrome: floating "islands", 36px tool buttons with
- * number hints, a left properties panel, soft shadows, violet accent.
+ * number hints, a left properties panel, soft shadows — in the Araskova
+ * orange (#e73f07) accent.
  * Scoped to .ae-root so it never leaks into a host app.
  */
 
 .ae-root {
   --ae-font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --ae-hand: Kalam, Caveat, "Comic Sans MS", cursive;
-  --ae-primary: #6965db;
-  --ae-primary-darker: #5b57d1;
-  --ae-primary-light: #e0dfff;
-  --ae-on-primary-light: #030064;
+  --ae-primary: #e73f07;
+  --ae-primary-darker: #c93506;
+  --ae-primary-light: #fde3d8;
+  --ae-on-primary-light: #7a1f02;
   --ae-surface: #ffffff;
-  --ae-surface-low: #f2f2f6;
-  --ae-surface-high: #f1f0ff;
-  --ae-hover: #f1f0ff;
+  --ae-surface-low: #f3f2f1;
+  --ae-surface-high: #fdeee7;
+  --ae-hover: #f6f1ee;
   --ae-text: #1b1b1f;
   --ae-text-muted: #707077;
   --ae-hint: #a8a8b0;
@@ -32,14 +33,14 @@
 }
 
 .ae-root[data-theme="dark"] {
-  --ae-primary: #a8a5ff;
-  --ae-primary-darker: #b8b6ff;
-  --ae-primary-light: #403e6a;
-  --ae-on-primary-light: #e0dfff;
-  --ae-surface: #232329;
-  --ae-surface-low: #2e2d39;
-  --ae-surface-high: #2e2d39;
-  --ae-hover: #33323f;
+  --ae-primary: #ff5a1f;
+  --ae-primary-darker: #ff7a45;
+  --ae-primary-light: #4a2416;
+  --ae-on-primary-light: #ffd9c9;
+  --ae-surface: #232325;
+  --ae-surface-low: #2a2a2d;
+  --ae-surface-high: #3a261d;
+  --ae-hover: #2f2c2b;
   --ae-text: #e3e3e8;
   --ae-text-muted: #9a9aa5;
   --ae-hint: #5f5f6b;
@@ -716,7 +717,7 @@
   color: #fff;
 }
 .ae-root[data-theme="dark"] .ae-cta--primary {
-  color: #1b1b1f;
+  color: #fff;
 }
 .ae-cta--primary:hover {
   background: var(--ae-primary-darker);

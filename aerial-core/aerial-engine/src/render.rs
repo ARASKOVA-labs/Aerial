@@ -822,7 +822,7 @@ fn paint_freehand(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv) 
             ctx.set_global_alpha(el.font_size.clamp(0.0, 1.0) * env.alpha);
             ("#ff2d2d".into(), Some(("#ff4d4d", 14.0)))
         }
-        "MagicPen" => ("#8b5cf6".into(), Some(("#a78bfa", 8.0))),
+        "MagicPen" => ("#e73f07".into(), Some(("#ff7a45", 8.0))),
         "Highlighter" => {
             // Real highlighter ink: multiplies on paper so text underneath
             // stays crisp; on dark paper it glows in its true hue instead of

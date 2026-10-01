@@ -26,7 +26,7 @@ const logger = createLogger('AerialCanvas');
 let canvasIdCounter = 0;
 
 const STYLE_KEY = 'aerial_ui_style_v1';
-const DIAGRAM_ACCENTS = ['#e73f07', '#6965db', '#1971c2', '#2f9e44', '#e03131'];
+const DIAGRAM_ACCENTS = ['#e73f07', '#1e1e1e', '#1971c2', '#2f9e44', '#f08c00'];
 
 /** Reads the persisted UI style, keeping only fields whose type matches the defaults. */
 function loadUiStyle(): UiStyle {

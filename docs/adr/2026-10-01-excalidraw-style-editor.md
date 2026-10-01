@@ -76,7 +76,9 @@ The boot screen is inline markup and CSS in `index.html`, painted on the first f
 - **Safety:** it respects `prefers-reduced-motion`, reports errors, and dismisses itself after 20 s if the app never signals.
 
 ## Brand note
-This intentionally departs from the CLAUDE.md "machinery brutalist" rules inside the editor chrome. The UI accent is Excalidraw's violet (`#6965db` / `#a8a5ff`) and labels use sentence case, because the request was for Excalidraw's aesthetics. The Araskova orange (`#e73f07`) is kept for the logo, the boot screen and diagram accents. If the brand rules should win, change `--ae-primary` in `src/ui/theme.css`; it is a one-token change.
+The editor follows Excalidraw's layout and interaction model, but keeps the **Araskova orange** as its only accent. It is `#e73f07` in light mode and `#ff5a1f` in dark mode, where the brighter shade keeps contrast on dark surfaces.
+
+The orange covers active tools, swatch rings, sliders, primary buttons, focus, the text caret, the engine's selection chrome, magic-pen ink, the logo, the boot screen and the progress bar. All of these come from the `--ae-primary*` tokens in `src/ui/theme.css`, plus the engine's default `accent_color`.
 
 ## Consequences
 - **Performance:** unchanged at 200k elements. Write about 1.3 ms, commit 1.3 ms, pan 4.7 ms, undo 1.8 ms. Outlines are computed into reusable scratch buffers.

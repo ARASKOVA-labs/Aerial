@@ -270,7 +270,7 @@ impl AerialCanvas {
             marquee_base: Vec::new(),
             selected: Vec::new(),
             selection_version: 0,
-            accent_color: "#6965db".to_string(),
+            accent_color: "#e73f07".to_string(),
             eraser_radius: 10.0,
             eraser_type: EraserType::Stroke,
             eraser: EraserState::default(),

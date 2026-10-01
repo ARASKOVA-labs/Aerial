@@ -63,8 +63,25 @@ export interface AerialEngine {
   export_full_state: () => Uint8Array;
   import_full_state: (bytes: Uint8Array) => void;
 
-  // Dirty tracking
+  // Change tracking
+  /** @deprecated single-consumer flag; use scene_version() */
   check_and_clear_dirty: () => boolean;
+  /** Monotonic revision, bumped by every scene mutation. */
+  scene_version: () => number;
+  element_count: () => number;
+  /** Drains changes since the last call: {"reset","upserts","deletes"} JSON. O(changed). */
+  take_changes: () => string;
+  has_pending_changes: () => boolean;
+  /** [[elementId, assetId], ...] for asset-backed elements. */
+  get_asset_refs: () => string;
+  last_load_rejected: () => number;
+  can_undo: () => boolean;
+  can_redo: () => boolean;
+
+  // Performance
+  /** CSS px below which zoomed-out content is drawn as density blocks (0 disables). */
+  set_lod_threshold: (px: number) => void;
+  get_render_stats: () => string;
 
   // CRDT / Collaboration
   get_local_state_vector: () => Uint8Array;
@@ -139,8 +156,17 @@ export interface AerialCanvasProps {
   initialScene?: string;
   /** Initial full binary state (takes precedence over initialScene) */
   initialState?: Uint8Array;
-  /** Callback fired whenever strokes or elements are updated */
+  /**
+   * Fired with the full scene JSON after changes. Serialising the whole board
+   * is O(board size) — for large boards prefer `onChanges`.
+   */
   onChange?: (sceneJson: string) => void;
+  /**
+   * Fired with only what changed since the last call
+   * (`{"reset":bool,"upserts":[...],"deletes":[ids]}`). O(changed elements).
+   * Drains the engine's change feed: do not also call `takeChanges()`.
+   */
+  onChanges?: (changesJson: string) => void;
   /** Canvas color theme */
   theme?: 'dark' | 'light';
   /** Custom background color override (e.g. #0a0a0a, #18181b, #0f172a, #ffffff, #fdfbf7) */
@@ -177,6 +203,12 @@ export interface AerialCanvasProps {
   onEraserTypeChange?: (type: 'stroke' | 'precision' | 'element') => void;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
+  /**
+   * Called before a feature sends user content to a third-party service
+   * (currently: Magic Pen handwriting → Google Input Tools). Return false to
+   * cancel. Omit to allow.
+   */
+  onExternalRequest?: (service: 'handwriting') => boolean | Promise<boolean>;
   /** Callback when canvas receives pointer down (used to dismiss menus/popovers; return true to consume event and suppress drawing) */
   onCanvasPointerDown?: () => boolean | void;
 }
@@ -188,8 +220,15 @@ export interface AerialCanvasRef {
   getSceneJson: () => string;
   /** Load a scene from serialized JSON */
   loadSceneJson: (json: string) => void;
-  /** Export full binary state (includes CRDT history) */
+  /** Export the scene as UTF-8 JSON bytes */
   exportFullState: () => Uint8Array;
+  /** Drain changes since the last call (see `onChanges`). */
+  takeChanges: () => string;
+  getElementCount: () => number;
+  /** Renderer statistics: drawn/batched counts, LOD level, repaint counters, timings. */
+  getRenderStats: () => Record<string, number>;
+  /** CSS px below which zoomed-out content is aggregated (0 disables LOD). */
+  setLodThreshold: (px: number) => void;
   /** Import full binary state */
   importFullState: (bytes: Uint8Array) => void;
   /** Add a diagram element to the canvas */

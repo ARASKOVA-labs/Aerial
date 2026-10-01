@@ -37,20 +37,24 @@ import {
   Layers,
   Edit3,
   Check,
-  Copy,
-  Bot,
   Clipboard,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import mermaid from 'mermaid';
 import * as pdfjsLib from 'pdfjs-dist';
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+// Bundled locally: loading executable worker code from a CDN at runtime was a
+// supply-chain risk and broke PDF import offline.
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 import './App.css';
 import { AerialMark } from './AerialLogo';
 import { AerialCanvas } from './components/AerialCanvas';
 import { QuickCanvasModal } from './components/QuickCanvasModal';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
+import { KeyboardShortcutsModal } from './components/desktop/KeyboardShortcutsModal';
+import { DiagramStudioModal } from './components/desktop/DiagramStudioModal';
+import { TextTranslatorModal } from './components/desktop/TextTranslatorModal';
 import {
   ToolBtn,
   DropdownToolBtn,
@@ -63,11 +67,21 @@ import type {
   ToolId,
 } from './lib/types';
 import { createLogger } from './lib/logger';
+import { ensureConsent } from './lib/consent';
+import { externalFetch } from './lib/net';
+import {
+  BoardSaver,
+  EMPTY_SCENE,
+  deleteBoardData,
+  loadBoardScene,
+  persistenceAvailable,
+  preloadAssets,
+  saveBoardChanges,
+  sceneToChangeSet,
+} from './lib/board-store';
 import {
   getAraskovaMermaidConfig,
   applyAraskovaDiagramAesthetics,
-  ARASKOVA_DIAGRAM_TEMPLATES,
-  type AraskovaDiagramStyle,
 } from './lib/diagram-theme';
 
 const logger = createLogger('App');
@@ -75,7 +89,7 @@ const logger = createLogger('App');
 mermaid.initialize({
   ...getAraskovaMermaidConfig(true, 'brutalist'),
   startOnLoad: false,
-  securityLevel: 'loose',
+  securityLevel: 'strict',
 });
 
 export const CANVAS_BG_PRESETS = [
@@ -131,6 +145,11 @@ export default function App() {
   const [activeBoardId, setActiveBoardId] = useState<string>(() => {
     return localStorage.getItem('aerial_active_board_id') || 'default_board';
   });
+  // Autosave reads the board id from a ref so a save scheduled just before a
+  // board switch can never write the new board's changes under the old id.
+  const activeBoardIdRef = useRef(activeBoardId);
+  const saverRef = useRef<BoardSaver | null>(null);
+  if (!saverRef.current) saverRef.current = new BoardSaver(() => canvasRef.current?.getEngine());
   const [isRenamingBoard, setIsRenamingBoard] = useState(false);
   const [renameInput, setRenameInput] = useState('');
   const [canvasBgColor, setCanvasBgColor] = useState<string>(() => {
@@ -225,9 +244,6 @@ export default function App() {
     return () => window.removeEventListener('pointerdown', handlePointerDownOutside, true);
   }, [showSettings, showMoreTools, isMenuOpen, closeAllPopups]);
 
-  // Collaboration State
-  const wsRef = useRef<WebSocket | null>(null);
-
   // Dark mode (persisted to localStorage)
   const [isDarkMode, setIsDarkMode] = useState(() => {
     return localStorage.getItem('aerial_dark_mode') === 'true';
@@ -269,41 +285,19 @@ export default function App() {
     const engine = api.getEngine();
     if (!engine) return;
 
-    // Load persisted board from Tauri backend
+    // Load persisted board from the Tauri backend
     let loadedDbBoard = false;
-    try {
-      const dbBytes = await invoke<number[] | null>('load_board', { boardId: activeBoardId });
-      if (dbBytes) {
-        api.importFullState(new Uint8Array(dbBytes));
-
-        // Pre-load images from assets after hydration
-        const dbJson = api.getSceneJson();
-        try {
-          const parsed = JSON.parse(dbJson);
-          if (parsed.elements) {
-            for (const el of parsed.elements) {
-              if (el.kind === 'Image' && el.asset_id) {
-                try {
-                  const dataUrl = await invoke<string>('load_asset', { id: el.asset_id });
-                  if (dataUrl) {
-                    const img = new Image();
-                    img.onload = () => {
-                      engine.set_cached_image(BigInt(el.id), img);
-                      engine.render();
-                    };
-                    img.src = dataUrl;
-                  }
-                } catch (err) {
-                  logger.error(`Failed to load asset ${el.asset_id}:`, err);
-                }
-              }
-            }
-          }
-        } catch (_) { /* invalid json */ }
-        loadedDbBoard = true;
+    if (persistenceAvailable()) {
+      try {
+        const scene = await loadBoardScene(activeBoardIdRef.current);
+        if (scene) {
+          api.loadSceneJson(scene);
+          void preloadAssets(engine);
+          loadedDbBoard = true;
+        }
+      } catch (e) {
+        logger.error('Failed to load board:', e);
       }
-    } catch (e) {
-      logger.error('Failed to load from redb DB:', e);
     }
 
     if (!loadedDbBoard) {
@@ -317,34 +311,23 @@ export default function App() {
     }
     engine.render();
     setCanvasReady(true);
-  }, [activeBoardId, gridType, isDarkMode, canvasBgColor]);
+  }, [gridType, isDarkMode, canvasBgColor]);
 
-  // ── Auto-Save Loop: Persist to Tauri backend & broadcast delta ─────────────
+  // ── Auto-Save Loop: incremental deltas to the Tauri backend ────────────────
   useEffect(() => {
     if (!canvasReady) return;
-    const interval = setInterval(() => {
-      const engine = canvasRef.current?.getEngine();
-      if (!engine) return;
-      const needsSave = engine.check_and_clear_dirty();
-      if (needsSave) {
-        const stateBytes = engine.export_full_state();
-        let binary = '';
-        const chunkSize = 8192;
-        for (let i = 0; i < stateBytes.length; i += chunkSize) {
-          binary += String.fromCharCode.apply(null, stateBytes.subarray(i, i + chunkSize) as unknown as number[]);
-        }
-        const b64 = window.btoa(binary);
-        invoke('save_board', { payloadB64: b64, boardId: activeBoardId }).catch(err => logger.error('Auto-save failed:', err));
-
-        // Broadcast to WebSocket collaboration room if connected
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          const syncStep1Packet = engine.get_local_state_vector();
-          wsRef.current.send(syncStep1Packet);
-        }
-      }
-    }, 500);
-    return () => clearInterval(interval);
-  }, [canvasReady, activeBoardId]);
+    const flush = () => { void saverRef.current?.flush(activeBoardIdRef.current); };
+    const interval = setInterval(flush, 500);
+    const onHidden = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onHidden);
+      flush();
+    };
+  }, [canvasReady]);
 
   // ── Grid Type Sync ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -357,45 +340,34 @@ export default function App() {
 
   // ── Multi-Board Switching & Creation ──────────────────────────────────────
   const switchBoard = useCallback(async (targetId: string) => {
-    if (targetId === activeBoardId) return;
+    if (targetId === activeBoardIdRef.current) return;
     const engine = canvasRef.current?.getEngine();
     if (engine) {
-      // Save current board before switching
-      try {
-        const stateBytes = engine.export_full_state();
-        let binary = '';
-        const chunkSize = 8192;
-        for (let i = 0; i < stateBytes.length; i += chunkSize) {
-          binary += String.fromCharCode.apply(null, stateBytes.subarray(i, i + chunkSize) as unknown as number[]);
-        }
-        const b64 = window.btoa(binary);
-        await invoke('save_board', { payloadB64: b64, boardId: activeBoardId });
-      } catch (err) {
-        logger.error('Failed to save previous board before switch:', err);
-      }
+      // Persist the outgoing board's pending edits under its own id first.
+      await saverRef.current?.flush(activeBoardIdRef.current);
 
-      // Switch active ID
+      activeBoardIdRef.current = targetId;
       setActiveBoardId(targetId);
       localStorage.setItem('aerial_active_board_id', targetId);
 
-      // Load target board
-      try {
-        const dbBytes = await invoke<number[] | null>('load_board', { boardId: targetId });
-        if (dbBytes && dbBytes.length > 0) {
-          canvasRef.current?.importFullState(new Uint8Array(dbBytes));
-        } else {
-          canvasRef.current?.clearBoard();
+      // Loading (even an empty scene) resets the engine's change feed, so the
+      // switch itself never produces writes.
+      let scene: string | null = null;
+      if (persistenceAvailable()) {
+        try {
+          scene = await loadBoardScene(targetId);
+        } catch (err) {
+          logger.error('Failed to load target board:', err);
         }
-      } catch (err) {
-        logger.error('Failed to load target board:', err);
-        canvasRef.current?.clearBoard();
       }
+      canvasRef.current?.loadSceneJson(scene ?? EMPTY_SCENE);
+      void preloadAssets(engine);
 
       const targetBoard = boards.find(b => b.id === targetId);
       if (targetBoard?.bgColor) setCanvasBgColor(targetBoard.bgColor);
       if (targetBoard?.gridType) setGridType(targetBoard.gridType);
     }
-  }, [activeBoardId, boards]);
+  }, [boards]);
 
   const createNewBoard = useCallback(async () => {
     const newId = 'board_' + Date.now();
@@ -422,15 +394,24 @@ export default function App() {
     });
   }, []);
 
-  const deleteBoard = useCallback((boardId: string) => {
+  const deleteBoard = useCallback(async (boardId: string) => {
     if (boards.length <= 1) return;
     const remaining = boards.filter(b => b.id !== boardId);
     setBoards(remaining);
     localStorage.setItem('aerial_board_list', JSON.stringify(remaining));
-    if (activeBoardId === boardId) {
-      switchBoard(remaining[0].id);
+    if (activeBoardIdRef.current === boardId) {
+      await switchBoard(remaining[0].id);
     }
-  }, [boards, activeBoardId, switchBoard]);
+    // Deleting from the list must delete the data too — previously the rows
+    // stayed on disk indefinitely after a board was "deleted".
+    if (persistenceAvailable()) {
+      try {
+        await deleteBoardData(boardId);
+      } catch (err) {
+        logger.error('Failed to delete board data:', err);
+      }
+    }
+  }, [boards, switchBoard]);
 
   // ── Tool Selection ────────────────────────────────────────────────────────
   const selectTool = useCallback((id: DesktopToolId) => {
@@ -545,16 +526,12 @@ export default function App() {
     setBoards(updatedList);
     localStorage.setItem('aerial_board_list', JSON.stringify(updatedList));
 
-    if (canvasState && canvasState.length > 0) {
-      let binary = '';
-      for (let i = 0; i < canvasState.length; i++) {
-        binary += String.fromCharCode(canvasState[i]);
-      }
-      const b64 = btoa(binary);
+    if (canvasState && canvasState.length > 0 && persistenceAvailable()) {
       try {
-        await invoke('save_board', { payloadB64: b64, boardId: newId });
+        const sceneJson = new TextDecoder().decode(canvasState);
+        await saveBoardChanges(newId, sceneToChangeSet(sceneJson));
       } catch (e) {
-        logger.error('Failed to save quick note board to DB:', e);
+        logger.error('Failed to save quick note board:', e);
       }
     }
 
@@ -766,15 +743,8 @@ export default function App() {
       for (const filePath of event.payload.paths) {
         if (filePath.match(/\.(png|jpe?g|webp|gif|bmp|tiff|svg)$/i)) {
           try {
-            const { readFile } = await import('@tauri-apps/plugin-fs');
-            const bytes = await readFile(filePath);
-            let binary = '';
-            for (let i = 0; i < bytes.length; i++) {
-              binary += String.fromCharCode(bytes[i]);
-            }
-            const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
-            const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-            const dataUrl = `data:${mime};base64,${btoa(binary)}`;
+            // Rust only reads paths the OS just reported in this drop event.
+            const dataUrl = await invoke<string>('read_dropped_image', { path: filePath });
             const pos = {
               x: (event.payload.position?.x ?? window.innerWidth / 2) + offset,
               y: (event.payload.position?.y ?? window.innerHeight / 2) + offset,
@@ -863,9 +833,11 @@ export default function App() {
       return;
     }
 
+    // Selected text leaves the device for a third party: ask once, explicitly.
+    if (!ensureConsent('translation', { reask: true })) return;
+
     try {
-      const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
-      const res = await tauriFetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`);
+      const res = await externalFetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const data: any = await res.json();
       if (data && data[0]) {
@@ -1117,7 +1089,10 @@ export default function App() {
         return;
       }
 
-      // Standalone single-key tool shortcuts
+      // Standalone single-key tool shortcuts never fire with a modifier held:
+      // previously Ctrl+Z also switched to the laser pen, Ctrl+C to ellipse…
+      if (isCmdOrCtrl || e.altKey) return;
+
       switch (e.key.toLowerCase()) {
         case '1':
         case 'v':
@@ -1208,6 +1183,7 @@ export default function App() {
       <div className="absolute inset-0 z-0">
         <AerialCanvas
           ref={canvasRef}
+          onExternalRequest={(service) => ensureConsent(service, { reask: true })}
           theme={isDarkMode ? 'dark' : 'light'}
           backgroundColor={canvasBgColor}
           onChangeBackgroundColor={changeCanvasBg}
@@ -1338,7 +1314,12 @@ export default function App() {
                           </button>
                           {boards.length > 1 && (
                             <button
-                              onClick={() => deleteBoard(activeBoardId)}
+                              onClick={() => {
+                                const name = boards.find(b => b.id === activeBoardId)?.name || 'this canvas';
+                                if (window.confirm(`Permanently delete "${name}"? This cannot be undone.`)) {
+                                  void deleteBoard(activeBoardId);
+                                }
+                              }}
                               className="p-1 hover:bg-red-500/10 rounded text-[var(--muted-foreground)] hover:text-red-500 cursor-pointer"
                               title="Delete Canvas"
                             >
@@ -2278,890 +2259,3 @@ export default function App() {
 }
 
 // ── Keyboard Shortcuts Dialog ───────────────────────────────────────────────
-
-function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
-  const quickNoteShortcuts = [
-    { name: 'Quick Canvas (Instant Note)', keys: ['⌘', '⇧', 'N'] },
-    { name: 'Quick Note (Alternative)', keys: ['⌘', 'J'] },
-    { name: 'Spotlight Command Palette', keys: ['⌘', 'K'] },
-    { name: 'Stamp Note to Main Canvas', keys: ['⌘', '↵'] },
-    { name: 'Save Note as Board', keys: ['⌘', 'S'] },
-  ];
-
-  const boardShortcuts = [
-    { name: 'Create New Canvas Board', keys: ['⌘', 'N'] },
-    { name: 'Toggle Boards Drawer / Sidebar', keys: ['⌘', 'B'] },
-    { name: 'Switch to Board 1 – 9', keys: ['⌘', '1..9'] },
-    { name: 'Previous Canvas Board', keys: ['⌘', '['] },
-    { name: 'Next Canvas Board', keys: ['⌘', ']'] },
-    { name: 'Clear Canvas Board (Confirm)', keys: ['⌘', '⇧', '⌫'] },
-  ];
-
-  const fileShortcuts = [
-    { name: 'Paste Screenshot from Clipboard', keys: ['⌘', 'V'] },
-    { name: 'Drag & Drop Screenshot / Image', keys: ['Drop', 'PNG'] },
-    { name: 'Export PNG Image / Save', keys: ['⌘', 'S'] },
-    { name: 'Export Vector SVG', keys: ['⌘', '⇧', 'S'] },
-    { name: 'Import Image', keys: ['⌘', 'O'] },
-    { name: 'Import PDF Document', keys: ['⌘', '⇧', 'O'] },
-    { name: 'Toggle Fullscreen Mode', keys: ['⌃', '⌘', 'F'] },
-    { name: 'Reset View (100%)', keys: ['⌘', '0'] },
-    { name: 'Zoom In', keys: ['⌘', '+'] },
-    { name: 'Zoom Out', keys: ['⌘', '-'] },
-    { name: 'Undo Operation', keys: ['⌘', 'Z'] },
-    { name: 'Redo Operation', keys: ['⌘', '⇧', 'Z'] },
-    { name: 'Color & Tool Settings', keys: ['⌘', ','] },
-  ];
-
-  const toolShortcuts = [
-    { name: 'Select Tool', keys: ['V', '1'] },
-    { name: 'Pan / Hand Tool', keys: ['H', '2'] },
-    { name: 'Rectangle Shape', keys: ['R', '3'] },
-    { name: 'Ellipse Shape', keys: ['O', '4'] },
-    { name: 'Line Shape', keys: ['L', '5'] },
-    { name: 'Arrow Shape', keys: ['A', '6'] },
-    { name: 'Draw / Freehand Pen', keys: ['P', '7'] },
-    { name: 'Text Tool', keys: ['T', '8'] },
-    { name: 'Eraser (cycles mode)', keys: ['E', '9'] },
-    { name: 'Calligraphy Fountain Pen', keys: ['F'] },
-    { name: 'Highlighter', keys: ['M'] },
-    { name: 'Magic Pen (AI Handwriting)', keys: ['W'] },
-    { name: 'Laser Pen (Transient Glow)', keys: ['Z'] },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-sm pointer-events-auto animate-in fade-in duration-150 p-4">
-      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl p-6 max-w-2xl w-full max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between pb-4 mb-4 border-b border-[var(--border)]">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/10 flex items-center justify-center">
-              <Command className="w-5 h-5 text-[#e73f07]" />
-            </div>
-            <div>
-              <h2 className="text-base font-sans font-black uppercase tracking-wider text-[var(--foreground)]">Mac Desktop Shortcuts</h2>
-              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">Fast muscle-memory controls & instant note-taking</p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--accent)] transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4 text-[var(--muted-foreground)]" />
-          </button>
-        </div>
-
-        <div className="overflow-y-auto pr-1 flex flex-col gap-5 text-xs font-mono">
-          <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">⚡ Instant Note & Quick Canvas</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {quickNoteShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[#e73f07] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">📋 Board Management & Navigation</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {boardShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">💾 File Operations & Viewport</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {fileShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">✏️ Drawing Tools & Pens</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {toolShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="pt-4 mt-4 border-t border-[var(--border)] flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-5 py-2.5 bg-[#e73f07] hover:bg-[#d03806] text-white rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all active:translate-y-px shadow-md shadow-[#e73f07]/20 cursor-pointer"
-          >
-            Done
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Mermaid / AI Studio Dialog ───────────────────────────────────────────────
-
-// ── Mermaid & Diagram Studio Modal ─────────────────────────────────────────
-
-const DIAGRAM_TEMPLATES = ARASKOVA_DIAGRAM_TEMPLATES;
-
-function DiagramStudioModal({
-  isDarkMode,
-  onClose,
-  onInsertDiagram,
-}: {
-  isDarkMode: boolean;
-  onClose: () => void;
-  onInsertDiagram: (code: string, svg: string, scale?: number, accentColor?: string) => void;
-}) {
-  const [code, setCode] = useState(DIAGRAM_TEMPLATES[0].code);
-  const [diagramStyle, setDiagramStyle] = useState<AraskovaDiagramStyle>(() =>
-    isDarkMode ? 'brutalist' : 'industrial_light'
-  );
-  const [accentColor, setAccentColor] = useState('#e73f07');
-  const [diagramScale, setDiagramScale] = useState(1.0);
-  const [customTopic, setCustomTopic] = useState('');
-  const [promptCopied, setPromptCopied] = useState(false);
-  const [svgOutput, setSvgOutput] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
-  const [isRendering, setIsRendering] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const previewRef = useRef<HTMLDivElement>(null);
-
-  // Sync default aesthetic style when canvas theme toggles
-  useEffect(() => {
-    setDiagramStyle(isDarkMode ? 'brutalist' : 'industrial_light');
-  }, [isDarkMode]);
-
-  const renderCurrentDiagram = useCallback(
-    async (srcCode: string, style: AraskovaDiagramStyle, accentCol: string) => {
-      setIsRendering(true);
-      setError(null);
-      try {
-        const trimmed = srcCode.trim();
-        const effectiveDark =
-          style === 'industrial_light' ? false : style === 'blueprint' ? true : isDarkMode;
-
-        if (trimmed.startsWith('node ') || trimmed.startsWith('group ')) {
-          // Aras DSL format
-          try {
-            const res = await invoke<{ svg: string }>('render_diagram', { code: trimmed });
-            if (res?.svg) {
-              const styledSvg = applyAraskovaDiagramAesthetics(res.svg, effectiveDark, style, accentCol);
-              setSvgOutput(styledSvg);
-              setIsRendering(false);
-              return;
-            }
-          } catch {
-            // If not running in Tauri or Aras DSL fails, fall back to mermaid
-          }
-        }
-
-        // Reset mermaid API configuration cache before re-initializing
-        if ((mermaid as any).mermaidAPI?.reset) {
-          try {
-            (mermaid as any).mermaidAPI.reset();
-          } catch (_) {}
-        }
-
-        // Initialize Mermaid with custom accent and Araskova design system configuration
-        mermaid.initialize(getAraskovaMermaidConfig(effectiveDark, style, accentCol));
-        const id = 'mermaid-preview-' + Math.random().toString(36).substring(2, 9);
-        const { svg } = await mermaid.render(id, trimmed);
-        const styledSvg = applyAraskovaDiagramAesthetics(svg, effectiveDark, style, accentCol);
-        setSvgOutput(styledSvg);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setError(msg);
-      } finally {
-        setIsRendering(false);
-      }
-    },
-    [isDarkMode]
-  );
-
-  useEffect(() => {
-    renderCurrentDiagram(code, diagramStyle, accentColor);
-  }, [code, diagramStyle, accentColor, renderCurrentDiagram]);
-
-  const handleCopySvg = async () => {
-    if (!svgOutput) return;
-    try {
-      await navigator.clipboard.writeText(svgOutput);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleCopyAiPrompt = async () => {
-    const topic = customTopic.trim() || 'Software System Architecture & Microservices Event Stream';
-    const promptText = `Generate a clean, valid Mermaid.js diagram for: ${topic}
-
-Requirements:
-1. Use standard Mermaid syntax (flowchart TD/LR, sequenceDiagram, stateDiagram-v2, or classDiagram).
-2. Group related components into subgraphs with clear labels (e.g. subgraph INGESTION ["// Ingestion Cluster"]).
-3. Use concise node descriptions and descriptive edge labels.
-4. Output ONLY raw Mermaid code inside a \`\`\`mermaid code block without extra conversational filler so it can be pasted directly into Aerial Canvas.`;
-
-    try {
-      await navigator.clipboard.writeText(promptText);
-      setPromptCopied(true);
-      setTimeout(() => setPromptCopied(false), 2500);
-    } catch (_) {}
-  };
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/85 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150 p-4">
-      <div
-        className={`${
-          isDarkMode ? 'bg-[#111111] border-[#2a2a2a] text-[#f3f3f2]' : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a]'
-        } border rounded-3xl shadow-2xl w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden`}
-      >
-        {/* Header */}
-        <div
-          className={`flex items-center justify-between px-6 py-4 border-b ${
-            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/80' : 'border-[#e5e5e5] bg-[#f8f9fa]'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <div
-              style={{ borderColor: `${accentColor}50`, backgroundColor: `${accentColor}18`, color: accentColor }}
-              className="w-10 h-10 rounded-2xl border flex items-center justify-center shadow-inner transition-colors"
-            >
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2
-                  className={`text-sm font-sans font-black uppercase tracking-wider ${
-                    isDarkMode ? 'text-[#f3f3f2]' : 'text-[#0a0a0a]'
-                  }`}
-                >
-                  Architecture & Mermaid Studio
-                </h2>
-                <span
-                  style={{ backgroundColor: `${accentColor}22`, borderColor: `${accentColor}44`, color: accentColor }}
-                  className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase tracking-widest border transition-colors"
-                >
-                  Araskova Brutalist
-                </span>
-              </div>
-              <p className="text-[10px] font-mono text-[#81868b] uppercase tracking-wider">
-                Machinery vector aesthetics · Hardware HUD Reticles · Embedded Font Kerns
-              </p>
-            </div>
-          </div>
-
-          {/* Aesthetic Style Selector */}
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-mono text-[#81868b] uppercase tracking-wider mr-1 hidden sm:inline">
-              Aesthetic:
-            </span>
-            {(
-              [
-                { id: 'brutalist', label: 'Brutalist' },
-                { id: 'blueprint', label: 'Blueprint' },
-                { id: 'industrial_light', label: 'Industrial' },
-              ] as const
-            ).map((st) => (
-              <button
-                key={st.id}
-                onClick={() => setDiagramStyle(st.id)}
-                style={diagramStyle === st.id ? { backgroundColor: accentColor } : {}}
-                className={`px-2.5 py-1 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                  diagramStyle === st.id
-                    ? 'text-white shadow-xs'
-                    : isDarkMode
-                    ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
-                    : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
-                }`}
-              >
-                {st.label}
-              </button>
-            ))}
-
-            <button
-              onClick={onClose}
-              className={`ml-2 w-8 h-8 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
-                isDarkMode ? 'hover:bg-[#2a2a2a] text-[#81868b] hover:text-[#f3f3f2]' : 'hover:bg-[#e9ecef] text-[#666666] hover:text-[#000000]'
-              }`}
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* AI Prompt Assistant Banner */}
-        <div
-          className={`px-6 py-3 border-b flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 ${
-            isDarkMode ? 'bg-[#151515] border-[#2a2a2a]' : 'bg-[#f4f5f7] border-[#e2e4e8]'
-          }`}
-        >
-          <div className="flex items-start sm:items-center gap-2.5 flex-1 min-w-0">
-            <div
-              style={{ borderColor: `${accentColor}40`, backgroundColor: `${accentColor}18`, color: accentColor }}
-              className="w-7 h-7 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 sm:mt-0"
-            >
-              <Bot className="w-4 h-4" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--foreground)]">
-                  AI Diagram Assistant
-                </span>
-                <span className="text-[9px] font-mono text-[#81868b] uppercase tracking-wider hidden md:inline">
-                  ChatGPT · Claude · Gemini
-                </span>
-              </div>
-              <p className="text-[10px] text-[#81868b] truncate">
-                Copy prompt to ChatGPT or Claude to get exact syntax for whatever you desire, then paste it here to render instantly.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <input
-              type="text"
-              value={customTopic}
-              onChange={(e) => setCustomTopic(e.target.value)}
-              placeholder="e.g. Payment Gateway with Webhooks..."
-              className={`text-[11px] font-mono px-3 py-1.5 rounded-xl border outline-none focus:border-[#e73f07] transition-all w-48 sm:w-56 ${
-                isDarkMode ? 'bg-[#0a0a0a] text-[#f3f3f2] border-[#2a2a2a]' : 'bg-white text-[#0a0a0a] border-[#d0d0d0]'
-              }`}
-            />
-            <button
-              type="button"
-              onClick={handleCopyAiPrompt}
-              style={!promptCopied ? { backgroundColor: accentColor } : {}}
-              className={`px-3 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
-                promptCopied
-                  ? 'bg-green-600 text-white'
-                  : 'hover:opacity-90 text-white active:translate-y-px'
-              }`}
-            >
-              {promptCopied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-              {promptCopied ? 'Copied Prompt!' : 'Copy AI Prompt'}
-            </button>
-          </div>
-        </div>
-
-        {/* Presets & Customization Bar */}
-        <div
-          className={`px-6 py-2.5 border-b flex items-center justify-between gap-4 overflow-x-auto scrollbar-none ${
-            isDarkMode ? 'bg-[#0a0a0a]/50 border-[#2a2a2a]' : 'bg-[#f1f3f5] border-[#e5e5e5]'
-          }`}
-        >
-          {/* Templates */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold whitespace-nowrap mr-1">
-              Presets:
-            </span>
-            {DIAGRAM_TEMPLATES.map((tmpl) => (
-              <button
-                key={tmpl.name}
-                onClick={() => setCode(tmpl.code)}
-                style={code === tmpl.code ? { backgroundColor: accentColor } : {}}
-                className={`px-2.5 py-1.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider transition-all whitespace-nowrap cursor-pointer ${
-                  code === tmpl.code
-                    ? 'text-white shadow-xs'
-                    : isDarkMode
-                    ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
-                    : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
-                }`}
-              >
-                {tmpl.name}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-3 shrink-0">
-            {/* Color Customizer */}
-            <div className="flex items-center gap-1.5 pl-3 border-l border-[#2a2a2a] shrink-0">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold">
-                Accent:
-              </span>
-              {[
-                { color: '#e73f07', name: 'Araskova Orange' },
-                { color: '#0ea5e9', name: 'Electric Cyan' },
-                { color: '#10b981', name: 'Emerald Green' },
-                { color: '#8b5cf6', name: 'Radiant Violet' },
-                { color: '#f59e0b', name: 'Cyber Amber' },
-                { color: '#ef4444', name: 'Crimson Red' },
-                { color: '#f3f3f2', name: 'Crisp White' },
-              ].map((swatch) => (
-                <button
-                  key={swatch.color}
-                  type="button"
-                  onClick={() => setAccentColor(swatch.color)}
-                  title={swatch.name}
-                  style={{ backgroundColor: swatch.color }}
-                  className={`w-5 h-5 rounded-full border transition-all cursor-pointer shadow-xs ${
-                    accentColor.toLowerCase() === swatch.color.toLowerCase()
-                      ? 'border-white scale-110 ring-2 ring-white/40'
-                      : 'border-white/20 hover:scale-105 active:scale-95'
-                  }`}
-                />
-              ))}
-              <label
-                title="Custom Accent Color"
-                className="relative w-5 h-5 rounded-full border border-white/30 flex items-center justify-center cursor-pointer overflow-hidden bg-gradient-to-tr from-pink-500 via-purple-500 to-cyan-500 hover:scale-105 transition-transform"
-              >
-                <input
-                  type="color"
-                  value={accentColor}
-                  className="opacity-0 absolute inset-0 cursor-pointer w-full h-full"
-                  onChange={(e) => setAccentColor(e.target.value)}
-                />
-              </label>
-            </div>
-
-            {/* Size Adjuster */}
-            <div className="flex items-center gap-1.5 pl-3 border-l border-[#2a2a2a] shrink-0">
-              <span className="text-[10px] font-mono uppercase tracking-wider text-[#81868b] font-bold">
-                Size:
-              </span>
-              {[
-                { label: '50%', value: 0.5 },
-                { label: '75%', value: 0.75 },
-                { label: '100%', value: 1.0 },
-                { label: '125%', value: 1.25 },
-                { label: '150%', value: 1.5 },
-              ].map((sz) => (
-                <button
-                  key={sz.label}
-                  type="button"
-                  onClick={() => setDiagramScale(sz.value)}
-                  style={diagramScale === sz.value ? { backgroundColor: accentColor } : {}}
-                  className={`px-2 py-1 rounded-lg text-[9px] font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                    diagramScale === sz.value
-                      ? 'text-white shadow-xs'
-                      : isDarkMode
-                      ? 'bg-[#1a1a1a] text-[#81868b] hover:text-[#f3f3f2] border border-[#2a2a2a]'
-                      : 'bg-white text-[#555555] hover:text-[#000000] border border-[#d0d0d0]'
-                  }`}
-                >
-                  {sz.label}
-                </button>
-              ))}
-              <input
-                type="range"
-                min="0.5"
-                max="2.0"
-                step="0.1"
-                value={diagramScale}
-                onChange={(e) => setDiagramScale(parseFloat(e.target.value))}
-                className="w-16 cursor-pointer"
-                style={{ accentColor }}
-                title={`Scale: ${Math.round(diagramScale * 100)}%`}
-              />
-              <span className="text-[9px] font-mono text-[#81868b] min-w-[32px]">
-                {Math.round(diagramScale * 100)}%
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Body (Editor + Preview) */}
-        <div className={`flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x ${isDarkMode ? 'divide-[#2a2a2a]' : 'divide-[#e5e5e5]'}`}>
-          {/* Editor Side */}
-          <div className={`flex flex-col h-full ${isDarkMode ? 'bg-[#111111]' : 'bg-[#fafafa]'} p-4`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] flex items-center gap-1.5">
-                <Code className="w-3.5 h-3.5" style={{ color: accentColor }} />
-                Diagram Definition (Mermaid / Aras DSL)
-              </span>
-              <button
-                onClick={() => renderCurrentDiagram(code, diagramStyle, accentColor)}
-                disabled={isRendering}
-                style={{ color: accentColor }}
-                className="text-[10px] font-mono font-bold uppercase tracking-wider hover:underline cursor-pointer"
-              >
-                {isRendering ? 'Rendering...' : 'Re-render'}
-              </button>
-            </div>
-            <textarea
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="Enter Mermaid or Aras DSL code..."
-              spellCheck={false}
-              className={`flex-1 w-full font-mono text-xs p-3.5 rounded-2xl border outline-none transition-all resize-none shadow-inner ${
-                isDarkMode ? 'bg-[#0a0a0a] text-[#f3f3f2] border-[#2a2a2a]' : 'bg-white text-[#0a0a0a] border-[#e5e5e5]'
-              }`}
-              style={{ borderColor: undefined }}
-            />
-            {error && (
-              <div className="mt-2.5 p-2.5 rounded-xl bg-red-950/40 border border-red-800/60 text-red-300 font-mono text-[10px] leading-tight">
-                <p className="font-bold uppercase tracking-wider mb-1">Syntax Error:</p>
-                <p className="line-clamp-2">{error}</p>
-              </div>
-            )}
-          </div>
-
-          {/* Preview Side */}
-          <div className={`flex flex-col h-full ${isDarkMode ? 'bg-[#0a0a0a]' : 'bg-[#f4f4f5]'} p-4`}>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b]">
-                Rendered Preview (Araskova Machinery Engine)
-              </span>
-              {svgOutput && (
-                <button
-                  onClick={handleCopySvg}
-                  className="text-[10px] font-mono font-bold uppercase tracking-wider text-[#81868b] hover:text-[#e73f07] flex items-center gap-1 cursor-pointer"
-                >
-                  {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                  {copied ? 'Copied SVG' : 'Copy SVG'}
-                </button>
-              )}
-            </div>
-            <div
-              ref={previewRef}
-              className={`flex-1 w-full rounded-2xl border overflow-auto p-4 flex items-center justify-center min-h-[260px] relative ${
-                isDarkMode ? 'border-[#2a2a2a] bg-[#111111]' : 'border-[#e5e5e5] bg-white'
-              }`}
-            >
-              {/* Tactical Corner Marks on Preview Box */}
-              <div className="absolute top-2 left-2 w-2 h-2 border-t-2 border-l-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
-              <div className="absolute top-2 right-2 w-2 h-2 border-t-2 border-r-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
-              <div className="absolute bottom-2 left-2 w-2 h-2 border-b-2 border-l-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
-              <div className="absolute bottom-2 right-2 w-2 h-2 border-b-2 border-r-2 pointer-events-none" style={{ borderColor: `${accentColor}60` }} />
-
-              {svgOutput ? (
-                <div
-                  className="w-full h-full flex items-center justify-center [&_svg]:max-w-full [&_svg]:max-h-full [&_svg]:h-auto transition-transform"
-                  style={{ transform: `scale(${Math.min(1.2, diagramScale)})` }}
-                  dangerouslySetInnerHTML={{ __html: svgOutput }}
-                />
-              ) : (
-                <p className="text-xs font-mono text-[#81868b]">
-                  {error ? 'Unable to render preview' : 'Enter valid diagram code to preview'}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div
-          className={`px-6 py-4 border-t flex items-center justify-between ${
-            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/80' : 'border-[#e5e5e5] bg-[#f8f9fa]'
-          }`}
-        >
-          <div className="flex items-center gap-3 text-[10px] font-mono text-[#81868b]">
-            <span className="hidden sm:inline">
-              Embedded Google Fonts & tactical vector reticles.
-            </span>
-            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] text-[#f3f3f2]">
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: accentColor }} />
-              Scale: {Math.round(diagramScale * 100)}%
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className={`px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border transition-all cursor-pointer ${
-                isDarkMode ? 'border-[#2a2a2a] text-[#f3f3f2] hover:bg-[#1a1a1a]' : 'border-[#e5e5e5] text-[#0a0a0a] hover:bg-[#e9ecef]'
-              }`}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                if (svgOutput) {
-                  onInsertDiagram(code, svgOutput, diagramScale, accentColor);
-                }
-              }}
-              disabled={!svgOutput || !!error}
-              style={{ backgroundColor: accentColor }}
-              className="px-5 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider text-white disabled:opacity-40 transition-all shadow-md active:translate-y-px cursor-pointer flex items-center gap-2"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Insert onto Canvas
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Text Translator Modal ──────────────────────────────────────────────────
-
-const SUPPORTED_LANGUAGES = [
-  { code: 'en', name: 'English' },
-  { code: 'ml', name: 'Malayalam (മലയാളം)' },
-  { code: 'ta', name: 'Tamil (தமிழ்)' },
-  { code: 'te', name: 'Telugu (తెలుగు)' },
-  { code: 'hi', name: 'Hindi (हिन्दी)' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'de', name: 'German' },
-  { code: 'ja', name: 'Japanese (日本語)' },
-  { code: 'zh', name: 'Chinese (中文)' },
-  { code: 'ar', name: 'Arabic (العربية)' },
-  { code: 'ru', name: 'Russian' },
-];
-
-const PRESET_TRANSLATIONS: Record<string, Record<string, string>> = {
-  'architecture diagram': {
-    ml: 'വാസ്തുവിദ്യാ രേഖാചിത്രം',
-    ta: 'கட்டடக்கலை வரைபடம்',
-    hi: 'वास्तुकला आरेख',
-    es: 'diagrama de arquitectura',
-    fr: "diagramme d'architecture",
-  },
-  'deep tech': {
-    ml: 'ഡീപ് ടെക്നോളജി',
-    ta: 'ஆழமான தொழில்நுட்பம்',
-    hi: 'डीप टेक',
-    es: 'tecnología profunda',
-  },
-  'autonomous systems': {
-    ml: 'സ്വയംഭരണ സംവിധാനങ്ങൾ',
-    ta: 'தன்னாட்சி அமைப்புகள்',
-    hi: 'स्वायत्त प्रणाली',
-    es: 'sistemas autónomos',
-  },
-  'hardware acceleration': {
-    ml: 'ഹാർഡ്‌വെയർ ആക്സിലറേഷൻ',
-    ta: 'வன்பொருள் முடுக்கம்',
-    hi: 'हार्डवेयर त्वरण',
-    es: 'aceleración por hardware',
-  },
-};
-
-function TextTranslatorModal({
-  onClose,
-  onInsertText,
-}: {
-  onClose: () => void;
-  onInsertText: (text: string) => void;
-}) {
-  const [sourceText, setSourceText] = useState('Aerial Spatial Whiteboard for Engineering');
-  const [sourceLang, setSourceLang] = useState('en');
-  const [targetLang, setTargetLang] = useState('ml');
-  const [translatedText, setTranslatedText] = useState('');
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const performTranslate = useCallback(async (text: string, from: string, to: string) => {
-    if (!text.trim()) {
-      setTranslatedText('');
-      return;
-    }
-
-    // Check offline dictionary match
-    const lower = text.trim().toLowerCase();
-    if (PRESET_TRANSLATIONS[lower]?.[to]) {
-      setTranslatedText(PRESET_TRANSLATIONS[lower][to]);
-      return;
-    }
-
-    setIsTranslating(true);
-    try {
-      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${from}|${to}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.responseData?.translatedText) {
-          setTranslatedText(data.responseData.translatedText);
-          setIsTranslating(false);
-          return;
-        }
-      }
-      throw new Error('API unavailable');
-    } catch {
-      // Fallback: transliteration / formatted placeholder
-      setTranslatedText(`[${to.toUpperCase()}] ${text}`);
-    } finally {
-      setIsTranslating(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    performTranslate(sourceText, sourceLang, targetLang);
-  }, [sourceText, sourceLang, targetLang, performTranslate]);
-
-  const handleCopy = async () => {
-    if (!translatedText) return;
-    await navigator.clipboard.writeText(translatedText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150">
-      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl w-full max-w-xl mx-4 overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[var(--secondary)]/40">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/10 flex items-center justify-center text-[#e73f07]">
-              <Languages className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-sm font-sans font-black uppercase tracking-wider text-[var(--foreground)]">
-                Aerial Multilingual Studio
-              </h2>
-              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">
-                Translate canvas text across Malayalam, Tamil, Telugu, Hindi & Global Languages
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--accent)] transition-colors cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Language Selectors */}
-        <div className="px-6 py-3 border-b border-[var(--border)] bg-[var(--secondary)]/20 grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-1.5">
-              From Language
-            </label>
-            <select
-              value={sourceLang}
-              onChange={(e) => setSourceLang(e.target.value)}
-              className="w-full bg-[var(--secondary)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-mono font-bold uppercase tracking-wider text-[var(--foreground)] outline-none focus:border-[#e73f07]"
-            >
-              {SUPPORTED_LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-1.5">
-              To Language
-            </label>
-            <select
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              className="w-full bg-[var(--secondary)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-mono font-bold uppercase tracking-wider text-[var(--foreground)] outline-none focus:border-[#e73f07]"
-            >
-              {SUPPORTED_LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Input & Output */}
-        <div className="p-6 flex flex-col gap-4 overflow-y-auto">
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-1.5">
-              Source Text
-            </label>
-            <textarea
-              value={sourceText}
-              onChange={(e) => setSourceText(e.target.value)}
-              rows={3}
-              placeholder="Enter text to translate..."
-              className="w-full bg-[#0a0a0a] text-[var(--foreground)] font-sans text-sm p-3.5 rounded-2xl border border-[var(--border)] outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">
-                Translated Result
-              </label>
-              <div className="flex items-center gap-2">
-                {isTranslating && (
-                  <span className="text-[10px] font-mono text-[#e73f07] animate-pulse">Translating...</span>
-                )}
-                {translatedText && (
-                  <button
-                    onClick={handleCopy}
-                    className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--muted-foreground)] hover:text-[var(--foreground)] flex items-center gap-1 cursor-pointer"
-                  >
-                    {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                    {copied ? 'Copied' : 'Copy'}
-                  </button>
-                )}
-              </div>
-            </div>
-            <textarea
-              value={translatedText}
-              onChange={(e) => setTranslatedText(e.target.value)}
-              rows={3}
-              placeholder="Translation will appear here..."
-              className="w-full bg-[#111111] text-[var(--foreground)] font-sans text-sm p-3.5 rounded-2xl border border-[var(--border)] outline-none focus:border-[#e73f07] transition-all resize-none"
-            />
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-[var(--border)] bg-[var(--secondary)]/30 flex items-center justify-between">
-          <p className="text-[10px] font-mono text-[var(--muted-foreground)]">
-            Ready to insert onto active canvas.
-          </p>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--accent)] transition-all cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                if (translatedText.trim()) {
-                  onInsertText(translatedText.trim());
-                }
-              }}
-              disabled={!translatedText.trim() || isTranslating}
-              className="px-5 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider bg-[#e73f07] hover:bg-[#d03806] text-white disabled:opacity-40 transition-all shadow-md shadow-[#e73f07]/20 active:translate-y-px cursor-pointer flex items-center gap-2"
-            >
-              <Type className="w-3.5 h-3.5" />
-              Insert as Text
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}

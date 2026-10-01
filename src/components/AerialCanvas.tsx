@@ -28,6 +28,7 @@ import type {
   ToolId,
 } from '../lib/types';
 import { createLogger } from '../lib/logger';
+import { withEmbeddedFonts } from '../lib/svg-fonts';
 
 const logger = createLogger('AerialCanvas');
 
@@ -42,6 +43,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       initialScene,
       initialState,
       onChange,
+      onChanges,
       theme,
       backgroundColor,
       readOnly = false,
@@ -61,6 +63,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       onToolChange,
       onNodeDoubleClick,
       onCanvasPointerDown,
+      onExternalRequest,
     } = props;
 
     // ── Refs ──────────────────────────────────────────────────────────────
@@ -262,24 +265,31 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
       return () => cancelAnimationFrame(animationFrameId);
     }, [engineReady]);
 
-    // ── onChange Dirty Check Loop ──────────────────────────────────────────
+    // ── Change notification loop ───────────────────────────────────────────
+    // Each consumer tracks the scene version it last saw, so onChange, onChanges
+    // and the host's own autosave never steal each other's notifications.
     useEffect(() => {
-      if (!engineReady || !onChange) return;
+      if (!engineReady || (!onChange && !onChanges)) return;
+      let seenVersion = engineRef.current?.scene_version() ?? 0;
       const interval = setInterval(() => {
         const e = engineRef.current;
         if (!e) return;
-        const needsNotify = e.check_and_clear_dirty();
-        if (needsNotify) {
+        if (onChanges && e.has_pending_changes()) {
+          onChanges(e.take_changes());
+        }
+        const v = e.scene_version();
+        if (onChange && v !== seenVersion) {
+          seenVersion = v;
           onChange(e.get_scene_json());
         }
       }, changeInterval);
       return () => clearInterval(interval);
-    }, [engineReady, onChange, changeInterval]);
+    }, [engineReady, onChange, onChanges, changeInterval]);
 
     // ── SVG to Image Rasterizer (Handles WebKit Data URLs & Blob URLs) ──
-    const renderSvgToImage = useCallback((cleanSvg: string): Promise<HTMLImageElement> => {
+    const renderSvgToImage = useCallback(async (cleanSvg: string): Promise<HTMLImageElement> => {
+      const sanitized = await withEmbeddedFonts(cleanSvg.replace(/@import\s+url\([^)]+\);?/gi, ''));
       return new Promise((resolve, reject) => {
-        const sanitized = cleanSvg.replace(/@import\s+url\([^)]+\);?/gi, '');
         const svg64 = btoa(unescape(encodeURIComponent(sanitized)));
         const dataUrl = 'data:image/svg+xml;base64,' + svg64;
 
@@ -504,6 +514,8 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
     const convertMagicStrokes = useCallback(async (): Promise<string | null> => {
       const engine = engineRef.current;
       if (!engine) return null;
+      // Recognition uploads the ink to Google Input Tools; let the host gate it.
+      if (onExternalRequest && !(await onExternalRequest('handwriting'))) return null;
       const jsonStr = engine.extract_magic_strokes();
       if (!jsonStr) return null;
       try {
@@ -561,7 +573,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engine.render();
       }
       return null;
-    }, [magicLanguage, magicFont, strokeColor]);
+    }, [magicLanguage, magicFont, strokeColor, onExternalRequest]);
 
     // ── Pointer events ────────────────────────────────────────────────────
     const onPointerDown = useCallback((e: React.PointerEvent) => {
@@ -1043,6 +1055,18 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
         engineRef.current?.render();
       },
       exportFullState: () => engineRef.current?.export_full_state() ?? new Uint8Array(),
+      takeChanges: () => engineRef.current?.take_changes() ?? '{"reset":false,"upserts":[],"deletes":[]}',
+      getElementCount: () => engineRef.current?.element_count() ?? 0,
+      getRenderStats: () => {
+        try {
+          return JSON.parse(engineRef.current?.get_render_stats() ?? '{}');
+        } catch {
+          return {};
+        }
+      },
+      setLodThreshold: (px: number) => {
+        engineRef.current?.set_lod_threshold(px);
+      },
       importFullState: (bytes: Uint8Array) => {
         engineRef.current?.import_full_state(bytes);
         engineRef.current?.render();

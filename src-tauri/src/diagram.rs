@@ -6,6 +6,14 @@ use aras_layout::render_svg;
 use serde::Serialize;
 use std::collections::HashMap;
 
+use crate::security::{validate_len, MAX_DIAGRAM_SOURCE_BYTES};
+
+/// Node labels are written back into DSL source; newlines or quotes would let
+/// a label inject extra statements, so they are stripped.
+fn clean_label(label: &str) -> String {
+    label.chars().filter(|c| !c.is_control() && *c != '"').take(256).collect()
+}
+
 #[derive(Serialize)]
 pub struct RenderResult {
     pub svg: String,
@@ -14,6 +22,7 @@ pub struct RenderResult {
 
 #[tauri::command]
 pub async fn render_diagram(code: String) -> Result<RenderResult, String> {
+    validate_len("diagram source", code.len(), MAX_DIAGRAM_SOURCE_BYTES)?;
     tokio::task::spawn_blocking(move || {
         let ast = parser::parse(&code).map_err(|e| format!("Failed to parse diagram: {}", e))?;
 
@@ -31,6 +40,11 @@ pub async fn update_diagram_node(
     node_id: String,
     new_label: String,
 ) -> Result<String, String> {
+    validate_len("diagram source", code.len(), MAX_DIAGRAM_SOURCE_BYTES)?;
+    if node_id.is_empty() || node_id.len() > 128 || node_id.chars().any(|c| c.is_control() || "[]\"{}".contains(c)) {
+        return Err("invalid node id".to_string());
+    }
+    let new_label = clean_label(&new_label);
     tokio::task::spawn_blocking(move || {
         let mut ast =
             parser::parse(&code).map_err(|e| format!("Failed to parse diagram: {}", e))?;
@@ -81,4 +95,15 @@ pub async fn update_diagram_node(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn label_cannot_inject_statements() {
+        let cleaned = clean_label("ok\"\n[evil] --> [x]");
+        assert!(!cleaned.contains('\n') && !cleaned.contains('"'));
+    }
 }

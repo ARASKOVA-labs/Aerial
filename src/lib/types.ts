@@ -1,6 +1,11 @@
 // ── Aerial Canvas Library — Shared Type Definitions ─────────────────────────
 // These types are the public API surface for the embeddable <AerialCanvas />.
 
+import type { ReactNode } from 'react';
+import type { ExtraTool } from '../ui/Toolbar';
+import type { SelectionInfo, UiStyle } from '../ui/model';
+import type { StyleChange } from '../ui/PropertiesPanel';
+
 // ── Tool Identifiers ────────────────────────────────────────────────────────
 
 /** Tools available in the core canvas component (library-safe, no Tauri deps) */
@@ -8,7 +13,9 @@ export type ToolId =
   | 'select'
   | 'freedraw'
   | 'fountain'
+  | 'marker'
   | 'rectangle'
+  | 'diamond'
   | 'ellipse'
   | 'line'
   | 'arrow'
@@ -28,6 +35,31 @@ export type DesktopToolId = ToolId | 'image' | 'pdf';
 export interface AerialEngine {
   // Tool setters
   set_tool_freedraw: () => void;
+  set_tool_marker: () => void;
+  set_tool_diamond: () => void;
+  set_tool_locked: (locked: boolean) => void;
+  take_tool_switch: () => string | undefined;
+  set_modifiers: (shift: boolean, alt: boolean) => void;
+
+  // Pressure-aware pointer input (pressure < 0 = unknown → simulated)
+  pointer_down: (x: number, y: number, pressure: number) => void;
+  pointer_move: (x: number, y: number, pressure: number) => void;
+  pointer_up: (x: number, y: number) => void;
+
+  // Style & selection
+  apply_style: (json: string) => void;
+  get_style: () => string;
+  get_selection_info: () => string;
+  selection_version: () => number;
+  select_ids: (json: string) => void;
+  select_all: () => void;
+  duplicate_selected: () => void;
+  nudge_selected: (dx: number, dy: number) => void;
+  reorder_selected: (action: string) => void;
+  get_cursor: (x: number, y: number) => string;
+  hide_element: (id: bigint | number) => void;
+  show_all_elements: () => void;
+  set_background_color: (color: string) => void;
   set_tool_rectangle: () => void;
   set_tool_ellipse: () => void;
   set_tool_line: () => void;
@@ -209,6 +241,26 @@ export interface AerialCanvasProps {
    * cancel. Omit to allow.
    */
   onExternalRequest?: (service: 'handwriting') => boolean | Promise<boolean>;
+  /** Content of the hamburger menu (receives a `close` callback). Omit for the default menu. */
+  menu?: ReactNode | ((close: () => void) => ReactNode);
+  /** Extra entries for the toolbar's "more tools" menu. */
+  extraTools?: ExtraTool[];
+  /** Content for the top-right corner. */
+  topRight?: ReactNode;
+  /** Show Excalidraw-style welcome hints while the board is empty. */
+  showWelcome?: boolean;
+  /** Clickable items in the centre of the welcome screen. */
+  welcomeItems?: ReactNode;
+  /** Brand mark shown on the welcome screen. */
+  logo?: ReactNode;
+  /** Called by the help button / `?` key. The button is hidden when omitted. */
+  onHelp?: () => void;
+  /** Overrides the image tool (e.g. to persist the asset first). */
+  onInsertImage?: () => void;
+  /** Fired when the selection changes. */
+  onSelectionChange?: (info: SelectionInfo) => void;
+  /** Extra controls for the properties panel, per active tool. */
+  panelExtra?: (tool: ToolId) => ReactNode;
   /** Callback when canvas receives pointer down (used to dismiss menus/popovers; return true to consume event and suppress drawing) */
   onCanvasPointerDown?: () => boolean | void;
 }
@@ -279,6 +331,14 @@ export interface AerialCanvasRef {
   getEngine: () => AerialEngine | null;
   /** Add an image element at world coordinates */
   addImage: (img: HTMLImageElement, x: number, y: number, w: number, h: number, assetId: string) => void;
+  /** Apply style fields to the selection and to new elements. */
+  applyStyle: (change: StyleChange) => void;
+  getSelectionInfo: () => SelectionInfo;
+  selectAll: () => void;
+  duplicateSelected: () => void;
+  reorderSelected: (action: 'front' | 'forward' | 'backward' | 'back') => void;
+  setToolLocked: (locked: boolean) => void;
+  getUiStyle: () => UiStyle;
 }
 
 // ── Toolbar Props ───────────────────────────────────────────────────────────

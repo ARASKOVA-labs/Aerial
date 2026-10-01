@@ -1,163 +1,108 @@
-import { X, Command } from 'lucide-react';
+// ── Help dialog: keyboard shortcuts (Excalidraw-style) ──────────────────────
+
+import { CloseIcon } from '../../ui/icons';
+import { MOD } from '../../ui/primitives';
+
+type Row = [string, string[][]];
+
+const mod = MOD.replace('+', '');
+const TOOLS: Row[] = [
+  ['Hand (panning tool)', [['H'], ['Space', 'drag']]],
+  ['Selection', [['V'], ['1']]],
+  ['Rectangle', [['R'], ['2']]],
+  ['Diamond', [['D'], ['3']]],
+  ['Ellipse', [['O'], ['4']]],
+  ['Arrow', [['A'], ['5']]],
+  ['Line', [['L'], ['6']]],
+  ['Draw (last pen)', [['P'], ['X'], ['7']]],
+  ['Text', [['T'], ['8']]],
+  ['Insert image', [['9']]],
+  ['Eraser', [['E'], ['0']]],
+  ['Laser pointer', [['K']]],
+  ['Magic pen', [['W']]],
+  ['Keep tool active', [['Q']]],
+];
+
+const EDITOR: Row[] = [
+  ['Undo', [[mod, 'Z']]],
+  ['Redo', [[mod, '⇧', 'Z'], [mod, 'Y']]],
+  ['Select all', [[mod, 'A']]],
+  ['Duplicate', [[mod, 'D']]],
+  ['Delete', [['Del'], ['⌫']]],
+  ['Move selection', [['←↑→↓'], ['⇧', 'arrows']]],
+  ['Bring forward / send backward', [[mod, ']'], [mod, '[']]],
+  ['Bring to front / send to back', [[mod, '⇧', ']'], [mod, '⇧', '[']]],
+  ['Edit selected text', [['Enter'], ['double-click']]],
+  ['Constrain shape / 15° steps', [['⇧', 'drag']]],
+  ['Draw from centre', [['Alt', 'drag']]],
+  ['Restore while erasing', [['Alt']]],
+  ['Deselect', [['Esc']]],
+];
+
+const VIEW: Row[] = [
+  ['Zoom in / out', [[mod, '+'], [mod, '−']]],
+  ['Reset zoom', [[mod, '0']]],
+  ['Zoom at cursor', [[mod, 'wheel'], ['pinch']]],
+  ['Scroll horizontally', [['⇧', 'wheel']]],
+  ['Toggle fullscreen', [['Ctrl', mod === 'Ctrl' ? 'F' : '⌘F']]],
+];
+
+const APP: Row[] = [
+  ['Command palette', [[mod, 'K']]],
+  ['Quick note', [[mod, 'J'], [mod, '⇧', 'N']]],
+  ['New board', [[mod, 'N']]],
+  ['Switch to board 1–9', [[mod, '1…9']]],
+  ['Open image / PDF', [[mod, 'O'], [mod, '⇧', 'O']]],
+  ['Paste screenshot', [[mod, 'V']]],
+  ['Export PNG / SVG', [[mod, 'S'], [mod, '⇧', 'S']]],
+  ['Reset the canvas', [[mod, '⇧', '⌫']]],
+  ['This help', [['?'], [mod, '/']]],
+];
+
+function Section({ title, rows }: { title: string; rows: Row[] }) {
+  return (
+    <section className="ae-help__section">
+      <h3>{title}</h3>
+      {rows.map(([label, combos]) => (
+        <div key={label} className="ae-help__row">
+          <span>{label}</span>
+          <span className="ae-help__keys">
+            {combos.map((combo, i) => (
+              <span key={i} className="ae-help__combo">
+                {i > 0 && <span className="ae-help__or">or</span>}
+                {combo.map((k) => (
+                  <kbd key={k}>{k}</kbd>
+                ))}
+              </span>
+            ))}
+          </span>
+        </div>
+      ))}
+    </section>
+  );
+}
 
 export function KeyboardShortcutsModal({ onClose }: { onClose: () => void }) {
-  const quickNoteShortcuts = [
-    { name: 'Quick Canvas (Instant Note)', keys: ['⌘', '⇧', 'N'] },
-    { name: 'Quick Note (Alternative)', keys: ['⌘', 'J'] },
-    { name: 'Spotlight Command Palette', keys: ['⌘', 'K'] },
-    { name: 'Stamp Note to Main Canvas', keys: ['⌘', '↵'] },
-    { name: 'Save Note as Board', keys: ['⌘', 'S'] },
-  ];
-
-  const boardShortcuts = [
-    { name: 'Create New Canvas Board', keys: ['⌘', 'N'] },
-    { name: 'Toggle Boards Drawer / Sidebar', keys: ['⌘', 'B'] },
-    { name: 'Switch to Board 1 – 9', keys: ['⌘', '1..9'] },
-    { name: 'Previous Canvas Board', keys: ['⌘', '['] },
-    { name: 'Next Canvas Board', keys: ['⌘', ']'] },
-    { name: 'Clear Canvas Board (Confirm)', keys: ['⌘', '⇧', '⌫'] },
-  ];
-
-  const fileShortcuts = [
-    { name: 'Paste Screenshot from Clipboard', keys: ['⌘', 'V'] },
-    { name: 'Drag & Drop Screenshot / Image', keys: ['Drop', 'PNG'] },
-    { name: 'Export PNG Image / Save', keys: ['⌘', 'S'] },
-    { name: 'Export Vector SVG', keys: ['⌘', '⇧', 'S'] },
-    { name: 'Import Image', keys: ['⌘', 'O'] },
-    { name: 'Import PDF Document', keys: ['⌘', '⇧', 'O'] },
-    { name: 'Toggle Fullscreen Mode', keys: ['⌃', '⌘', 'F'] },
-    { name: 'Reset View (100%)', keys: ['⌘', '0'] },
-    { name: 'Zoom In', keys: ['⌘', '+'] },
-    { name: 'Zoom Out', keys: ['⌘', '-'] },
-    { name: 'Undo Operation', keys: ['⌘', 'Z'] },
-    { name: 'Redo Operation', keys: ['⌘', '⇧', 'Z'] },
-    { name: 'Color & Tool Settings', keys: ['⌘', ','] },
-  ];
-
-  const toolShortcuts = [
-    { name: 'Select Tool', keys: ['V', '1'] },
-    { name: 'Pan / Hand Tool', keys: ['H', '2'] },
-    { name: 'Rectangle Shape', keys: ['R', '3'] },
-    { name: 'Ellipse Shape', keys: ['O', '4'] },
-    { name: 'Line Shape', keys: ['L', '5'] },
-    { name: 'Arrow Shape', keys: ['A', '6'] },
-    { name: 'Draw / Freehand Pen', keys: ['P', '7'] },
-    { name: 'Text Tool', keys: ['T', '8'] },
-    { name: 'Eraser (cycles mode)', keys: ['E', '9'] },
-    { name: 'Calligraphy Fountain Pen', keys: ['F'] },
-    { name: 'Highlighter', keys: ['M'] },
-    { name: 'Magic Pen (AI Handwriting)', keys: ['W'] },
-    { name: 'Laser Pen (Transient Glow)', keys: ['Z'] },
-  ];
-
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-sm pointer-events-auto animate-in fade-in duration-150 p-4">
-      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl p-6 max-w-2xl w-full max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between pb-4 mb-4 border-b border-[var(--border)]">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/10 flex items-center justify-center">
-              <Command className="w-5 h-5 text-[#e73f07]" />
-            </div>
-            <div>
-              <h2 className="text-base font-sans font-black uppercase tracking-wider text-[var(--foreground)]">Mac Desktop Shortcuts</h2>
-              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">Fast muscle-memory controls & instant note-taking</p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--accent)] transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4 text-[var(--muted-foreground)]" />
+    <div className="ae-dialog-backdrop" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="ae-dialog ae-help" role="dialog" aria-modal="true" aria-labelledby="help-title">
+        <header className="ae-help__head">
+          <h2 id="help-title">Keyboard shortcuts</h2>
+          <button type="button" className="ae-btn ae-btn--plain" aria-label="Close" onClick={onClose} autoFocus>
+            <CloseIcon />
           </button>
-        </div>
-
-        <div className="overflow-y-auto pr-1 flex flex-col gap-5 text-xs font-mono">
+        </header>
+        <div className="ae-help__grid">
           <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">⚡ Instant Note & Quick Canvas</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {quickNoteShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[#e73f07] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <Section title="Tools" rows={TOOLS} />
+            <Section title="View" rows={VIEW} />
           </div>
-
           <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">📋 Board Management & Navigation</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {boardShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <Section title="Editor" rows={EDITOR} />
+            <Section title="App" rows={APP} />
           </div>
-
-          <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">💾 File Operations & Viewport</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {fileShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <h3 className="text-[10px] font-mono uppercase tracking-widest text-[#e73f07] font-bold mb-2.5">✏️ Drawing Tools & Pens</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {toolShortcuts.map(item => (
-                <div key={item.name} className="flex items-center justify-between px-3 py-2 rounded-xl bg-[var(--secondary)]/60 border border-[var(--border)]">
-                  <span className="text-[var(--foreground)] font-medium font-sans text-xs">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={i} className="px-1.5 py-0.5 rounded-md bg-[var(--card)] border border-[var(--border)] text-[10px] font-mono font-bold text-[var(--foreground)] shadow-xs">
-                        {k}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="pt-4 mt-4 border-t border-[var(--border)] flex justify-end">
-          <button
-            onClick={onClose}
-            className="px-5 py-2.5 bg-[#e73f07] hover:bg-[#d03806] text-white rounded-xl text-xs font-mono font-bold uppercase tracking-wider transition-all active:translate-y-px shadow-md shadow-[#e73f07]/20 cursor-pointer"
-          >
-            Done
-          </button>
         </div>
       </div>
     </div>
   );
 }
-
-// ── Mermaid / AI Studio Dialog ───────────────────────────────────────────────
-
-// ── Mermaid & Diagram Studio Modal ─────────────────────────────────────────

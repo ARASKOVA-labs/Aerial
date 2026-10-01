@@ -5,3 +5,9 @@ members = [
     "src-tauri"
 , "aerial-core/aras-dsl", "aerial-core/aras-layout"]
 resolver = "2"
+
+# Production builds: whole-program optimisation for the WASM engine, the
+# desktop app and the relay. Smaller binaries and faster hot loops.
+[profile.release]
+lto = true
+codegen-units = 1

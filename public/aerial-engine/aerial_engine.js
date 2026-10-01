@@ -71,6 +71,22 @@ export class AerialCanvas {
     /**
      * @returns {boolean}
      */
+    can_redo() {
+        const ret = wasm.aerialcanvas_can_redo(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * @returns {boolean}
+     */
+    can_undo() {
+        const ret = wasm.aerialcanvas_can_undo(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
+     * Deprecated: returns whether the scene changed since the last call.
+     * Prefer `scene_version()`, which supports multiple independent readers.
+     * @returns {boolean}
+     */
     check_and_clear_dirty() {
         const ret = wasm.aerialcanvas_check_and_clear_dirty(this.__wbg_ptr);
         return ret !== 0;
@@ -89,6 +105,13 @@ export class AerialCanvas {
     }
     deselect() {
         wasm.aerialcanvas_deselect(this.__wbg_ptr);
+    }
+    /**
+     * @returns {number}
+     */
+    element_count() {
+        const ret = wasm.aerialcanvas_element_count(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * @param {Uint8Array} remote_sv
@@ -134,6 +157,23 @@ export class AerialCanvas {
         let deferred1_1;
         try {
             const ret = wasm.aerialcanvas_get_accent_color(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * `[[element_id, asset_id], ...]` for elements backed by stored assets, so
+     * the host can preload images without parsing the whole scene JSON.
+     * @returns {string}
+     */
+    get_asset_refs() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_asset_refs(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -193,6 +233,22 @@ export class AerialCanvas {
         return v1;
     }
     /**
+     * Render statistics as JSON (for perf HUDs and benchmarks).
+     * @returns {string}
+     */
+    get_render_stats() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_render_stats(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @returns {string}
      */
     get_scene_json() {
@@ -239,6 +295,13 @@ export class AerialCanvas {
         return ret;
     }
     /**
+     * @returns {boolean}
+     */
+    has_pending_changes() {
+        const ret = wasm.aerialcanvas_has_pending_changes(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * @param {Uint8Array} bytes
      */
     import_full_state(bytes) {
@@ -247,6 +310,16 @@ export class AerialCanvas {
         wasm.aerialcanvas_import_full_state(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Number of elements dropped by validation in the last `load_scene_json`.
+     * @returns {number}
+     */
+    last_load_rejected() {
+        const ret = wasm.aerialcanvas_last_load_rejected(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
+     * Replaces the board. Input is untrusted: malformed JSON is ignored and
+     * invalid elements are dropped (see `last_load_rejected`).
      * @param {string} json
      */
     load_scene_json(json) {
@@ -347,6 +420,10 @@ export class AerialCanvas {
         const ret = wasm.aerialcanvas_reset_view(this.__wbg_ptr);
         return ret;
     }
+    /**
+     * Deprecated no-op kept for API compatibility. Every mutating engine call
+     * now records its own undo transaction.
+     */
     save_state() {
         wasm.aerialcanvas_save_state(this.__wbg_ptr);
     }
@@ -355,6 +432,15 @@ export class AerialCanvas {
      */
     scale_selected(factor) {
         wasm.aerialcanvas_scale_selected(this.__wbg_ptr, factor);
+    }
+    /**
+     * Monotonic scene revision. Each consumer stores the last value it
+     * handled; unlike `check_and_clear_dirty` it is safe with many consumers.
+     * @returns {number}
+     */
+    scene_version() {
+        const ret = wasm.aerialcanvas_scene_version(this.__wbg_ptr);
+        return ret;
     }
     /**
      * @param {number} sx
@@ -414,6 +500,12 @@ export class AerialCanvas {
         wasm.aerialcanvas_set_eraser_radius(this.__wbg_ptr, r);
     }
     /**
+     * @param {number} s
+     */
+    set_eraser_size(s) {
+        wasm.aerialcanvas_set_eraser_size(this.__wbg_ptr, s);
+    }
+    /**
      * @param {string} t
      */
     set_eraser_type(t) {
@@ -454,6 +546,14 @@ export class AerialCanvas {
      */
     set_is_rough(rough) {
         wasm.aerialcanvas_set_is_rough(this.__wbg_ptr, rough);
+    }
+    /**
+     * Size (CSS px) below which content is drawn as density blocks when
+     * zoomed out. 0 disables level-of-detail aggregation.
+     * @param {number} px
+     */
+    set_lod_threshold(px) {
+        wasm.aerialcanvas_set_lod_threshold(this.__wbg_ptr, px);
     }
     /**
      * @param {bigint} id
@@ -515,7 +615,26 @@ export class AerialCanvas {
         wasm.aerialcanvas_set_tool_text(this.__wbg_ptr);
     }
     /**
-     * Returns true if there are still animations running (e.g. laser fade).
+     * Drains changes since the previous call as
+     * `{"reset":bool,"upserts":[Element],"deletes":[id]}` — O(changed), so
+     * autosave cost no longer grows with board size.
+     * @returns {string}
+     */
+    take_changes() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_take_changes(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Called every animation frame. Renders only when something changed.
+     * Returns true while animations (laser fade, selection marching ants) run.
      * @returns {boolean}
      */
     tick_animations() {
@@ -590,13 +709,6 @@ if (Symbol.dispose) AerialCanvas.prototype[Symbol.dispose] = AerialCanvas.protot
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_debug_string_a57024b9c6e4a48b: function(arg0, arg1) {
-            const ret = debugString(arg1);
-            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-            const len1 = WASM_VECTOR_LEN;
-            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
-            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
-        },
         __wbg___wbindgen_is_undefined_6cff064c44e0d823: function(arg0) {
             const ret = arg0 === undefined;
             return ret;
@@ -613,6 +725,13 @@ function __wbg_get_imports() {
         __wbg_clearRect_81c3c80fbe793b63: function(arg0, arg1, arg2, arg3, arg4) {
             arg0.clearRect(arg1, arg2, arg3, arg4);
         },
+        __wbg_clip_11b699e637bb5b4c: function(arg0) {
+            arg0.clip();
+        },
+        __wbg_createElement_7f42344eee7bb810: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.createElement(getStringFromWasm0(arg1, arg2));
+            return ret;
+        }, arguments); },
         __wbg_crypto_b501cd47f5fc84cc: function(arg0) {
             const ret = arg0.crypto;
             return ret;
@@ -621,8 +740,17 @@ function __wbg_get_imports() {
             const ret = arg0.document;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
         },
+        __wbg_drawImage_4f05aa5544efd528: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            arg0.drawImage(arg1, arg2, arg3);
+        }, arguments); },
+        __wbg_drawImage_87a05b54f458ec06: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9) {
+            arg0.drawImage(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9);
+        }, arguments); },
         __wbg_drawImage_df46beb36e04ae8f: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5) {
             arg0.drawImage(arg1, arg2, arg3, arg4, arg5);
+        }, arguments); },
+        __wbg_ellipse_2e32df8591862227: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+            arg0.ellipse(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         }, arguments); },
         __wbg_ellipse_5101aa9d3056735c: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
             arg0.ellipse(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
@@ -689,10 +817,16 @@ function __wbg_get_imports() {
             const ret = arg0.length;
             return ret;
         },
+        __wbg_lineTo_55f2d19e97fe770d: function(arg0, arg1, arg2) {
+            arg0.lineTo(arg1, arg2);
+        },
         __wbg_lineTo_9495a068a4f48283: function(arg0, arg1, arg2) {
             arg0.lineTo(arg1, arg2);
         },
         __wbg_moveTo_a5882cdf1a7d39d9: function(arg0, arg1, arg2) {
+            arg0.moveTo(arg1, arg2);
+        },
+        __wbg_moveTo_b163e74b8926c626: function(arg0, arg1, arg2) {
             arg0.moveTo(arg1, arg2);
         },
         __wbg_msCrypto_56bad8adf1ceb3d9: function(arg0) {
@@ -703,26 +837,50 @@ function __wbg_get_imports() {
             const ret = new Array();
             return ret;
         },
+        __wbg_new_6fa4b00b7fe13e4b: function() { return handleError(function () {
+            const ret = new Path2D();
+            return ret;
+        }, arguments); },
         __wbg_new_with_length_3ffc1c56427c525c: function(arg0) {
             const ret = new Uint8Array(arg0 >>> 0);
+            return ret;
+        },
+        __wbg_new_with_u8_clamped_array_and_sh_d9a3bf9abac17f51: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            const ret = new ImageData(getClampedArrayU8FromWasm0(arg0, arg1), arg2 >>> 0, arg3 >>> 0);
+            return ret;
+        }, arguments); },
+        __wbg_now_2283802bfbda617e: function(arg0) {
+            const ret = arg0.now();
             return ret;
         },
         __wbg_of_598c0ff0cd48a890: function(arg0, arg1) {
             const ret = Array.of(arg0, arg1);
             return ret;
         },
+        __wbg_performance_821a3767f0dce300: function(arg0) {
+            const ret = arg0.performance;
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
         __wbg_prototypesetcall_de8e0d9553586985: function(arg0, arg1, arg2) {
             Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
         },
-        __wbg_push_adb0107829f02d75: function(arg0, arg1) {
-            const ret = arg0.push(arg1);
-            return ret;
-        },
+        __wbg_putImageData_17fd10517d5503a3: function() { return handleError(function (arg0, arg1, arg2, arg3) {
+            arg0.putImageData(arg1, arg2, arg3);
+        }, arguments); },
         __wbg_quadraticCurveTo_5bb4e18a192b53b9: function(arg0, arg1, arg2, arg3, arg4) {
+            arg0.quadraticCurveTo(arg1, arg2, arg3, arg4);
+        },
+        __wbg_quadraticCurveTo_f60aa9069b458c65: function(arg0, arg1, arg2, arg3, arg4) {
             arg0.quadraticCurveTo(arg1, arg2, arg3, arg4);
         },
         __wbg_randomFillSync_1afd9d46e5907320: function(arg0, arg1, arg2) {
             arg0.randomFillSync(getArrayU8FromWasm0(arg1, arg2));
+        },
+        __wbg_rect_b3341a8d819476e1: function(arg0, arg1, arg2, arg3, arg4) {
+            arg0.rect(arg1, arg2, arg3, arg4);
+        },
+        __wbg_rect_db1056f1138dff21: function(arg0, arg1, arg2, arg3, arg4) {
+            arg0.rect(arg1, arg2, arg3, arg4);
         },
         __wbg_require_6e5b8fc0b04be67c: function(arg0, arg1, arg2) {
             const ret = arg0.require(getStringFromWasm0(arg1, arg2));
@@ -734,15 +892,15 @@ function __wbg_get_imports() {
         __wbg_save_0c65dc2190a45c2a: function(arg0) {
             arg0.save();
         },
-        __wbg_scale_1999c309b681811d: function() { return handleError(function (arg0, arg1, arg2) {
-            arg0.scale(arg1, arg2);
-        }, arguments); },
         __wbg_self_d2194f493ba20573: function() { return handleError(function () {
             const ret = self.self;
             return ret;
         }, arguments); },
         __wbg_setLineDash_d915b0269ee28de8: function() { return handleError(function (arg0, arg1) {
             arg0.setLineDash(arg1);
+        }, arguments); },
+        __wbg_setTransform_af9c1fdc090e1259: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5, arg6) {
+            arg0.setTransform(arg1, arg2, arg3, arg4, arg5, arg6);
         }, arguments); },
         __wbg_set_fillStyle_52e75a25be60a3ff: function(arg0, arg1, arg2) {
             arg0.fillStyle = getStringFromWasm0(arg1, arg2);
@@ -752,6 +910,12 @@ function __wbg_get_imports() {
         },
         __wbg_set_globalAlpha_7990fab00eb6c8f2: function(arg0, arg1) {
             arg0.globalAlpha = arg1;
+        },
+        __wbg_set_globalCompositeOperation_1336df410cebd928: function() { return handleError(function (arg0, arg1, arg2) {
+            arg0.globalCompositeOperation = getStringFromWasm0(arg1, arg2);
+        }, arguments); },
+        __wbg_set_height_d72f2b76484a44de: function(arg0, arg1) {
+            arg0.height = arg1 >>> 0;
         },
         __wbg_set_lineCap_ec484c1489fa48bc: function(arg0, arg1, arg2) {
             arg0.lineCap = getStringFromWasm0(arg1, arg2);
@@ -773,6 +937,9 @@ function __wbg_get_imports() {
         },
         __wbg_set_strokeStyle_cce50c69cecc2df7: function(arg0, arg1, arg2) {
             arg0.strokeStyle = getStringFromWasm0(arg1, arg2);
+        },
+        __wbg_set_width_36ef6630b22fc519: function(arg0, arg1) {
+            arg0.width = arg1 >>> 0;
         },
         __wbg_static_accessor_GLOBAL_THIS_466428f93b4eaa76: function() {
             const ret = typeof globalThis === 'undefined' ? null : globalThis;
@@ -800,13 +967,13 @@ function __wbg_get_imports() {
         __wbg_stroke_5f311844f0db0d9a: function(arg0) {
             arg0.stroke();
         },
+        __wbg_stroke_7355965b9ad92428: function(arg0, arg1) {
+            arg0.stroke(arg1);
+        },
         __wbg_subarray_a4cc58201c7359fd: function(arg0, arg1, arg2) {
             const ret = arg0.subarray(arg1 >>> 0, arg2 >>> 0);
             return ret;
         },
-        __wbg_translate_b7073fdf68217bcc: function() { return handleError(function (arg0, arg1, arg2) {
-            arg0.translate(arg1, arg2);
-        }, arguments); },
         __wbg_width_1952934caca67137: function(arg0) {
             const ret = arg0.width;
             return ret;
@@ -847,82 +1014,14 @@ function addToExternrefTable0(obj) {
     return idx;
 }
 
-function debugString(val) {
-    // primitive types
-    const type = typeof val;
-    if (type == 'number' || type == 'boolean' || val == null) {
-        return  `${val}`;
-    }
-    if (type == 'string') {
-        return `"${val}"`;
-    }
-    if (type == 'symbol') {
-        const description = val.description;
-        if (description == null) {
-            return 'Symbol';
-        } else {
-            return `Symbol(${description})`;
-        }
-    }
-    if (type == 'function') {
-        const name = val.name;
-        if (typeof name == 'string' && name.length > 0) {
-            return `Function(${name})`;
-        } else {
-            return 'Function';
-        }
-    }
-    // objects
-    if (Array.isArray(val)) {
-        const length = val.length;
-        let debug = '[';
-        if (length > 0) {
-            debug += debugString(val[0]);
-        }
-        for(let i = 1; i < length; i++) {
-            debug += ', ' + debugString(val[i]);
-        }
-        debug += ']';
-        return debug;
-    }
-    // Test for built-in
-    const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
-    let className;
-    if (builtInMatches && builtInMatches.length > 1) {
-        className = builtInMatches[1];
-    } else {
-        // Failed to match the standard '[object ClassName]'
-        return toString.call(val);
-    }
-    if (className == 'Object') {
-        // we're a user defined class or Object
-        // JSON.stringify avoids problems with cycles, and is generally much
-        // easier than looping through ownProperties of `val`.
-        try {
-            return 'Object(' + JSON.stringify(val) + ')';
-        } catch (_) {
-            return 'Object';
-        }
-    }
-    // errors
-    if (val instanceof Error) {
-        return `${val.name}: ${val.message}\n${val.stack}`;
-    }
-    // TODO we could test for more things here, like `Set`s and `Map`s.
-    return className;
-}
-
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
-let cachedDataViewMemory0 = null;
-function getDataViewMemory0() {
-    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
-        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
-    }
-    return cachedDataViewMemory0;
+function getClampedArrayU8FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getUint8ClampedArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -935,6 +1034,14 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+let cachedUint8ClampedArrayMemory0 = null;
+function getUint8ClampedArrayMemory0() {
+    if (cachedUint8ClampedArrayMemory0 === null || cachedUint8ClampedArrayMemory0.byteLength === 0) {
+        cachedUint8ClampedArrayMemory0 = new Uint8ClampedArray(wasm.memory.buffer);
+    }
+    return cachedUint8ClampedArrayMemory0;
 }
 
 function handleError(f, args) {
@@ -1034,8 +1141,8 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
-    cachedDataViewMemory0 = null;
     cachedUint8ArrayMemory0 = null;
+    cachedUint8ClampedArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
 }

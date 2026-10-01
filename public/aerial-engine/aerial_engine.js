@@ -69,6 +69,16 @@ export class AerialCanvas {
         wasm.aerialcanvas_apply_remote_delta(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Updates the drawing style with the fields present in `json` and applies
+     * them to every selected element (one undo step).
+     * @param {string} json
+     */
+    apply_style(json) {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_apply_style(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
      * @returns {boolean}
      */
     can_redo() {
@@ -105,6 +115,12 @@ export class AerialCanvas {
     }
     deselect() {
         wasm.aerialcanvas_deselect(this.__wbg_ptr);
+    }
+    /**
+     * Copies the selection 10px down-right and selects the copies.
+     */
+    duplicate_selected() {
+        wasm.aerialcanvas_duplicate_selected(this.__wbg_ptr);
     }
     /**
      * @returns {number}
@@ -174,6 +190,24 @@ export class AerialCanvas {
         let deferred1_1;
         try {
             const ret = wasm.aerialcanvas_get_asset_refs(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * CSS cursor for the select tool at a screen point.
+     * @param {number} raw_x
+     * @param {number} raw_y
+     * @returns {string}
+     */
+    get_cursor(raw_x, raw_y) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_cursor(this.__wbg_ptr, raw_x, raw_y);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -264,6 +298,7 @@ export class AerialCanvas {
         }
     }
     /**
+     * The first selected element (single-selection API).
      * @returns {string | undefined}
      */
     get_selected_element_json() {
@@ -288,6 +323,38 @@ export class AerialCanvas {
         return v1;
     }
     /**
+     * `{count, ids (≤1000), kinds, style, bounds}` for the selection, bounds
+     * in screen (CSS) pixels.
+     * @returns {string}
+     */
+    get_selection_info() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_selection_info(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * @returns {string}
+     */
+    get_style() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.aerialcanvas_get_style(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @returns {number}
      */
     get_zoom() {
@@ -300,6 +367,13 @@ export class AerialCanvas {
     has_pending_changes() {
         const ret = wasm.aerialcanvas_has_pending_changes(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Hides an element from rendering (used while its text is edited inline).
+     * @param {bigint} id
+     */
+    hide_element(id) {
+        wasm.aerialcanvas_hide_element(this.__wbg_ptr, id);
     }
     /**
      * @param {Uint8Array} bytes
@@ -340,6 +414,14 @@ export class AerialCanvas {
         this.__wbg_ptr = ret[0];
         AerialCanvasFinalization.register(this, this.__wbg_ptr, this);
         return this;
+    }
+    /**
+     * Moves the selection by (dx, dy) world units as one undo step.
+     * @param {number} dx
+     * @param {number} dy
+     */
+    nudge_selected(dx, dy) {
+        wasm.aerialcanvas_nudge_selected(this.__wbg_ptr, dx, dy);
     }
     /**
      * @param {number} raw_x
@@ -389,6 +471,31 @@ export class AerialCanvas {
         return ret;
     }
     /**
+     * Pointer down with pen pressure (0..1), or a negative value when the
+     * device reports none (mouse) — pressure is then simulated from speed.
+     * @param {number} raw_x
+     * @param {number} raw_y
+     * @param {number} pressure
+     */
+    pointer_down(raw_x, raw_y, pressure) {
+        wasm.aerialcanvas_pointer_down(this.__wbg_ptr, raw_x, raw_y, pressure);
+    }
+    /**
+     * @param {number} raw_x
+     * @param {number} raw_y
+     * @param {number} pressure
+     */
+    pointer_move(raw_x, raw_y, pressure) {
+        wasm.aerialcanvas_pointer_move(this.__wbg_ptr, raw_x, raw_y, pressure);
+    }
+    /**
+     * @param {number} raw_x
+     * @param {number} raw_y
+     */
+    pointer_up(raw_x, raw_y) {
+        wasm.aerialcanvas_pointer_up(this.__wbg_ptr, raw_x, raw_y);
+    }
+    /**
      * @param {Uint8Array} packet
      * @returns {Uint8Array | undefined}
      */
@@ -412,6 +519,15 @@ export class AerialCanvas {
     }
     render() {
         wasm.aerialcanvas_render(this.__wbg_ptr);
+    }
+    /**
+     * Layer order: `"front"`, `"back"`, `"forward"`, `"backward"`.
+     * @param {string} action
+     */
+    reorder_selected(action) {
+        const ptr0 = passStringToWasm0(action, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_reorder_selected(this.__wbg_ptr, ptr0, len0);
     }
     /**
      * @returns {number}
@@ -458,6 +574,26 @@ export class AerialCanvas {
         const ret = wasm.aerialcanvas_screen_to_world_y(this.__wbg_ptr, sy);
         return ret;
     }
+    select_all() {
+        wasm.aerialcanvas_select_all(this.__wbg_ptr);
+    }
+    /**
+     * Replaces the selection with the ids in a JSON array.
+     * @param {string} json
+     */
+    select_ids(json) {
+        const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.aerialcanvas_select_ids(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Bumped whenever the selection changes; JS polls it to refresh panels.
+     * @returns {number}
+     */
+    selection_version() {
+        const ret = wasm.aerialcanvas_selection_version(this.__wbg_ptr);
+        return ret;
+    }
     /**
      * @param {string} color
      */
@@ -467,6 +603,7 @@ export class AerialCanvas {
         wasm.aerialcanvas_set_accent_color(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Canonical (light-theme) paper colour; shown transformed in dark mode.
      * @param {string} color
      */
     set_background_color(color) {
@@ -482,6 +619,8 @@ export class AerialCanvas {
         wasm.aerialcanvas_set_cached_image(this.__wbg_ptr, id, img);
     }
     /**
+     * Dark mode re-colours every element through the theme transform; stored
+     * colours never change, so switching back is lossless.
      * @param {boolean} is_dark
      */
     set_dark_mode(is_dark) {
@@ -522,10 +661,11 @@ export class AerialCanvas {
         wasm.aerialcanvas_set_fill_color(this.__wbg_ptr, ptr0, len0);
     }
     /**
-     * @param {number} s
+     * Kept for API compatibility; the brush shape is now pressure-driven.
+     * @param {number} _s
      */
-    set_fountain_sharpness(s) {
-        wasm.aerialcanvas_set_fountain_sharpness(this.__wbg_ptr, s);
+    set_fountain_sharpness(_s) {
+        wasm.aerialcanvas_set_fountain_sharpness(this.__wbg_ptr, _s);
     }
     /**
      * @param {string} gtype
@@ -556,6 +696,15 @@ export class AerialCanvas {
         wasm.aerialcanvas_set_lod_threshold(this.__wbg_ptr, px);
     }
     /**
+     * Modifier keys: Shift constrains shapes (square / 15° lines) and extends
+     * selections; Alt draws shapes from the centre and restores while erasing.
+     * @param {boolean} shift
+     * @param {boolean} alt
+     */
+    set_modifiers(shift, alt) {
+        wasm.aerialcanvas_set_modifiers(this.__wbg_ptr, shift, alt);
+    }
+    /**
      * @param {bigint} id
      */
     set_selected_id(id) {
@@ -577,6 +726,9 @@ export class AerialCanvas {
     }
     set_tool_arrow() {
         wasm.aerialcanvas_set_tool_arrow(this.__wbg_ptr);
+    }
+    set_tool_diamond() {
+        wasm.aerialcanvas_set_tool_diamond(this.__wbg_ptr);
     }
     set_tool_ellipse() {
         wasm.aerialcanvas_set_tool_ellipse(this.__wbg_ptr);
@@ -602,8 +754,19 @@ export class AerialCanvas {
     set_tool_line() {
         wasm.aerialcanvas_set_tool_line(this.__wbg_ptr);
     }
+    /**
+     * When locked, drawing a shape keeps the tool instead of switching to
+     * selection (Excalidraw's lock, `Q`).
+     * @param {boolean} locked
+     */
+    set_tool_locked(locked) {
+        wasm.aerialcanvas_set_tool_locked(this.__wbg_ptr, locked);
+    }
     set_tool_magic_pen() {
         wasm.aerialcanvas_set_tool_magic_pen(this.__wbg_ptr);
+    }
+    set_tool_marker() {
+        wasm.aerialcanvas_set_tool_marker(this.__wbg_ptr);
     }
     set_tool_rectangle() {
         wasm.aerialcanvas_set_tool_rectangle(this.__wbg_ptr);
@@ -613,6 +776,9 @@ export class AerialCanvas {
     }
     set_tool_text() {
         wasm.aerialcanvas_set_tool_text(this.__wbg_ptr);
+    }
+    show_all_elements() {
+        wasm.aerialcanvas_show_all_elements(this.__wbg_ptr);
     }
     /**
      * Drains changes since the previous call as
@@ -633,8 +799,22 @@ export class AerialCanvas {
         }
     }
     /**
+     * The tool the engine switched to on its own since the last call
+     * (`"select"` after drawing a shape while unlocked), if any.
+     * @returns {string | undefined}
+     */
+    take_tool_switch() {
+        const ret = wasm.aerialcanvas_take_tool_switch(this.__wbg_ptr);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * Called every animation frame. Renders only when something changed.
-     * Returns true while animations (laser fade, selection marching ants) run.
+     * Returns true while animations (laser fade, eraser trail) run.
      * @returns {boolean}
      */
     tick_animations() {
@@ -716,17 +896,23 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_bb96b2010945f0bc: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
-        __wbg_arc_782f59ce766a8abb: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5) {
-            arg0.arc(arg1, arg2, arg3, arg4, arg5);
-        }, arguments); },
         __wbg_beginPath_4b87fe7ed5408cac: function(arg0) {
             arg0.beginPath();
+        },
+        __wbg_bezierCurveTo_6c962e111be3f1d0: function(arg0, arg1, arg2, arg3, arg4, arg5, arg6) {
+            arg0.bezierCurveTo(arg1, arg2, arg3, arg4, arg5, arg6);
         },
         __wbg_clearRect_81c3c80fbe793b63: function(arg0, arg1, arg2, arg3, arg4) {
             arg0.clearRect(arg1, arg2, arg3, arg4);
         },
         __wbg_clip_11b699e637bb5b4c: function(arg0) {
             arg0.clip();
+        },
+        __wbg_closePath_4580feb19a1218cc: function(arg0) {
+            arg0.closePath();
+        },
+        __wbg_closePath_c56cc36eea49716f: function(arg0) {
+            arg0.closePath();
         },
         __wbg_createElement_7f42344eee7bb810: function() { return handleError(function (arg0, arg1, arg2) {
             const ret = arg0.createElement(getStringFromWasm0(arg1, arg2));
@@ -752,9 +938,6 @@ function __wbg_get_imports() {
         __wbg_ellipse_2e32df8591862227: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
             arg0.ellipse(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
         }, arguments); },
-        __wbg_ellipse_5101aa9d3056735c: function() { return handleError(function (arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
-            arg0.ellipse(arg1, arg2, arg3, arg4, arg5, arg6, arg7);
-        }, arguments); },
         __wbg_fillRect_3077c0e38eb34cd1: function(arg0, arg1, arg2, arg3, arg4) {
             arg0.fillRect(arg1, arg2, arg3, arg4);
         },
@@ -763,6 +946,9 @@ function __wbg_get_imports() {
         }, arguments); },
         __wbg_fill_33944400e9c94f79: function(arg0) {
             arg0.fill();
+        },
+        __wbg_fill_e672779a727e8964: function(arg0, arg1) {
+            arg0.fill(arg1);
         },
         __wbg_getContext_71c33f14b63da593: function() { return handleError(function (arg0, arg1, arg2) {
             const ret = arg0.getContext(getStringFromWasm0(arg1, arg2));
@@ -876,10 +1062,11 @@ function __wbg_get_imports() {
         __wbg_randomFillSync_1afd9d46e5907320: function(arg0, arg1, arg2) {
             arg0.randomFillSync(getArrayU8FromWasm0(arg1, arg2));
         },
-        __wbg_rect_b3341a8d819476e1: function(arg0, arg1, arg2, arg3, arg4) {
-            arg0.rect(arg1, arg2, arg3, arg4);
+        __wbg_random_b0d98802be10ff20: function() {
+            const ret = Math.random();
+            return ret;
         },
-        __wbg_rect_db1056f1138dff21: function(arg0, arg1, arg2, arg3, arg4) {
+        __wbg_rect_b3341a8d819476e1: function(arg0, arg1, arg2, arg3, arg4) {
             arg0.rect(arg1, arg2, arg3, arg4);
         },
         __wbg_require_6e5b8fc0b04be67c: function(arg0, arg1, arg2) {
@@ -919,9 +1106,6 @@ function __wbg_get_imports() {
         },
         __wbg_set_lineCap_ec484c1489fa48bc: function(arg0, arg1, arg2) {
             arg0.lineCap = getStringFromWasm0(arg1, arg2);
-        },
-        __wbg_set_lineDashOffset_77617c80be8af018: function(arg0, arg1) {
-            arg0.lineDashOffset = arg1;
         },
         __wbg_set_lineJoin_645744ec04386dd0: function(arg0, arg1, arg2) {
             arg0.lineJoin = getStringFromWasm0(arg1, arg2);

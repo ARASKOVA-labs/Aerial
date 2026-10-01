@@ -1,28 +1,37 @@
 //! Aerial WASM engine.
 //!
 //! `AerialCanvas` is the JS-facing façade. State lives in focused modules:
-//!   scene    — committed elements + spatial index + LOD pyramid + change feeds
-//!   history  — diff-based undo/redo transactions
-//!   render   — cached static layer, dirty-rect repaint, LOD painting
+//!   scene     — committed elements + spatial index + LOD pyramid + change feeds
+//!   history   — diff-based undo/redo transactions
+//!   render    — cached static layer, dirty-rect repaint, LOD painting
+//!   freehand  — pressure-sensitive variable-width stroke outlines
+//!   rough     — hand-drawn shapes and hachure fills
+//!   interact  — pointer handling, selection, eraser, shape constraints
+//!   overlay   — selection UI, marquee, eraser trail, guidelines
 //!
 //! Every cost that used to scale with board size per frame / per action
 //! (full redraw on each pointer move, full-board undo snapshots, O(n²) stroke
 //! bounds) now scales with what is visible or what changed.
 
 mod element;
+mod freehand;
 mod geom;
 mod history;
+mod interact;
+mod overlay;
+mod path;
 mod pyramid;
 mod render;
+mod rough;
 mod scene;
 mod spatial;
+mod style;
 
 pub use element::Element;
 pub use geom::Rect;
 pub use pyramid::lod_level as lod_level_for;
 pub use scene::Scene;
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -30,24 +39,28 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 use yrs::{updates::decoder::Decode, updates::encoder::Encode, Doc, ReadTxn, StateVector, Transact, Update};
 
-use geom::simplify_rdp;
+use geom::FxHashSet;
 use history::History;
-use render::{paint_element, LayerCache, PaintEnv, Theme, View};
+use render::{paint_element, LayerCache, PaintEnv, Scratch, Theme, View};
 
 pub const MIN_ZOOM: f64 = 0.0005;
 pub const MAX_ZOOM: f64 = 64.0;
 /// Freehand strokes are simplified on commit to this many CSS px of error.
-const COMMIT_SIMPLIFY_PX: f64 = 0.3;
+const COMMIT_SIMPLIFY_PX: f64 = 0.25;
 /// Frames of no view change before a sub-pixel pan residual is repainted crisp.
 const IDLE_REFINE_FRAMES: u32 = 6;
+/// Canonical (light-theme) paper colour; dark mode shows it as #121212.
+const DEFAULT_PAPER: &str = "#ffffff";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Tool {
     Select,
     FreeDraw,
     FountainPen,
+    Marker,
     Highlighter,
     Rectangle,
+    Diamond,
     Ellipse,
     Line,
     Arrow,
@@ -60,9 +73,63 @@ pub enum Tool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EraserType {
+    /// Excalidraw-style: touched elements fade while dragging and are deleted
+    /// on release; Alt restores.
     Stroke,
+    /// Removes only the touched part of freehand strokes, immediately.
     Precision,
+    /// Alias of `Stroke` kept for API compatibility.
     Element,
+}
+
+/// Current drawing style — applied to new elements and, via `apply_style`,
+/// to the selection. Field names match the JS side (camelCase).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DrawStyle {
+    pub stroke_color: String,
+    pub background_color: String,
+    pub fill_style: String,
+    pub stroke_width: f64,
+    pub stroke_style: String,
+    pub roughness: f64,
+    pub roundness: String,
+    pub opacity: f64,
+    pub font_family: String,
+    pub font_size: f64,
+}
+
+impl Default for DrawStyle {
+    fn default() -> Self {
+        DrawStyle {
+            stroke_color: style::DEFAULT_INK.to_string(),
+            background_color: "transparent".to_string(),
+            fill_style: "hachure".to_string(),
+            stroke_width: 2.0,
+            stroke_style: "solid".to_string(),
+            roughness: 1.0,
+            roundness: "round".to_string(),
+            opacity: 100.0,
+            font_family: "Kalam, Caveat, cursive".to_string(),
+            font_size: 24.0,
+        }
+    }
+}
+
+/// Partial style update from JS: only present fields change.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StylePatch {
+    stroke_color: Option<String>,
+    background_color: Option<String>,
+    fill_style: Option<String>,
+    stroke_width: Option<f64>,
+    stroke_style: Option<String>,
+    roughness: Option<f64>,
+    roundness: Option<String>,
+    opacity: Option<f64>,
+    font_family: Option<String>,
+    font_size: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -79,7 +146,16 @@ struct SceneOut<'a> {
 fn text_box(text: &str, size: f64) -> (f64, f64) {
     let lines: Vec<&str> = text.split('\n').collect();
     let max_chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1);
-    ((max_chars as f64 * size * 0.65).max(60.0), (lines.len() as f64 * size * 1.3).max(size * 1.5))
+    ((max_chars as f64 * size * 0.6).max(size * 1.5), (lines.len() as f64 * size * 1.25).max(size * 1.4))
+}
+
+/// Eraser drag state (object mode).
+#[derive(Default)]
+struct EraserState {
+    pending: FxHashSet<u64>,
+    last: Option<(f64, f64)>,
+    /// Trail points in world space with remaining life (1 → 0).
+    trail: Vec<(f64, f64, f64)>,
 }
 
 #[wasm_bindgen]
@@ -89,16 +165,16 @@ pub struct AerialCanvas {
     scene: Scene,
     history: History,
     cache: LayerCache,
-    scratch: RefCell<Vec<(f64, f64)>>,
+    scratch: Scratch,
     active_stroke: Option<Element>,
+    shape_anchor: (f64, f64),
     laser_strokes: Vec<Element>,
     magic_strokes: Vec<Element>,
     image_cache: HashMap<u64, HtmlImageElement>,
     tool: Tool,
-    stroke_color: String,
-    fill_color: String,
-    stroke_width: f64,
-    fountain_sharpness: f64,
+    tool_locked: bool,
+    pending_tool_switch: Option<&'static str>,
+    style: DrawStyle,
     is_rough: bool,
     is_curved: bool,
     is_dark_mode: bool,
@@ -113,25 +189,33 @@ pub struct AerialCanvas {
     is_drawing: bool,
     is_panning: bool,
     is_dragging: bool,
-    drag_offset_x: f64,
-    drag_offset_y: f64,
+    drag_last: (f64, f64),
+    drag_moved: bool,
     is_resizing: bool,
     resize_handle: u8,
     resize_start: (f64, f64),
     resize_orig: Rect,
     resize_orig_points: Vec<(f64, f64)>,
-    selection_anim_phase: f64,
+    marquee: Option<(f64, f64, f64, f64)>,
+    marquee_base: Vec<u64>,
+    selected: Vec<u64>,
+    selection_version: u64,
     accent_color: String,
     eraser_radius: f64,
     eraser_type: EraserType,
+    eraser: EraserState,
+    shift: bool,
+    alt: bool,
     last_mouse_x: f64,
     last_mouse_y: f64,
-    selected_id: Option<u64>,
     needs_render: bool,
     legacy_seen_version: u64,
     last_view: (f64, f64, f64),
     idle_frames: u32,
     last_load_rejected: u32,
+    exclude_buf: FxHashSet<u64>,
+    /// Elements not painted at all (e.g. text being edited inline).
+    hidden: FxHashSet<u64>,
     doc: Doc,
 }
 
@@ -151,17 +235,17 @@ impl AerialCanvas {
             scene: Scene::new(),
             history: History::default(),
             cache: LayerCache::new()?,
-            scratch: RefCell::new(Vec::new()),
+            scratch: Scratch::default(),
             active_stroke: None,
+            shape_anchor: (0.0, 0.0),
             laser_strokes: Vec::new(),
             magic_strokes: Vec::new(),
             image_cache: HashMap::new(),
             tool: Tool::FreeDraw,
-            stroke_color: "#3b82f6".to_string(),
-            fill_color: "transparent".to_string(),
-            stroke_width: 2.5,
-            fountain_sharpness: 1.0,
-            is_rough: false,
+            tool_locked: false,
+            pending_tool_switch: None,
+            style: DrawStyle::default(),
+            is_rough: true,
             is_curved: true,
             is_dark_mode: false,
             bg_color: None,
@@ -175,60 +259,48 @@ impl AerialCanvas {
             is_drawing: false,
             is_panning: false,
             is_dragging: false,
-            drag_offset_x: 0.0,
-            drag_offset_y: 0.0,
+            drag_last: (0.0, 0.0),
+            drag_moved: false,
             is_resizing: false,
             resize_handle: 0,
             resize_start: (0.0, 0.0),
             resize_orig: Rect::new(0.0, 0.0, 0.0, 0.0),
             resize_orig_points: Vec::new(),
-            selection_anim_phase: 0.0,
-            accent_color: "#e73f07".to_string(),
-            eraser_radius: 24.0,
+            marquee: None,
+            marquee_base: Vec::new(),
+            selected: Vec::new(),
+            selection_version: 0,
+            accent_color: "#6965db".to_string(),
+            eraser_radius: 10.0,
             eraser_type: EraserType::Stroke,
+            eraser: EraserState::default(),
+            shift: false,
+            alt: false,
             last_mouse_x: 0.0,
             last_mouse_y: 0.0,
-            selected_id: None,
             needs_render: true,
             legacy_seen_version: 0,
             last_view: (0.0, 0.0, 1.0),
             idle_frames: 0,
             last_load_rejected: 0,
+            exclude_buf: FxHashSet::default(),
+            hidden: FxHashSet::default(),
             doc: Doc::new(),
         })
     }
 
-    // ── Tool Selectors ────────────────────────────────────────────────────────
-    // Each setter resets in-flight interaction state so switching tools never
-    // leaves dangling strokes, selections, or drag operations behind.
-    fn reset_interaction_state(&mut self) {
-        self.active_stroke = None;
-        self.is_drawing = false;
-        self.is_panning = false;
-        self.is_dragging = false;
-        self.is_resizing = false;
-        self.resize_handle = 0;
-        self.history.commit(&self.scene);
-        self.needs_render = true;
-    }
-
-    fn switch_tool(&mut self, tool: Tool, keep_selection: bool) {
-        self.reset_interaction_state();
-        if !keep_selection {
-            self.selected_id = None;
-        }
-        self.tool = tool;
-    }
-
+    // ── Tools ─────────────────────────────────────────────────────────────────
     pub fn set_tool_freedraw(&mut self) { self.switch_tool(Tool::FreeDraw, false); }
+    pub fn set_tool_fountain_pen(&mut self) { self.switch_tool(Tool::FountainPen, false); }
+    pub fn set_tool_marker(&mut self) { self.switch_tool(Tool::Marker, false); }
+    pub fn set_tool_highlighter(&mut self) { self.switch_tool(Tool::Highlighter, false); }
     pub fn set_tool_rectangle(&mut self) { self.switch_tool(Tool::Rectangle, false); }
+    pub fn set_tool_diamond(&mut self) { self.switch_tool(Tool::Diamond, false); }
     pub fn set_tool_ellipse(&mut self) { self.switch_tool(Tool::Ellipse, false); }
     pub fn set_tool_line(&mut self) { self.switch_tool(Tool::Line, false); }
+    pub fn set_tool_arrow(&mut self) { self.switch_tool(Tool::Arrow, false); }
     pub fn set_tool_select(&mut self) { self.switch_tool(Tool::Select, true); }
     pub fn set_tool_hand(&mut self) { self.switch_tool(Tool::Hand, false); }
-    pub fn set_tool_arrow(&mut self) { self.switch_tool(Tool::Arrow, false); }
-    pub fn set_tool_fountain_pen(&mut self) { self.switch_tool(Tool::FountainPen, false); }
-    pub fn set_tool_highlighter(&mut self) { self.switch_tool(Tool::Highlighter, false); }
     pub fn set_tool_text(&mut self) { self.switch_tool(Tool::Text, false); }
     pub fn set_tool_eraser(&mut self) { self.switch_tool(Tool::Eraser, false); }
     pub fn set_tool_laser_pen(&mut self) { self.switch_tool(Tool::LaserPen, false); }
@@ -237,14 +309,45 @@ impl AerialCanvas {
         self.magic_baseline_y = None;
     }
 
+    /// When locked, drawing a shape keeps the tool instead of switching to
+    /// selection (Excalidraw's lock, `Q`).
+    pub fn set_tool_locked(&mut self, locked: bool) {
+        self.tool_locked = locked;
+    }
+
+    /// The tool the engine switched to on its own since the last call
+    /// (`"select"` after drawing a shape while unlocked), if any.
+    pub fn take_tool_switch(&mut self) -> Option<String> {
+        self.pending_tool_switch.take().map(str::to_string)
+    }
+
+    /// Modifier keys: Shift constrains shapes (square / 15° lines) and extends
+    /// selections; Alt draws shapes from the centre and restores while erasing.
+    pub fn set_modifiers(&mut self, shift: bool, alt: bool) {
+        self.shift = shift;
+        self.alt = alt;
+    }
+
+    // ── Style ─────────────────────────────────────────────────────────────────
+    /// Updates the drawing style with the fields present in `json` and applies
+    /// them to every selected element (one undo step).
+    pub fn apply_style(&mut self, json: &str) {
+        let Ok(patch) = serde_json::from_str::<StylePatch>(json) else { return };
+        self.apply_patch(&patch);
+    }
+
+    pub fn get_style(&self) -> String {
+        serde_json::to_string(&self.style).unwrap_or_else(|_| "{}".to_string())
+    }
+
     // ── Text & Selection ──────────────────────────────────────────────────────
     pub fn get_selected_text(&self) -> Option<String> {
-        let el = self.scene.get(self.selected_id?)?;
+        let el = self.scene.get(*self.selected.first()?)?;
         if el.text.is_empty() { None } else { Some(el.text.clone()) }
     }
 
     pub fn update_selected_text(&mut self, text: String) {
-        let Some(id) = self.selected_id else { return };
+        let Some(&id) = self.selected.first() else { return };
         self.history.begin();
         self.history.touch(&self.scene, id);
         self.scene.modify(id, |el| {
@@ -257,7 +360,7 @@ impl AerialCanvas {
     }
 
     pub fn add_text(&mut self, text: String, x: f64, y: f64, size: f64, font_family: Option<String>, color: Option<String>) {
-        let c = color.unwrap_or_else(|| self.stroke_color.clone());
+        let c = color.unwrap_or_else(|| self.style.stroke_color.clone());
         let (w, h) = text_box(&text, size);
         let el = Element {
             id: self.scene.alloc_id(),
@@ -269,15 +372,18 @@ impl AerialCanvas {
             h,
             stroke_color: c.clone(),
             fill_color: c,
-            stroke_width: self.stroke_width,
+            stroke_width: self.style.stroke_width,
             text,
             font_size: size,
-            font_family: font_family.unwrap_or_else(|| "Inter, Roboto, sans-serif".to_string()),
-            is_rough: self.is_rough,
-            is_curved: self.is_curved,
+            font_family: font_family.unwrap_or_else(|| self.style.font_family.clone()),
+            opacity: self.style.opacity,
             ..Default::default()
         };
+        let id = el.id;
         self.insert_recorded(el);
+        if !self.tool_locked {
+            self.set_selection(vec![id]);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -304,13 +410,27 @@ impl AerialCanvas {
         self.history.commit(&self.scene);
     }
 
+    /// The first selected element (single-selection API).
     pub fn get_selected_element_json(&self) -> Option<String> {
-        serde_json::to_string(self.scene.get(self.selected_id?)?).ok()
+        serde_json::to_string(self.scene.get(*self.selected.first()?)?).ok()
+    }
+
+    /// `{count, ids (≤1000), kinds, style, bounds}` for the selection, bounds
+    /// in screen (CSS) pixels.
+    pub fn get_selection_info(&self) -> String {
+        self.selection_info_json()
+    }
+
+    /// Bumped whenever the selection changes; JS polls it to refresh panels.
+    pub fn selection_version(&self) -> f64 {
+        self.selection_version as f64
     }
 
     pub fn set_accent_color(&mut self, color: String) {
-        self.accent_color = color;
-        self.needs_render = true;
+        if color.len() <= element::MAX_COLOR_LEN {
+            self.accent_color = color;
+            self.needs_render = true;
+        }
     }
 
     pub fn get_accent_color(&self) -> String {
@@ -318,50 +438,114 @@ impl AerialCanvas {
     }
 
     pub fn set_selected_id(&mut self, id: u64) {
-        self.selected_id = Some(id);
-        self.needs_render = true;
+        if self.scene.contains(id) {
+            self.set_selection(vec![id]);
+        }
+    }
+
+    /// Replaces the selection with the ids in a JSON array.
+    pub fn select_ids(&mut self, json: &str) {
+        let ids: Vec<u64> = serde_json::from_str(json).unwrap_or_default();
+        let ids = ids.into_iter().filter(|id| self.scene.contains(*id)).collect();
+        self.set_selection(ids);
+    }
+
+    pub fn select_all(&mut self) {
+        let ids = self.scene.iter_ordered().map(|e| e.id).collect();
+        self.set_selection(ids);
     }
 
     pub fn deselect(&mut self) {
         self.history.commit(&self.scene);
-        self.selected_id = None;
         self.is_resizing = false;
         self.is_dragging = false;
-        self.needs_render = true;
+        self.marquee = None;
+        self.set_selection(Vec::new());
     }
 
     pub fn scale_selected(&mut self, factor: f64) {
-        if !(factor.is_finite() && factor > 0.0) {
-            return;
-        }
-        let Some(id) = self.selected_id else { return };
-        if !self.scene.contains(id) {
+        if !(factor.is_finite() && factor > 0.0) || self.selected.is_empty() {
             return;
         }
         self.history.begin();
-        self.history.touch(&self.scene, id);
-        self.scene.modify(id, |el| {
-            let (cx, cy) = (el.x + el.w / 2.0, el.y + el.h / 2.0);
-            let (new_w, new_h) = ((el.w * factor).max(20.0), (el.h * factor).max(20.0));
-            let (new_x, new_y) = (cx - new_w / 2.0, cy - new_h / 2.0);
-            if el.w > 0.0 && el.h > 0.0 {
-                let (sx, sy) = (new_w / el.w, new_h / el.h);
-                for p in el.points.iter_mut() {
-                    p.0 = new_x + (p.0 - el.x) * sx;
-                    p.1 = new_y + (p.1 - el.y) * sy;
+        for id in self.selected.clone() {
+            self.history.touch(&self.scene, id);
+            self.scene.modify(id, |el| {
+                let (cx, cy) = (el.x + el.w / 2.0, el.y + el.h / 2.0);
+                let (new_w, new_h) = ((el.w * factor).max(20.0), (el.h * factor).max(20.0));
+                let (new_x, new_y) = (cx - new_w / 2.0, cy - new_h / 2.0);
+                if el.w > 0.0 && el.h > 0.0 {
+                    let (sx, sy) = (new_w / el.w, new_h / el.h);
+                    for p in el.points.iter_mut() {
+                        p.0 = new_x + (p.0 - el.x) * sx;
+                        p.1 = new_y + (p.1 - el.y) * sy;
+                    }
                 }
-            }
-            el.x = new_x;
-            el.y = new_y;
-            el.w = new_w;
-            el.h = new_h;
-        });
+                el.x = new_x;
+                el.y = new_y;
+                el.w = new_w;
+                el.h = new_h;
+            });
+        }
         self.history.commit(&self.scene);
     }
 
+    pub fn delete_selected(&mut self) {
+        if self.selected.is_empty() {
+            return;
+        }
+        self.history.begin();
+        for id in self.selected.clone() {
+            self.history.touch(&self.scene, id);
+            self.scene.remove(id);
+        }
+        self.history.commit(&self.scene);
+        self.set_selection(Vec::new());
+    }
+
+    /// Copies the selection 10px down-right and selects the copies.
+    pub fn duplicate_selected(&mut self) {
+        self.duplicate_selection(10.0);
+    }
+
+    /// Moves the selection by (dx, dy) world units as one undo step.
+    pub fn nudge_selected(&mut self, dx: f64, dy: f64) {
+        if !(dx.is_finite() && dy.is_finite()) || self.selected.is_empty() {
+            return;
+        }
+        self.history.begin();
+        for id in self.selected.clone() {
+            self.history.touch(&self.scene, id);
+            self.translate_element(id, dx, dy);
+        }
+        self.history.commit(&self.scene);
+        self.needs_render = true;
+    }
+
+    /// Layer order: `"front"`, `"back"`, `"forward"`, `"backward"`.
+    pub fn reorder_selected(&mut self, action: &str) {
+        self.reorder(action);
+    }
+
     pub fn get_element_at(&self, raw_x: f64, raw_y: f64) -> Option<String> {
-        let id = self.scene.hit_test(self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y), 8.0)?;
+        let id = self.hit_test_world(self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y))?;
         serde_json::to_string(self.scene.get(id)?).ok()
+    }
+
+    /// Hides an element from rendering (used while its text is edited inline).
+    pub fn hide_element(&mut self, id: u64) {
+        self.hidden.insert(id);
+        self.needs_render = true;
+    }
+
+    pub fn show_all_elements(&mut self) {
+        self.hidden.clear();
+        self.needs_render = true;
+    }
+
+    /// CSS cursor for the select tool at a screen point.
+    pub fn get_cursor(&self, raw_x: f64, raw_y: f64) -> String {
+        self.cursor_at(raw_x, raw_y).to_string()
     }
 
     pub fn clear_board(&mut self) {
@@ -377,8 +561,7 @@ impl AerialCanvas {
         }
         self.laser_strokes.clear();
         self.magic_strokes.clear();
-        self.selected_id = None;
-        self.needs_render = true;
+        self.set_selection(Vec::new());
     }
 
     pub fn clear_laser_strokes(&mut self) {
@@ -422,16 +605,6 @@ impl AerialCanvas {
         payload.to_string()
     }
 
-    pub fn delete_selected(&mut self) {
-        let Some(id) = self.selected_id else { return };
-        self.history.begin();
-        self.history.touch(&self.scene, id);
-        self.scene.remove(id);
-        self.history.commit(&self.scene);
-        self.selected_id = None;
-        self.needs_render = true;
-    }
-
     /// Deprecated no-op kept for API compatibility. Every mutating engine call
     /// now records its own undo transaction.
     pub fn save_state(&mut self) {}
@@ -439,8 +612,7 @@ impl AerialCanvas {
     pub fn undo(&mut self) -> bool {
         let changed = self.history.undo(&mut self.scene);
         if changed {
-            self.selected_id = None;
-            self.needs_render = true;
+            self.set_selection(Vec::new());
         }
         changed
     }
@@ -448,8 +620,7 @@ impl AerialCanvas {
     pub fn redo(&mut self) -> bool {
         let changed = self.history.redo(&mut self.scene);
         if changed {
-            self.selected_id = None;
-            self.needs_render = true;
+            self.set_selection(Vec::new());
         }
         changed
     }
@@ -464,7 +635,7 @@ impl AerialCanvas {
 
     pub fn set_eraser_radius(&mut self, r: f64) {
         if r.is_finite() {
-            self.eraser_radius = r.clamp(4.0, 2_000.0);
+            self.eraser_radius = r.clamp(2.0, 2_000.0);
         }
     }
 
@@ -474,7 +645,7 @@ impl AerialCanvas {
 
     pub fn set_eraser_type(&mut self, t: &str) {
         self.eraser_type = match t.to_lowercase().as_str() {
-            "precision" | "pixel" => EraserType::Precision,
+            "precision" | "pixel" | "partial" => EraserType::Precision,
             "element" | "object" => EraserType::Element,
             _ => EraserType::Stroke,
         };
@@ -507,6 +678,7 @@ impl AerialCanvas {
             is_curved: false,
             ..Default::default()
         });
+        self.set_selection(vec![id]);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -562,7 +734,7 @@ impl AerialCanvas {
         self.reset_interaction_state();
         self.last_load_rejected = self.scene.load(state.elements) as u32;
         self.history.clear();
-        self.selected_id = None;
+        self.set_selection(Vec::new());
         self.legacy_seen_version = self.scene.version();
         self.needs_render = true;
     }
@@ -639,12 +811,14 @@ impl AerialCanvas {
     }
 
     // ── Appearance & Viewport ─────────────────────────────────────────────────
+    /// Dark mode re-colours every element through the theme transform; stored
+    /// colours never change, so switching back is lossless.
     pub fn set_dark_mode(&mut self, is_dark: bool) {
         self.is_dark_mode = is_dark;
-        self.bg_color = None;
         self.needs_render = true;
     }
 
+    /// Canonical (light-theme) paper colour; shown transformed in dark mode.
     pub fn set_background_color(&mut self, color: &str) {
         if color.len() <= element::MAX_COLOR_LEN {
             self.bg_color = Some(color.to_string());
@@ -667,45 +841,35 @@ impl AerialCanvas {
         }
     }
 
-    pub fn set_fountain_sharpness(&mut self, s: f64) {
-        if s.is_finite() {
-            self.fountain_sharpness = s;
-            self.cache.invalidate();
-            self.needs_render = true;
-        }
-    }
+    /// Kept for API compatibility; the brush shape is now pressure-driven.
+    pub fn set_fountain_sharpness(&mut self, _s: f64) {}
+
     pub fn set_stroke_color(&mut self, c: &str) {
-        if c.len() <= element::MAX_COLOR_LEN {
-            self.stroke_color = c.to_string();
-        }
+        self.apply_patch(&StylePatch { stroke_color: Some(c.to_string()), ..Default::default() });
     }
     pub fn set_fill_color(&mut self, c: &str) {
-        if c.len() <= element::MAX_COLOR_LEN {
-            self.fill_color = c.to_string();
-        }
+        self.apply_patch(&StylePatch { background_color: Some(c.to_string()), ..Default::default() });
     }
     pub fn set_stroke_width(&mut self, w: f64) {
-        if w.is_finite() {
-            self.stroke_width = w.clamp(0.1, element::MAX_STROKE_WIDTH);
-        }
+        self.apply_patch(&StylePatch { stroke_width: Some(w), ..Default::default() });
     }
-    pub fn set_is_rough(&mut self, rough: bool) { self.is_rough = rough; }
-    pub fn set_is_curved(&mut self, curved: bool) { self.is_curved = curved; }
+    pub fn set_is_rough(&mut self, rough: bool) {
+        self.is_rough = rough;
+    }
+    pub fn set_is_curved(&mut self, curved: bool) {
+        self.is_curved = curved;
+    }
 
     pub fn get_zoom(&self) -> f64 {
         self.zoom
     }
 
     pub fn zoom_in(&mut self) -> f64 {
-        self.zoom = (self.zoom * 1.15).clamp(MIN_ZOOM, MAX_ZOOM);
-        self.needs_render = true;
-        self.zoom
+        self.zoom_about_center(1.1)
     }
 
     pub fn zoom_out(&mut self) -> f64 {
-        self.zoom = (self.zoom / 1.15).clamp(MIN_ZOOM, MAX_ZOOM);
-        self.needs_render = true;
-        self.zoom
+        self.zoom_about_center(1.0 / 1.1)
     }
 
     pub fn reset_view(&mut self) -> f64 {
@@ -733,173 +897,35 @@ impl AerialCanvas {
     }
 
     // ── Pointer Input ─────────────────────────────────────────────────────────
+    /// Pointer down with pen pressure (0..1), or a negative value when the
+    /// device reports none (mouse) — pressure is then simulated from speed.
+    pub fn pointer_down(&mut self, raw_x: f64, raw_y: f64, pressure: f64) {
+        self.handle_down(raw_x, raw_y, pressure);
+    }
+
+    pub fn pointer_move(&mut self, raw_x: f64, raw_y: f64, pressure: f64) {
+        self.handle_move(raw_x, raw_y, pressure);
+    }
+
+    pub fn pointer_up(&mut self, raw_x: f64, raw_y: f64) {
+        self.handle_up(raw_x, raw_y);
+    }
+
     pub fn on_mouse_down(&mut self, raw_x: f64, raw_y: f64) {
-        // A previous stroke may be uncommitted if pointerup was lost (tablet
-        // driver double-fire, stylus leaving the digitiser) — commit it now.
-        self.commit_active_stroke();
-        self.history.commit(&self.scene);
-
-        let (wx, wy) = (self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y));
-        self.last_mouse_x = raw_x;
-        self.last_mouse_y = raw_y;
-        self.needs_render = true;
-
-        if self.tool == Tool::Hand {
-            self.is_panning = true;
-            return;
-        }
-
-        if self.tool == Tool::Eraser {
-            self.is_drawing = true;
-            self.history.begin();
-            self.erase_at_world(wx, wy);
-            return;
-        }
-
-        self.is_drawing = true;
-
-        if self.tool == Tool::Select {
-            self.begin_select_interaction(wx, wy);
-            return;
-        }
-
-        let kind = match self.tool {
-            Tool::FountainPen => "FountainPen",
-            Tool::Highlighter => "Highlighter",
-            Tool::Rectangle => "Rectangle",
-            Tool::Ellipse => "Ellipse",
-            Tool::Line => "Line",
-            Tool::Arrow => "Arrow",
-            Tool::MagicPen => "MagicPen",
-            Tool::LaserPen => "LaserPen",
-            _ => "FreeDraw",
-        };
-
-        if self.tool == Tool::MagicPen {
-            match self.magic_baseline_y {
-                Some(base) if (wy - base).abs() <= 80.0 => {}
-                _ => self.magic_baseline_y = Some(wy + 15.0),
-            }
-        }
-
-        self.active_stroke = Some(Element {
-            id: self.scene.alloc_id(),
-            kind: kind.to_string(),
-            points: vec![(wx, wy)],
-            x: wx,
-            y: wy,
-            w: 1.0,
-            h: 1.0,
-            stroke_color: self.stroke_color.clone(),
-            fill_color: self.fill_color.clone(),
-            stroke_width: self.stroke_width,
-            // LaserPen reuses font_size as its fade-out alpha (1.0 → 0.0).
-            font_size: if self.tool == Tool::LaserPen { 1.0 } else { 14.0 },
-            is_rough: self.is_rough,
-            is_curved: self.is_curved,
-            ..Default::default()
-        });
+        self.handle_down(raw_x, raw_y, -1.0);
     }
 
     pub fn on_mouse_move(&mut self, raw_x: f64, raw_y: f64) {
-        if self.is_panning {
-            self.offset_x += raw_x - self.last_mouse_x;
-            self.offset_y += raw_y - self.last_mouse_y;
-            self.last_mouse_x = raw_x;
-            self.last_mouse_y = raw_y;
-            self.needs_render = true;
-            return;
-        }
-
-        let (wx, wy) = (self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y));
-
-        if self.is_resizing {
-            self.apply_resize(wx, wy);
-            self.last_mouse_x = raw_x;
-            self.last_mouse_y = raw_y;
-            return;
-        }
-
-        if self.is_dragging {
-            if let Some(id) = self.selected_id {
-                let (nx, ny) = (wx - self.drag_offset_x, wy - self.drag_offset_y);
-                self.scene.modify(id, |el| {
-                    let (dx, dy) = (nx - el.x, ny - el.y);
-                    el.x = nx;
-                    el.y = ny;
-                    for p in el.points.iter_mut() {
-                        p.0 += dx;
-                        p.1 += dy;
-                    }
-                });
-                self.needs_render = true;
-            }
-            self.last_mouse_x = raw_x;
-            self.last_mouse_y = raw_y;
-            return;
-        }
-
-        if !self.is_drawing {
-            return;
-        }
-
-        if self.tool == Tool::Eraser {
-            self.erase_at_world(wx, wy);
-            return;
-        }
-
-        let baseline = self.magic_baseline_y;
-        if let Some(stroke) = self.active_stroke.as_mut() {
-            match stroke.kind.as_str() {
-                "Rectangle" | "Ellipse" | "Line" | "Arrow" => {
-                    let start = stroke.points[0];
-                    stroke.points = vec![start, (wx, wy)];
-                    stroke.x = start.0.min(wx);
-                    stroke.y = start.1.min(wy);
-                    stroke.w = (wx - start.0).abs().max(1.0);
-                    stroke.h = (wy - start.1).abs().max(1.0);
-                }
-                kind => {
-                    let mut py = wy;
-                    if kind == "MagicPen" {
-                        if let Some(base) = baseline {
-                            if (py - base).abs() < 4.0 {
-                                py = base; // gentle baseline snap
-                            }
-                        }
-                    }
-                    stroke.points.push((wx, py));
-                    // Incremental bounds: O(1) per point instead of rescanning
-                    // the whole stroke (which made long strokes O(n²)).
-                    let (max_x, max_y) = (stroke.x + stroke.w, stroke.y + stroke.h);
-                    let (min_x, min_y) = (stroke.x.min(wx), stroke.y.min(py));
-                    stroke.x = min_x;
-                    stroke.y = min_y;
-                    stroke.w = (max_x.max(wx) - min_x).max(1.0);
-                    stroke.h = (max_y.max(py) - min_y).max(1.0);
-                }
-            }
-            self.needs_render = true;
-        }
+        self.handle_move(raw_x, raw_y, -1.0);
     }
 
     pub fn on_mouse_up(&mut self, raw_x: f64, raw_y: f64) {
-        self.on_mouse_move(raw_x, raw_y);
-        self.is_drawing = false;
-        self.is_panning = false;
-        self.is_dragging = false;
-        self.is_resizing = false;
-        self.resize_handle = 0;
-        self.resize_orig_points.clear();
-        self.commit_active_stroke();
-        self.history.commit(&self.scene);
-        self.needs_render = true;
+        self.handle_up(raw_x, raw_y);
     }
 
     pub fn on_double_click(&mut self, raw_x: f64, raw_y: f64) -> Option<String> {
-        let id = self.scene.hit_test(self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y), 8.0)?;
-        self.selected_id = Some(id);
-        self.needs_render = true;
+        let id = self.hit_test_world(self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y))?;
+        self.set_selection(vec![id]);
         Some(id.to_string())
     }
 
@@ -908,11 +934,10 @@ impl AerialCanvas {
             return self.zoom;
         }
         if ctrl {
-            let factor = if dy < 0.0 { 1.1 } else { 0.9 };
-            let old = self.zoom;
-            self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
-            self.offset_x = sx - (sx - self.offset_x) * (self.zoom / old);
-            self.offset_y = sy - (sy - self.offset_y) * (self.zoom / old);
+            // Proportional to the wheel delta so trackpad pinches are smooth;
+            // clamped so one mouse-wheel notch is a comfortable ~14% step.
+            let factor = (-dy.clamp(-25.0, 25.0) * 0.006).exp();
+            self.zoom_about(factor, sx, sy);
         } else {
             self.offset_x -= dx;
             self.offset_y -= dy;
@@ -923,21 +948,24 @@ impl AerialCanvas {
 
     // ── Frame loop ────────────────────────────────────────────────────────────
     /// Called every animation frame. Renders only when something changed.
-    /// Returns true while animations (laser fade, selection marching ants) run.
+    /// Returns true while animations (laser fade, eraser trail) run.
     pub fn tick_animations(&mut self) -> bool {
         let mut animating = false;
-
-        if self.tool == Tool::Select && self.selected_id.is_some() {
-            self.selection_anim_phase = (self.selection_anim_phase + 0.6) % 1000.0;
-            self.needs_render = true;
-            animating = true;
-        }
 
         if !self.laser_strokes.is_empty() {
             for stroke in &mut self.laser_strokes {
                 stroke.font_size -= 0.04; // ~25 frames to fully fade at 60fps
             }
             self.laser_strokes.retain(|s| s.font_size > 0.0);
+            self.needs_render = true;
+            animating = true;
+        }
+
+        if !self.eraser.trail.is_empty() {
+            for p in &mut self.eraser.trail {
+                p.2 -= 0.12;
+            }
+            self.eraser.trail.retain(|p| p.2 > 0.0);
             self.needs_render = true;
             animating = true;
         }
@@ -983,18 +1011,22 @@ impl AerialCanvas {
         if view.w < 1.0 || view.h < 1.0 {
             return;
         }
-        let (bg, is_dark) = self.background();
-        let theme = Theme { is_dark, bg: bg.clone(), grid: self.grid_type.clone(), lod_px: self.lod_px };
-        let exclude = if self.is_dragging || self.is_resizing { self.selected_id } else { None };
-        let env = PaintEnv {
-            images: &self.image_cache,
-            fountain_sharpness: self.fountain_sharpness,
-            is_dark,
-            zoom: self.zoom,
-            scratch: &self.scratch,
-        };
+        let is_dark = self.is_dark_mode;
+        let paper = style::themed(self.bg_color.as_deref().unwrap_or(DEFAULT_PAPER), is_dark).into_owned();
+        let theme = Theme { is_dark, bg: paper.clone(), grid: self.grid_type.clone(), lod_px: self.lod_px };
 
-        self.cache.update(&mut self.scene, view, &theme, exclude, &env);
+        // Elements shown in the dynamic layer: the dragged selection and the
+        // eraser's pending deletions.
+        let mut exclude = std::mem::take(&mut self.exclude_buf);
+        exclude.clear();
+        if self.is_dragging || self.is_resizing {
+            exclude.extend(self.selected.iter().copied());
+        }
+        exclude.extend(self.eraser.pending.iter().copied());
+        exclude.extend(self.hidden.iter().copied());
+
+        let env = PaintEnv { images: &self.image_cache, is_dark, zoom: self.zoom, scratch: &self.scratch, alpha: 1.0 };
+        self.cache.update(&mut self.scene, view, &theme, &exclude, &env);
         let (rx, ry) = self.cache.residual(&view);
         let static_layer = self.cache.canvas();
 
@@ -1002,16 +1034,26 @@ impl AerialCanvas {
         ctx.save();
         let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
         ctx.clear_rect(0.0, 0.0, view.w, view.h);
-        if bg != "transparent" && (rx != 0.0 || ry != 0.0) {
-            ctx.set_fill_style_str(&bg);
+        if paper != "transparent" && (rx != 0.0 || ry != 0.0) {
+            ctx.set_fill_style_str(&paper);
             ctx.fill_rect(0.0, 0.0, view.w, view.h);
         }
         let _ = ctx.draw_image_with_html_canvas_element(static_layer, rx, ry);
         view.apply(ctx);
 
         self.paint_magic_guidelines(is_dark, view.w / view.dpr, view.h / view.dpr);
-        if let Some(el) = exclude.and_then(|id| self.scene.get(id)) {
-            paint_element(ctx, el, &env, false);
+        if self.is_dragging || self.is_resizing {
+            for id in self.selected.iter().filter(|id| !self.hidden.contains(id)) {
+                if let Some(el) = self.scene.get(*id) {
+                    paint_element(ctx, el, &env, false);
+                }
+            }
+        }
+        let faded = PaintEnv { alpha: 0.2, ..env };
+        for id in &self.eraser.pending {
+            if let Some(el) = self.scene.get(*id) {
+                paint_element(ctx, el, &faded, false);
+            }
         }
         if let Some(stroke) = &self.active_stroke {
             paint_element(ctx, stroke, &env, false);
@@ -1019,10 +1061,13 @@ impl AerialCanvas {
         for stroke in self.laser_strokes.iter().chain(self.magic_strokes.iter()) {
             paint_element(ctx, stroke, &env, false);
         }
+        self.paint_eraser_trail(is_dark);
         if self.tool == Tool::Select {
             self.paint_selection();
         }
+        self.paint_marquee();
         self.ctx.restore();
+        self.exclude_buf = exclude;
         self.needs_render = false;
         if let (Some(t0), Some(t1)) = (t0, web_sys::window().and_then(|w| w.performance()).map(|p| p.now())) {
             self.cache.stats.last_frame_ms = t1 - t0;
@@ -1030,7 +1075,7 @@ impl AerialCanvas {
     }
 }
 
-// ── Internal helpers (not exported to JS) ───────────────────────────────────
+// ── Internal helpers shared by interact / overlay ───────────────────────────
 impl AerialCanvas {
     fn current_view(&self) -> View {
         View {
@@ -1043,11 +1088,48 @@ impl AerialCanvas {
         }
     }
 
-    fn background(&self) -> (String, bool) {
-        match &self.bg_color {
-            Some(c) => (c.clone(), !c.starts_with("#f") && !c.starts_with("#F") && c != "white"),
-            None => ((if self.is_dark_mode { "#0a0a0a" } else { "#ffffff" }).to_string(), self.is_dark_mode),
+    fn zoom_about(&mut self, factor: f64, sx: f64, sy: f64) -> f64 {
+        let old = self.zoom;
+        self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.offset_x = sx - (sx - self.offset_x) * (self.zoom / old);
+        self.offset_y = sy - (sy - self.offset_y) * (self.zoom / old);
+        self.needs_render = true;
+        self.zoom
+    }
+
+    fn zoom_about_center(&mut self, factor: f64) -> f64 {
+        let (cx, cy) = (self.canvas.width() as f64 / self.dpr / 2.0, self.canvas.height() as f64 / self.dpr / 2.0);
+        self.zoom_about(factor, cx, cy)
+    }
+
+    fn reset_interaction_state(&mut self) {
+        self.active_stroke = None;
+        self.is_drawing = false;
+        self.is_panning = false;
+        self.is_dragging = false;
+        self.is_resizing = false;
+        self.resize_handle = 0;
+        self.marquee = None;
+        self.eraser.pending.clear();
+        self.eraser.last = None;
+        self.history.commit(&self.scene);
+        self.needs_render = true;
+    }
+
+    fn switch_tool(&mut self, tool: Tool, keep_selection: bool) {
+        self.reset_interaction_state();
+        if !keep_selection {
+            self.set_selection(Vec::new());
         }
+        self.tool = tool;
+    }
+
+    fn set_selection(&mut self, ids: Vec<u64>) {
+        if ids != self.selected {
+            self.selected = ids;
+            self.selection_version += 1;
+        }
+        self.needs_render = true;
     }
 
     fn insert_recorded(&mut self, el: Element) {
@@ -1059,290 +1141,124 @@ impl AerialCanvas {
         self.needs_render = true;
     }
 
-    fn commit_active_stroke(&mut self) {
-        let Some(mut stroke) = self.active_stroke.take() else { return };
-        // Degenerate zero-distance jitter is discarded; single taps are dots.
-        let substantial = stroke.points.len() == 1 || stroke.w >= 1.0 || stroke.h >= 1.0;
-        if !substantial {
+    /// New element pre-filled with the current style.
+    fn styled_element(&self, kind: &str, wx: f64, wy: f64) -> Element {
+        let s = &self.style;
+        let is_shape = matches!(kind, "Rectangle" | "Diamond" | "Ellipse");
+        let linear = matches!(kind, "Line" | "Arrow");
+        Element {
+            id: 0,
+            kind: kind.to_string(),
+            points: vec![(wx, wy)],
+            x: wx,
+            y: wy,
+            w: 1.0,
+            h: 1.0,
+            stroke_color: s.stroke_color.clone(),
+            fill_color: if is_shape { s.background_color.clone() } else { "transparent".to_string() },
+            stroke_width: s.stroke_width,
+            font_size: 14.0,
+            is_rough: self.is_rough,
+            is_curved: self.is_curved,
+            roughness: if is_shape || linear { s.roughness } else { 0.0 },
+            fill_style: s.fill_style.clone(),
+            stroke_style: if is_shape || linear { s.stroke_style.clone() } else { "solid".to_string() },
+            roundness: if matches!(kind, "Rectangle" | "Diamond") { s.roundness.clone() } else { "sharp".to_string() },
+            opacity: s.opacity,
+            seed: (js_sys::Math::random() * 4_294_967_295.0) as u32 | 1,
+            ..Default::default()
+        }
+    }
+
+    fn apply_patch(&mut self, p: &StylePatch) {
+        let ok_color = |c: &Option<String>| c.as_ref().filter(|c| c.len() <= element::MAX_COLOR_LEN).cloned();
+        if let Some(c) = ok_color(&p.stroke_color) {
+            self.style.stroke_color = c;
+        }
+        if let Some(c) = ok_color(&p.background_color) {
+            self.style.background_color = c;
+        }
+        if let Some(v) = p.fill_style.as_ref().filter(|v| element::FILL_STYLES.contains(&v.as_str())) {
+            self.style.fill_style = v.clone();
+        }
+        if let Some(w) = p.stroke_width.filter(|w| w.is_finite()) {
+            self.style.stroke_width = w.clamp(0.1, element::MAX_STROKE_WIDTH);
+        }
+        if let Some(v) = p.stroke_style.as_ref().filter(|v| element::STROKE_STYLES.contains(&v.as_str())) {
+            self.style.stroke_style = v.clone();
+        }
+        if let Some(r) = p.roughness.filter(|r| r.is_finite()) {
+            self.style.roughness = r.clamp(0.0, 3.0);
+        }
+        if let Some(v) = p.roundness.as_ref().filter(|v| element::ROUNDNESS.contains(&v.as_str())) {
+            self.style.roundness = v.clone();
+        }
+        if let Some(o) = p.opacity.filter(|o| o.is_finite()) {
+            self.style.opacity = o.clamp(0.0, 100.0);
+        }
+        if let Some(f) = p.font_family.as_ref().filter(|f| f.len() <= 256) {
+            self.style.font_family = f.clone();
+        }
+        if let Some(sz) = p.font_size.filter(|s| s.is_finite()) {
+            self.style.font_size = sz.clamp(4.0, 400.0);
+        }
+
+        if self.selected.is_empty() {
             return;
         }
-        match stroke.kind.as_str() {
-            "LaserPen" => self.laser_strokes.push(stroke),
-            "MagicPen" => self.magic_strokes.push(stroke),
-            kind => {
-                if matches!(kind, "FreeDraw" | "FountainPen" | "Highlighter") && stroke.points.len() > 8 {
-                    stroke.points = simplify_rdp(&stroke.points, COMMIT_SIMPLIFY_PX / self.zoom);
-                }
-                self.insert_recorded(stroke);
-            }
-        }
-        self.needs_render = true;
-    }
-
-    fn begin_select_interaction(&mut self, wx: f64, wy: f64) {
-        // 1. Corner resize handles of the current selection.
-        if let Some(el) = self.selected_id.and_then(|id| self.scene.get(id)) {
-            let r = 16.0 / self.zoom.max(0.1);
-            let corners = [(1u8, el.x, el.y), (2, el.x + el.w, el.y), (3, el.x, el.y + el.h), (4, el.x + el.w, el.y + el.h)];
-            if let Some((handle, _, _)) = corners.iter().find(|(_, cx, cy)| (wx - cx).powi(2) + (wy - cy).powi(2) <= r * r) {
-                self.is_resizing = true;
-                self.resize_handle = *handle;
-                self.resize_start = (wx, wy);
-                self.resize_orig = Rect::from_xywh(el.x, el.y, el.w, el.h);
-                self.resize_orig_points = el.points.clone();
-                let id = el.id;
-                self.history.begin();
-                self.history.touch(&self.scene, id);
-                return;
-            }
-        }
-
-        // 2. Normal element selection.
-        match self.scene.hit_test(wx, wy, 6.0) {
-            Some(id) => {
-                if let Some(el) = self.scene.get(id) {
-                    self.drag_offset_x = wx - el.x;
-                    self.drag_offset_y = wy - el.y;
-                }
-                self.selected_id = Some(id);
-                self.is_dragging = true;
-                self.history.begin();
-                self.history.touch(&self.scene, id);
-            }
-            None => {
-                self.selected_id = None;
-                self.is_dragging = false;
-            }
-        }
-    }
-
-    fn apply_resize(&mut self, wx: f64, wy: f64) {
-        let Some(id) = self.selected_id else { return };
-        let Some(kind) = self.scene.get(id).map(|e| e.kind.clone()) else { return };
-        let (dx, dy) = (wx - self.resize_start.0, wy - self.resize_start.1);
-        let o = self.resize_orig;
-        let (ox, oy, ow, oh) = (o.min_x, o.min_y, o.width(), o.height());
-
-        let (mut nx, mut ny, mut nw, mut nh) = match self.resize_handle {
-            1 => { let (w, h) = ((ow - dx).max(24.0), (oh - dy).max(24.0)); (ox + ow - w, oy + oh - h, w, h) }
-            2 => { let (w, h) = ((ow + dx).max(24.0), (oh - dy).max(24.0)); (ox, oy + oh - h, w, h) }
-            3 => { let (w, h) = ((ow - dx).max(24.0), (oh + dy).max(24.0)); (ox + ow - w, oy, w, h) }
-            4 => { let (w, h) = ((ow + dx).max(24.0), (oh + dy).max(24.0)); (ox, oy, w, h) }
-            _ => (ox, oy, ow, oh),
-        };
-
-        // Diagrams and images keep their aspect ratio.
-        if (kind == "Diagram" || kind == "Image") && ow > 0.0 && oh > 0.0 {
-            let scale = (nw / ow).max(nh / oh);
-            nw = (ow * scale).max(24.0);
-            nh = (oh * scale).max(24.0);
-            (nx, ny) = match self.resize_handle {
-                1 => (ox + ow - nw, oy + oh - nh),
-                2 => (ox, oy + oh - nh),
-                3 => (ox + ow - nw, oy),
-                _ => (ox, oy),
-            };
-        }
-
-        // Scale from the points captured at resize start. Rescaling the
-        // already-scaled points each move compounded the error.
-        let orig_points = &self.resize_orig_points;
-        self.scene.modify(id, |el| {
-            if ow > 0.0 && oh > 0.0 && orig_points.len() == el.points.len() {
-                let (sx, sy) = (nw / ow, nh / oh);
-                for (p, q) in el.points.iter_mut().zip(orig_points) {
-                    p.0 = nx + (q.0 - ox) * sx;
-                    p.1 = ny + (q.1 - oy) * sy;
-                }
-            }
-            el.x = nx;
-            el.y = ny;
-            el.w = nw;
-            el.h = nh;
-        });
-        self.needs_render = true;
-    }
-
-    /// Erases within the eraser radius at a world point. Only elements found by
-    /// the spatial index are examined. Must run inside an open transaction.
-    fn erase_at_world(&mut self, wx: f64, wy: f64) {
-        let radius = (self.eraser_radius / self.zoom).max(4.0 / self.zoom);
-        let r2 = radius * radius;
-        let probe = Rect::new(wx, wy, wx, wy).expand(radius);
-        let within = |p: &(f64, f64)| (p.0 - wx).powi(2) + (p.1 - wy).powi(2) <= r2;
-
-        enum Action {
-            Skip,
-            Remove,
-            Split(Vec<Vec<(f64, f64)>>, Box<Element>),
-        }
-
-        for id in self.scene.candidates_in(&probe) {
-            let action = match self.scene.get(id) {
-                None => Action::Skip,
-                Some(el) if !el.geom_bounds().expand(radius).contains_point(wx, wy) => Action::Skip,
-                Some(el) => {
-                    let solid = matches!(el.kind.as_str(), "Image" | "Text" | "Rectangle" | "Ellipse" | "Line" | "Arrow" | "Diagram");
-                    let touched = el.points.iter().any(within);
-                    match self.eraser_type {
-                        EraserType::Element => Action::Remove,
-                        _ if solid => Action::Remove,
-                        _ if !touched => Action::Skip,
-                        EraserType::Stroke => Action::Remove,
-                        EraserType::Precision => {
-                            // Split into the runs of points that survive, so erasing
-                            // through the middle leaves two strokes rather than one
-                            // stroke with a straight line bridging the gap.
-                            let mut runs: Vec<Vec<(f64, f64)>> = Vec::new();
-                            let mut current = Vec::new();
-                            for p in &el.points {
-                                if within(p) {
-                                    if current.len() > 1 {
-                                        runs.push(std::mem::take(&mut current));
-                                    } else {
-                                        current.clear();
-                                    }
-                                } else {
-                                    current.push(*p);
-                                }
-                            }
-                            if current.len() > 1 {
-                                runs.push(current);
-                            }
-                            Action::Split(runs, Box::new(el.clone()))
-                        }
+        let s = self.style.clone();
+        self.history.begin();
+        for id in self.selected.clone() {
+            self.history.touch(&self.scene, id);
+            self.scene.modify(id, |el| {
+                let shape = el.is_shape();
+                let linear = el.is_linear();
+                let text = el.kind == "Text";
+                if p.stroke_color.is_some() && el.kind != "Image" && el.kind != "Diagram" {
+                    el.stroke_color = s.stroke_color.clone();
+                    if text {
+                        el.fill_color = s.stroke_color.clone();
                     }
                 }
-            };
-
-            match action {
-                Action::Skip => {}
-                Action::Remove => self.erase_remove(id),
-                Action::Split(runs, template) => {
-                    let mut runs = runs.into_iter();
-                    let Some(first) = runs.next() else {
-                        self.erase_remove(id);
-                        continue;
-                    };
-                    self.history.touch(&self.scene, id);
-                    self.scene.modify(id, |e| e.points = first);
-                    for run in runs {
-                        let new_id = self.scene.alloc_id();
-                        self.history.touch(&self.scene, new_id);
-                        self.scene.upsert(Element { id: new_id, points: run, ..(*template).clone() });
+                if shape {
+                    if p.background_color.is_some() {
+                        el.fill_color = s.background_color.clone();
+                    }
+                    if p.fill_style.is_some() {
+                        el.fill_style = s.fill_style.clone();
                     }
                 }
-            }
-        }
-        self.needs_render = true;
-    }
-
-    fn erase_remove(&mut self, id: u64) {
-        self.history.touch(&self.scene, id);
-        self.scene.remove(id);
-        if self.selected_id == Some(id) {
-            self.selected_id = None;
-        }
-    }
-
-    fn paint_magic_guidelines(&self, is_dark: bool, css_w: f64, css_h: f64) {
-        if self.tool != Tool::MagicPen {
-            return;
-        }
-        let ctx = &self.ctx;
-        let (left, right) = (self.screen_to_world_x(0.0), self.screen_to_world_x(css_w));
-        let (top, bottom) = (self.screen_to_world_y(0.0), self.screen_to_world_y(css_h));
-        let z = self.zoom;
-        let dash = |a: f64, b: f64| js_sys::Array::of2(&JsValue::from_f64(a / z), &JsValue::from_f64(b / z));
-        let hline = |y: f64, color: &str, width: f64, dashes: Option<js_sys::Array>| {
-            ctx.begin_path();
-            ctx.set_stroke_style_str(color);
-            ctx.set_line_width(width / z);
-            if let Some(d) = &dashes {
-                let _ = ctx.set_line_dash(d);
-            }
-            ctx.move_to(left, y);
-            ctx.line_to(right, y);
-            ctx.stroke();
-            if dashes.is_some() {
-                let _ = ctx.set_line_dash(&js_sys::Array::new());
-            }
-        };
-
-        if let Some(base) = self.magic_baseline_y {
-            let ink = |a: f64| if is_dark { format!("rgba(255, 255, 255, {a})") } else { format!("rgba(10, 10, 10, {a})") };
-            hline(base, "rgba(231, 63, 7, 0.75)", 1.8, None);
-            hline(base - 20.0, &ink(0.35), 1.0, Some(dash(6.0, 6.0)));
-            hline(base - 34.0, &ink(0.20), 1.0, None);
-            hline(base + 14.0, &ink(0.15), 1.0, Some(dash(2.0, 4.0)));
-        } else {
-            let step = 60.0;
-            ctx.begin_path();
-            ctx.set_stroke_style_str(if is_dark { "rgba(231, 63, 7, 0.18)" } else { "rgba(231, 63, 7, 0.15)" });
-            ctx.set_line_width(1.0 / z);
-            let (start, end) = ((top / step).floor() as i64, (bottom / step).ceil() as i64);
-            if end - start < 10_000 {
-                for gy in start..=end {
-                    ctx.move_to(left, gy as f64 * step);
-                    ctx.line_to(right, gy as f64 * step);
+                if p.stroke_width.is_some() && !text {
+                    el.stroke_width = s.stroke_width;
                 }
-            }
-            ctx.stroke();
+                if shape || linear {
+                    if p.stroke_style.is_some() {
+                        el.stroke_style = s.stroke_style.clone();
+                    }
+                    if p.roughness.is_some() {
+                        el.roughness = s.roughness;
+                    }
+                }
+                if p.roundness.is_some() && matches!(el.kind.as_str(), "Rectangle" | "Diamond") {
+                    el.roundness = s.roundness.clone();
+                }
+                if p.opacity.is_some() {
+                    el.opacity = s.opacity;
+                }
+                if text {
+                    if p.font_family.is_some() {
+                        el.font_family = s.font_family.clone();
+                    }
+                    if p.font_size.is_some() {
+                        el.font_size = s.font_size;
+                        let (w, h) = text_box(&el.text, el.font_size);
+                        el.w = w;
+                        el.h = h;
+                    }
+                }
+            });
         }
-    }
-
-    fn paint_selection(&self) {
-        let Some(el) = self.selected_id.and_then(|id| self.scene.get(id)) else { return };
-        let ctx = &self.ctx;
-        let z = self.zoom;
-        ctx.save();
-        let pad = 6.0;
-        let (sx, sy, sw, sh) = (el.x - pad, el.y - pad, el.w + pad * 2.0, el.h + pad * 2.0);
-        let accent = self.accent_color.as_str();
-
-        // 1. Animated marching-ants boundary.
-        ctx.set_stroke_style_str(accent);
-        ctx.set_line_width(1.5 / z);
-        let _ = ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from_f64(6.0 / z), &JsValue::from_f64(4.0 / z)));
-        ctx.set_line_dash_offset(-self.selection_anim_phase / z);
-        ctx.stroke_rect(sx, sy, sw, sh);
-        let _ = ctx.set_line_dash(&js_sys::Array::new());
-
-        // 2. Tactical corner reticles.
-        let len = (12.0 / z).min(sw / 3.0).min(sh / 3.0);
-        ctx.set_line_width(2.0 / z);
-        ctx.begin_path();
-        for (cx, cy, dx, dy) in [(sx, sy, 1.0, 1.0), (sx + sw, sy, -1.0, 1.0), (sx, sy + sh, 1.0, -1.0), (sx + sw, sy + sh, -1.0, -1.0)] {
-            ctx.move_to(cx, cy + dy * len);
-            ctx.line_to(cx, cy);
-            ctx.line_to(cx + dx * len, cy);
-        }
-        ctx.stroke();
-
-        // 3. Corner resize handles.
-        let hs = 8.0 / z;
-        ctx.set_fill_style_str(if self.is_dark_mode { "#18181b" } else { "#ffffff" });
-        ctx.set_line_width(1.5 / z);
-        for (cx, cy) in [(el.x, el.y), (el.x + el.w, el.y), (el.x, el.y + el.h), (el.x + el.w, el.y + el.h)] {
-            ctx.fill_rect(cx - hs / 2.0, cy - hs / 2.0, hs, hs);
-            ctx.stroke_rect(cx - hs / 2.0, cy - hs / 2.0, hs, hs);
-        }
-
-        // 4. Telemetry badge [ W × H px ].
-        let label = format!("{} × {} px", el.w.round() as i64, el.h.round() as i64);
-        let badge = if el.kind == "Diagram" { format!("DIAGRAM • {label}") } else { label };
-        let fs = (10.0 / z).clamp(8.0, 14.0);
-        ctx.set_font(&format!("bold {fs}px 'Space Mono', monospace"));
-        let bw = badge.chars().count() as f64 * fs * 0.62 + 14.0 / z;
-        let bh = 18.0 / z;
-        let (bx, by) = (sx + (sw - bw) / 2.0, sy + sh + 8.0 / z);
-        ctx.set_fill_style_str(if self.is_dark_mode { "#111111" } else { "#ffffff" });
-        ctx.set_stroke_style_str("#2a2a2a");
-        ctx.set_line_width(1.0 / z);
-        ctx.fill_rect(bx, by, bw, bh);
-        ctx.stroke_rect(bx, by, bw, bh);
-        ctx.set_fill_style_str(accent);
-        let _ = ctx.fill_text(&badge, bx + 7.0 / z, by + bh - 5.0 / z);
-        ctx.restore();
+        self.history.commit(&self.scene);
+        self.needs_render = true;
     }
 }

@@ -100,12 +100,112 @@ fn perp_dist_sq(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     ex * ex + ey * ey
 }
 
-/// Ramer–Douglas–Peucker polyline simplification (iterative, no recursion so
-/// adversarially long strokes cannot blow the WASM stack).
-pub fn simplify_rdp(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64)> {
+pub fn dist_point_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
+    perp_dist_sq(p, a, b).sqrt()
+}
+
+/// Parameter interval `[t0, t1]` (clamped to `[0, 1]`) of segment `a→b` that
+/// lies inside the circle `(c, r)`, or `None` when the segment misses it.
+pub fn segment_circle_interval(a: (f64, f64), b: (f64, f64), c: (f64, f64), r: f64) -> Option<(f64, f64)> {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let (fx, fy) = (a.0 - c.0, a.1 - c.1);
+    let qa = dx * dx + dy * dy;
+    let qc = fx * fx + fy * fy - r * r;
+    if qa < 1e-18 {
+        return (qc <= 0.0).then_some((0.0, 1.0));
+    }
+    let qb = 2.0 * (fx * dx + fy * dy);
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc <= 0.0 {
+        return None;
+    }
+    let sq = disc.sqrt();
+    let t0 = ((-qb - sq) / (2.0 * qa)).max(0.0);
+    let t1 = ((-qb + sq) / (2.0 * qa)).min(1.0);
+    (t0 < t1).then_some((t0, t1))
+}
+
+/// Polyline pieces with their per-point pressures.
+pub type PolylineRuns = Vec<(Vec<(f64, f64)>, Vec<f32>)>;
+
+/// Splits a polyline (with optional per-point pressures) into the runs that
+/// lie outside the circle `(c, r)`, cutting segments exactly at the circle.
+pub fn clip_polyline_outside_circle(points: &[(f64, f64)], pressures: &[f32], c: (f64, f64), r: f64) -> PolylineRuns {
+    let has_p = pressures.len() == points.len();
+    let lerp = |a: (f64, f64), b: (f64, f64), t: f64| (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+    let lerp_p = |i: usize, t: f64| pressures[i] + (pressures[i + 1] - pressures[i]) * t as f32;
+    let r2 = r * r;
+    let inside = |p: (f64, f64)| (p.0 - c.0).powi(2) + (p.1 - c.1).powi(2) <= r2;
+
+    let mut runs = Vec::new();
+    let (mut cur, mut cur_p): (Vec<(f64, f64)>, Vec<f32>) = (Vec::new(), Vec::new());
+    let Some(&first) = points.first() else { return runs };
+    if !inside(first) {
+        cur.push(first);
+        if has_p {
+            cur_p.push(pressures[0]);
+        }
+    }
+    let flush = |cur: &mut Vec<(f64, f64)>, cur_p: &mut Vec<f32>, runs: &mut PolylineRuns| {
+        if cur.len() > 1 {
+            runs.push((std::mem::take(cur), std::mem::take(cur_p)));
+        } else {
+            cur.clear();
+            cur_p.clear();
+        }
+    };
+    for i in 0..points.len().saturating_sub(1) {
+        let (a, b) = (points[i], points[i + 1]);
+        match segment_circle_interval(a, b, c, r) {
+            None => {
+                cur.push(b);
+                if has_p {
+                    cur_p.push(pressures[i + 1]);
+                }
+            }
+            Some((t0, t1)) => {
+                if t0 > 0.0 {
+                    cur.push(lerp(a, b, t0));
+                    if has_p {
+                        cur_p.push(lerp_p(i, t0));
+                    }
+                }
+                flush(&mut cur, &mut cur_p, &mut runs);
+                if t1 < 1.0 {
+                    cur.push(lerp(a, b, t1));
+                    cur.push(b);
+                    if has_p {
+                        cur_p.push(lerp_p(i, t1));
+                        cur_p.push(pressures[i + 1]);
+                    }
+                }
+            }
+        }
+    }
+    flush(&mut cur, &mut cur_p, &mut runs);
+    runs
+}
+
+pub fn point_in_polygon(p: (f64, f64), poly: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    let mut j = n.wrapping_sub(1);
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[j]);
+        if (a.1 > p.1) != (b.1 > p.1) && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0 {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// RDP that also returns which input indices were kept (so per-point data
+/// such as pressure stays aligned).
+pub fn simplify_rdp_indices(points: &[(f64, f64)], tolerance: f64) -> Vec<usize> {
     let n = points.len();
     if n < 3 || tolerance <= 0.0 {
-        return points.to_vec();
+        return (0..n).collect();
     }
     let tol_sq = tolerance * tolerance;
     let mut keep = vec![false; n];
@@ -130,7 +230,7 @@ pub fn simplify_rdp(points: &[(f64, f64)], tolerance: f64) -> Vec<(f64, f64)> {
             stack.push((idx, end));
         }
     }
-    points.iter().zip(keep).filter(|(_, k)| *k).map(|(p, _)| *p).collect()
+    (0..n).filter(|&i| keep[i]).collect()
 }
 
 /// Screen-space decimation used at render time: drops points closer than
@@ -222,20 +322,38 @@ pub type FxHashSet<K> = std::collections::HashSet<K, FxBuild>;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clip_cuts_straight_segment_in_the_middle() {
+        // A 2-point line (what RDP leaves of a straight stroke) is still cut.
+        let runs = super::clip_polyline_outside_circle(&[(0.0, 0.0), (100.0, 0.0)], &[0.2, 1.0], (50.0, 0.0), 10.0);
+        assert_eq!(runs.len(), 2);
+        assert!((runs[0].0[1].0 - 40.0).abs() < 1e-9);
+        assert!((runs[1].0[0].0 - 60.0).abs() < 1e-9);
+        assert!((runs[0].1[1] - 0.52).abs() < 1e-5);
+    }
+
+    #[test]
+    fn clip_keeps_untouched_and_drops_fully_covered() {
+        let line = [(0.0, 0.0), (10.0, 0.0)];
+        assert_eq!(super::clip_polyline_outside_circle(&line, &[], (50.0, 50.0), 5.0).len(), 1);
+        assert!(super::clip_polyline_outside_circle(&line, &[], (5.0, 0.0), 20.0).is_empty());
+        let end = super::clip_polyline_outside_circle(&line, &[], (10.0, 0.0), 3.0);
+        assert_eq!(end.len(), 1);
+        assert!((end[0].0[1].0 - 7.0).abs() < 1e-9);
+    }
+
     use super::*;
 
     #[test]
     fn rdp_keeps_endpoints_and_corners() {
         let pts = vec![(0.0, 0.0), (1.0, 0.01), (2.0, 0.0), (2.0, 5.0)];
-        let s = simplify_rdp(&pts, 0.1);
-        assert_eq!(s, vec![(0.0, 0.0), (2.0, 0.0), (2.0, 5.0)]);
+        assert_eq!(simplify_rdp_indices(&pts, 0.1), vec![0, 2, 3]);
     }
 
     #[test]
     fn rdp_handles_long_input_without_recursion() {
         let pts: Vec<(f64, f64)> = (0..200_000).map(|i| (i as f64, ((i % 7) as f64) * 0.001)).collect();
-        let s = simplify_rdp(&pts, 0.5);
-        assert_eq!(s.len(), 2);
+        assert_eq!(simplify_rdp_indices(&pts, 0.5).len(), 2);
     }
 
     #[test]

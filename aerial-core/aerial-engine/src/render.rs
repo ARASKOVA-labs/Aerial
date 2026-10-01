@@ -23,10 +23,14 @@ use wasm_bindgen::{Clamped, JsCast, JsValue};
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement, ImageData, Path2d};
 
 use crate::element::Element;
-use crate::geom::{decimate_into, Rect};
+use crate::freehand;
+use crate::geom::{decimate_into, FxHashSet, Rect};
+use crate::path::{emit, to_path, Seg};
 use crate::pyramid::{lod_level, DensityPyramid};
+use crate::rough::{self, Rng};
 use crate::scene::Scene;
 use crate::spatial::Hit;
+use crate::style::{dash_pattern, themed};
 
 /// Strokes smaller than this on screen (CSS px) are drawn as batched polylines.
 pub const SMALL_STROKE_PX: f64 = 24.0;
@@ -112,16 +116,6 @@ pub struct Theme {
     pub lod_px: f64,
 }
 
-pub fn effective_color(c: &str, is_dark: bool) -> &str {
-    if is_dark {
-        if c == "#1a1a2e" || c == "#000000" {
-            return "#f8fafc";
-        }
-    } else if c == "#f8fafc" || c == "#ffffff" {
-        return "#000000";
-    }
-    c
-}
 
 // ── Offscreen layers ────────────────────────────────────────────────────────
 
@@ -170,18 +164,28 @@ pub struct LayerCache {
     valid: bool,
     view: Option<View>,
     theme: Option<Theme>,
-    exclude: Option<u64>,
+    exclude: FxHashSet<u64>,
     hits: Vec<Hit>,
     pub stats: RenderStats,
 }
 
+/// Reusable buffers so painting allocates nothing per element.
+#[derive(Default)]
+pub struct Scratch {
+    pub points: RefCell<Vec<(f64, f64)>>,
+    pub outline: RefCell<Vec<(f64, f64)>>,
+    pub segs: RefCell<Vec<Seg>>,
+}
+
 /// Everything the painter needs that is not the scene itself.
+#[derive(Clone, Copy)]
 pub struct PaintEnv<'a> {
     pub images: &'a HashMap<u64, HtmlImageElement>,
-    pub fountain_sharpness: f64,
     pub is_dark: bool,
     pub zoom: f64,
-    pub scratch: &'a RefCell<Vec<(f64, f64)>>,
+    pub scratch: &'a Scratch,
+    /// Multiplies every element's opacity (eraser preview fades to 0.2).
+    pub alpha: f64,
 }
 
 fn now_ms() -> f64 {
@@ -198,7 +202,7 @@ impl LayerCache {
             valid: false,
             view: None,
             theme: None,
-            exclude: None,
+            exclude: FxHashSet::default(),
             hits: Vec::new(),
             stats: RenderStats { lod_level: -1, ..Default::default() },
         })
@@ -224,7 +228,7 @@ impl LayerCache {
 
     /// Brings the static layer up to date for `view`, repainting as little as
     /// possible.
-    pub fn update(&mut self, scene: &mut Scene, view: View, theme: &Theme, exclude: Option<u64>, env: &PaintEnv) {
+    pub fn update(&mut self, scene: &mut Scene, view: View, theme: &Theme, exclude: &FxHashSet<u64>, env: &PaintEnv) {
         let t0 = now_ms();
         let (wu, hu) = (view.w as u32, view.h as u32);
         let resized = self.front.canvas.width() != wu || self.front.canvas.height() != hu;
@@ -277,18 +281,16 @@ impl LayerCache {
         }
 
         if !full {
-            // Element being dragged lives in the dynamic layer. While it stays
-            // excluded its intermediate positions never touch the static layer.
-            let exclusion_changed = exclude != self.exclude;
-            if exclusion_changed {
-                for id in [self.exclude, exclude].into_iter().flatten() {
-                    if let Some(b) = scene.visual_bounds(id) {
-                        regions.extend(painted_view.device_rect(&b));
-                    }
+            // Elements being dragged (or previewed by the eraser) live in the
+            // dynamic layer. Only elements entering or leaving that set touch
+            // the static layer; edits to ones that stay excluded never do.
+            for id in self.exclude.symmetric_difference(exclude) {
+                if let Some(b) = scene.visual_bounds(*id) {
+                    regions.extend(painted_view.device_rect(&b));
                 }
             }
             for (id, r) in &dirty {
-                if !exclusion_changed && Some(*id) == exclude {
+                if exclude.contains(id) && self.exclude.contains(id) {
                     continue;
                 }
                 regions.extend(painted_view.device_rect(r));
@@ -300,7 +302,9 @@ impl LayerCache {
             }
         }
 
-        self.exclude = exclude;
+        if self.exclude != *exclude {
+            self.exclude = exclude.clone();
+        }
         self.theme = Some(theme.clone());
         self.stats.elements = scene.len();
         self.stats.drawn = 0;
@@ -358,7 +362,7 @@ impl LayerCache {
         let mut batches = Batches::default();
         let mut run = Run::default();
         for hit in &self.hits {
-            if Some(hit.key.1) == self.exclude {
+            if self.exclude.contains(&hit.key.1) {
                 continue;
             }
             let Some(el) = scene.get(hit.key.1) else { continue };
@@ -559,10 +563,9 @@ impl Batches {
 
 // ── Same-style runs ─────────────────────────────────────────────────────────
 
-/// Consecutive (in paint order) opaque stroke-only elements sharing colour and
-/// width are appended to one Path2D and stroked once. Unlike `Batches` this
-/// never reorders anything, so it is exact at any size. Real drawings are
-/// mostly long runs of one pen, so this collapses thousands of canvas calls.
+/// Consecutive (in paint order) crisp, opaque, unfilled shapes sharing colour
+/// and width are appended to one Path2D and stroked once. Never reorders, so
+/// it is exact. Freehand strokes are filled outlines and are drawn singly.
 #[derive(Default)]
 struct Run {
     key: Option<(String, i64)>,
@@ -570,28 +573,33 @@ struct Run {
 }
 
 impl Run {
-    fn runnable(el: &Element, zoom: f64) -> bool {
-        match el.kind.as_str() {
-            "FreeDraw" => el.w.max(el.h) * zoom >= SMALL_STROKE_PX,
-            "Rectangle" | "Ellipse" | "Line" | "Arrow" => el.fill_color == "transparent" || el.fill_color.is_empty(),
-            _ => false,
-        }
+    fn runnable(el: &Element) -> bool {
+        matches!(el.kind.as_str(), "Rectangle" | "Diamond" | "Ellipse" | "Line")
+            && el.roughness <= 0.0
+            && el.opacity >= 100.0
+            && el.stroke_style == "solid"
+            && el.roundness == "sharp"
+            && !el.has_fill()
+            && el.points.len() >= 2
     }
 
     fn try_append(&mut self, ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv) -> bool {
-        if !Self::runnable(el, env.zoom) || el.points.is_empty() {
+        if env.alpha < 1.0 || !Self::runnable(el) {
             return false;
         }
-        let color = effective_color(&el.stroke_color, env.is_dark);
+        let color = themed(&el.stroke_color, env.is_dark);
         let wq = (el.stroke_width * 4.0).round() as i64;
-        let same = self.key.as_ref().is_some_and(|(c, w)| c == color && *w == wq);
+        let same = self.key.as_ref().is_some_and(|(c, w)| c.as_str() == color && *w == wq);
         if !same {
             self.flush(ctx);
-            self.key = Some((color.to_string(), wq));
+            self.key = Some((color.into_owned(), wq));
             self.path = Path2d::new().ok();
         }
         let Some(path) = &self.path else { return false };
-        append_geometry(path, el, env);
+        let mut segs = env.scratch.segs.borrow_mut();
+        segs.clear();
+        shape_stroke_segs(el, &mut segs);
+        emit(path, &segs);
         true
     }
 
@@ -607,60 +615,58 @@ impl Run {
     }
 }
 
-/// Appends an element's outline to a path using the same geometry as
-/// `paint_element`, so batched and individual drawing look identical.
-fn append_geometry(path: &Path2d, el: &Element, env: &PaintEnv) {
-    let first = el.points[0];
-    let last = el.points[el.points.len() - 1];
+// ── Geometry builders ───────────────────────────────────────────────────────
+
+fn endpoints(el: &Element) -> ((f64, f64), (f64, f64)) {
+    (el.points[0], el.points[el.points.len() - 1])
+}
+
+/// Outline of a rectangle / diamond / ellipse / line (hand-drawn or crisp).
+fn shape_stroke_segs(el: &Element, out: &mut Vec<Seg>) {
+    let b = el.geom_bounds();
+    let mut rng = Rng::new(rough::seed_for(el.id, el.seed));
+    let double = el.stroke_style == "solid";
     match el.kind.as_str() {
-        "Rectangle" => {
-            let (x, y) = (first.0.min(last.0), first.1.min(last.1));
-            path.rect(x, y, (last.0 - first.0).abs().max(1.0), (last.1 - first.1).abs().max(1.0));
-        }
         "Ellipse" => {
-            let (cx, cy) = ((first.0 + last.0) / 2.0, (first.1 + last.1) / 2.0);
-            let (rx, ry) = (((last.0 - first.0).abs() / 2.0).max(1.0), ((last.1 - first.1).abs() / 2.0).max(1.0));
-            path.move_to(cx + rx, cy);
-            let _ = path.ellipse(cx, cy, rx, ry, 0.0, 0.0, std::f64::consts::TAU);
+            let (cx, cy) = b.center();
+            rough::ellipse(out, &mut rng, cx, cy, b.width() / 2.0, b.height() / 2.0, el.roughness, double);
+        }
+        "Rectangle" | "Diamond" => {
+            if el.roundness == "round" {
+                rough::round_box(out, &mut rng, &el.kind, b.min_x, b.min_y, b.width(), b.height(), el.roughness, double);
+            } else {
+                let pts = rough::box_points(&el.kind, b.min_x, b.min_y, b.width(), b.height(), false);
+                rough::polygon(out, &mut rng, &pts, el.roughness, double);
+            }
         }
         "Line" | "Arrow" => {
-            path.move_to(first.0, first.1);
-            path.line_to(last.0, last.1);
-            if el.kind == "Arrow" && el.points.len() >= 2 {
-                let angle = (last.1 - first.1).atan2(last.0 - first.0);
-                let head = (el.stroke_width * 5.0).max(12.0);
-                path.move_to(last.0, last.1);
-                path.line_to(last.0 - head * (angle - 0.45).cos(), last.1 - head * (angle - 0.45).sin());
-                path.move_to(last.0, last.1);
-                path.line_to(last.0 - head * (angle + 0.45).cos(), last.1 - head * (angle + 0.45).sin());
+            let (a, z) = endpoints(el);
+            rough::line(out, &mut rng, a, z, el.roughness, double);
+            if el.kind == "Arrow" {
+                let len = (z.0 - a.0).hypot(z.1 - a.1);
+                let angle = (z.1 - a.1).atan2(z.0 - a.0);
+                let head = (el.stroke_width * 4.0 + 10.0).min(len * 0.45).max(4.0);
+                for side in [-0.42, 0.42] {
+                    let tip = (z.0 - head * (angle + side).cos(), z.1 - head * (angle + side).sin());
+                    rough::line(out, &mut rng, z, tip, el.roughness, double);
+                }
             }
         }
-        _ => {
-            let mut scratch = env.scratch.borrow_mut();
-            let pts: &[(f64, f64)] = if el.points.len() > 16 {
-                decimate_into(&el.points, 0.35 / env.zoom, &mut scratch);
-                &scratch
-            } else {
-                &el.points
-            };
-            let (Some(&a), Some(&z)) = (pts.first(), pts.last()) else { return };
-            path.move_to(a.0, a.1);
-            if pts.len() == 1 {
-                path.line_to(a.0 + 0.001, a.1); // round cap renders the dot
-            } else if pts.len() == 2 || !el.is_curved {
-                for p in &pts[1..] {
-                    path.line_to(p.0, p.1);
-                }
-            } else {
-                for w in pts[1..].windows(2) {
-                    let (p, q) = (w[0], w[1]);
-                    path.quadratic_curve_to(p.0, p.1, (p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
-                }
-                path.line_to(z.0, z.1);
-            }
-        }
+        _ => {}
     }
 }
+
+fn fill_polygon(el: &Element) -> Vec<(f64, f64)> {
+    let b = el.geom_bounds();
+    if el.kind == "Ellipse" {
+        let (cx, cy) = b.center();
+        rough::ellipse_points(cx, cy, b.width() / 2.0, b.height() / 2.0)
+    } else {
+        rough::box_points(&el.kind, b.min_x, b.min_y, b.width(), b.height(), el.roundness == "round")
+    }
+}
+
+// ── Element painters ────────────────────────────────────────────────────────
 
 /// Paints one committed element with level-of-detail rules. Returns true when
 /// the element went into a batch rather than being drawn individually.
@@ -670,8 +676,8 @@ fn paint_element_lod(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEn
     match el.kind.as_str() {
         "Text" if el.font_size * zoom < 3.0 => {
             // Greeking: text too small to read becomes a faint bar.
-            ctx.set_global_alpha(0.3);
-            ctx.set_fill_style_str(effective_color(&el.stroke_color, env.is_dark));
+            ctx.set_global_alpha(0.3 * env.alpha);
+            ctx.set_fill_style_str(&themed(&el.stroke_color, env.is_dark));
             ctx.fill_rect(el.x, el.y + el.h * 0.2, el.w, el.h * 0.6);
             ctx.set_global_alpha(1.0);
             false
@@ -681,12 +687,14 @@ fn paint_element_lod(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEn
             ctx.fill_rect(el.x, el.y, el.w, el.h);
             false
         }
-        "FreeDraw" | "FountainPen" if screen < SMALL_STROKE_PX && el.points.len() > 1 => {
-            let color = effective_color(&el.stroke_color, env.is_dark);
-            let width = if el.kind == "FountainPen" { el.stroke_width * 1.2 } else { el.stroke_width };
-            let mut scratch = env.scratch.borrow_mut();
+        "FreeDraw" | "FountainPen" | "Marker"
+            if screen < SMALL_STROKE_PX && el.points.len() > 1 && el.opacity >= 100.0 && env.alpha >= 1.0 =>
+        {
+            let color = themed(&el.stroke_color, env.is_dark);
+            let width = freehand::preset(&el.kind, el.stroke_width).size * 0.75;
+            let mut scratch = env.scratch.points.borrow_mut();
             decimate_into(&el.points, 0.75 / zoom, &mut scratch);
-            if let Some(path) = batches.path(ctx, color, width) {
+            if let Some(path) = batches.path(ctx, &color, width) {
                 if let Some(first) = scratch.first() {
                     path.move_to(first.0, first.1);
                     if scratch.len() == 1 {
@@ -707,66 +715,21 @@ fn paint_element_lod(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEn
 }
 
 /// Full-fidelity element painter (shared by the static layer and the dynamic
-/// overlay). `decimate` drops sub-pixel points from long freehand strokes.
-pub fn paint_element(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv, decimate: bool) {
+/// overlay).
+pub fn paint_element(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv, _decimate: bool) {
     if el.points.is_empty() {
         return;
     }
     ctx.save();
-    let stroke = effective_color(&el.stroke_color, env.is_dark);
-    let fill = effective_color(&el.fill_color, env.is_dark);
-    let has_fill = el.fill_color != "transparent" && !el.fill_color.is_empty();
-    ctx.set_stroke_style_str(stroke);
-    ctx.set_fill_style_str(fill);
-    ctx.set_line_width(el.stroke_width);
+    ctx.set_global_alpha((el.opacity / 100.0).clamp(0.0, 1.0) * env.alpha);
     ctx.set_line_cap("round");
     ctx.set_line_join("round");
-
-    let first = el.points[0];
-    let last = el.points[el.points.len() - 1];
-
     match el.kind.as_str() {
-        "Rectangle" => {
-            let (x, y) = (first.0.min(last.0), first.1.min(last.1));
-            let (w, h) = ((last.0 - first.0).abs().max(1.0), (last.1 - first.1).abs().max(1.0));
-            if has_fill {
-                ctx.fill_rect(x, y, w, h);
-            }
-            ctx.stroke_rect(x, y, w, h);
-        }
-        "Ellipse" => {
-            let (cx, cy) = ((first.0 + last.0) / 2.0, (first.1 + last.1) / 2.0);
-            let (rx, ry) = (((last.0 - first.0).abs() / 2.0).max(1.0), ((last.1 - first.1).abs() / 2.0).max(1.0));
-            ctx.begin_path();
-            let _ = ctx.ellipse(cx, cy, rx, ry, 0.0, 0.0, std::f64::consts::TAU);
-            if has_fill {
-                ctx.fill();
-            }
-            ctx.stroke();
-        }
-        "Line" if el.points.len() >= 2 => {
-            ctx.begin_path();
-            ctx.move_to(first.0, first.1);
-            ctx.line_to(last.0, last.1);
-            ctx.stroke();
-        }
-        "Arrow" if el.points.len() >= 2 => {
-            let angle = (last.1 - first.1).atan2(last.0 - first.0);
-            let head = (el.stroke_width * 5.0).max(12.0);
-            ctx.begin_path();
-            ctx.move_to(first.0, first.1);
-            ctx.line_to(last.0, last.1);
-            ctx.move_to(last.0, last.1);
-            ctx.line_to(last.0 - head * (angle - 0.45).cos(), last.1 - head * (angle - 0.45).sin());
-            ctx.move_to(last.0, last.1);
-            ctx.line_to(last.0 - head * (angle + 0.45).cos(), last.1 - head * (angle + 0.45).sin());
-            ctx.stroke();
-        }
-        "Line" | "Arrow" => {}
+        "Rectangle" | "Diamond" | "Ellipse" | "Line" | "Arrow" => paint_shape(ctx, el, env),
         "Text" => {
             ctx.set_font(&format!("{:.0}px {}", el.font_size, el.font_family));
-            ctx.set_fill_style_str(stroke);
-            let line_height = el.font_size * 1.2;
+            ctx.set_fill_style_str(&themed(&el.stroke_color, env.is_dark));
+            let line_height = el.font_size * 1.25;
             for (i, line) in el.text.split('\n').enumerate() {
                 let _ = ctx.fill_text(line, el.x, el.y + el.font_size + i as f64 * line_height);
             }
@@ -776,87 +739,117 @@ pub fn paint_element(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEn
                 let _ = ctx.draw_image_with_html_image_element_and_dw_and_dh(img, el.x, el.y, el.w, el.h);
             } else {
                 // Asset still decoding / missing: show a frame so it stays selectable.
-                ctx.set_stroke_style_str(if env.is_dark { "#2a2a2a" } else { "#cbd5e1" });
+                ctx.set_stroke_style_str(if env.is_dark { "#3a3a3a" } else { "#cbd5e1" });
                 ctx.set_line_width(1.0 / env.zoom);
                 ctx.stroke_rect(el.x, el.y, el.w, el.h);
             }
         }
-        kind => paint_freehand(ctx, el, env, kind, stroke, decimate),
+        _ => paint_freehand(ctx, el, env),
     }
     ctx.restore();
 }
 
-fn paint_freehand(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv, kind: &str, stroke: &str, decimate: bool) {
-    let is_fountain = kind == "FountainPen";
-    match kind {
-        "Highlighter" => {
-            ctx.set_global_alpha(0.35);
-            ctx.set_line_cap("square");
-            ctx.set_line_width(el.stroke_width * 6.0);
-        }
-        "LaserPen" => {
-            ctx.set_stroke_style_str("#ff0000");
-            ctx.set_shadow_color("#ff0000");
-            ctx.set_shadow_blur(15.0);
-            ctx.set_global_alpha(el.font_size.clamp(0.0, 1.0));
-            ctx.set_line_width(el.stroke_width * 1.5);
-        }
-        "MagicPen" => {
-            ctx.set_stroke_style_str("#a855f7");
-            ctx.set_shadow_color("#a855f7");
-            ctx.set_shadow_blur(8.0);
-        }
-        _ => {}
-    }
+fn paint_shape(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv) {
+    let stroke = themed(&el.stroke_color, env.is_dark);
+    let sw = el.stroke_width.max(0.1);
+    let mut segs = env.scratch.segs.borrow_mut();
 
-    let mut scratch = env.scratch.borrow_mut();
-    let pts: &[(f64, f64)] = if decimate && el.points.len() > 16 {
-        decimate_into(&el.points, 0.35 / env.zoom, &mut scratch);
-        &scratch
-    } else {
-        &el.points
-    };
-    let Some(&first) = pts.first() else { return };
-    let Some(&last) = pts.last() else { return };
-
-    if pts.len() == 1 {
-        ctx.begin_path();
-        let _ = ctx.arc(first.0, first.1, (el.stroke_width / 2.0).max(1.0), 0.0, std::f64::consts::TAU);
-        ctx.set_fill_style_str(stroke);
-        ctx.fill();
-    } else if pts.len() == 2 || !el.is_curved {
-        ctx.begin_path();
-        ctx.move_to(first.0, first.1);
-        for p in &pts[1..] {
-            ctx.line_to(p.0, p.1);
-        }
-        ctx.stroke();
-    } else if is_fountain {
-        // Calligraphic flat nib: several parallel thin strokes on a diagonal.
-        ctx.set_line_join("miter");
-        ctx.set_line_cap("square");
-        let offset = el.stroke_width * 0.25 * env.fountain_sharpness.clamp(0.5, 3.0);
-        ctx.set_line_width(el.stroke_width * 0.4);
-        for i in -2..=2 {
-            let (ox, oy) = (offset * i as f64, -offset * i as f64);
-            ctx.begin_path();
-            ctx.move_to(first.0 + ox, first.1 + oy);
-            for w in pts[1..].windows(2) {
-                let (a, b) = (w[0], w[1]);
-                ctx.quadratic_curve_to(a.0 + ox, a.1 + oy, (a.0 + b.0) / 2.0 + ox, (a.1 + b.1) / 2.0 + oy);
+    if el.is_shape() && el.has_fill() {
+        let fill = themed(&el.fill_color, env.is_dark);
+        let poly = fill_polygon(el);
+        segs.clear();
+        if el.fill_style == "solid" {
+            if let Some(&(x, y)) = poly.first() {
+                segs.push(Seg::M(x, y));
+                segs.extend(poly[1..].iter().map(|&(x, y)| Seg::L(x, y)));
+                segs.push(Seg::Z);
             }
-            ctx.line_to(last.0 + ox, last.1 + oy);
-            ctx.stroke();
+            if let Some(path) = to_path(&segs) {
+                ctx.set_fill_style_str(&fill);
+                ctx.fill_with_path_2d(&path);
+            }
+        } else {
+            let mut rng = Rng::new(rough::seed_for(el.id, el.seed).wrapping_add(17));
+            let gap = (sw * 4.0).max(5.0);
+            let mut angles = vec![-41.0];
+            if el.fill_style == "cross-hatch" {
+                angles.push(49.0);
+            }
+            for angle in angles {
+                for (a, b) in rough::hachure(&poly, gap, angle) {
+                    rough::line(&mut segs, &mut rng, a, b, el.roughness.min(1.5), el.roughness > 0.0);
+                }
+            }
+            if let Some(path) = to_path(&segs) {
+                ctx.set_stroke_style_str(&fill);
+                ctx.set_line_width((sw / 2.0).max(0.75));
+                ctx.stroke_with_path(&path);
+            }
         }
-    } else {
-        // Smooth quadratic through midpoints.
-        ctx.begin_path();
-        ctx.move_to(first.0, first.1);
-        for w in pts[1..].windows(2) {
-            let (a, b) = (w[0], w[1]);
-            ctx.quadratic_curve_to(a.0, a.1, (a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-        }
-        ctx.line_to(last.0, last.1);
-        ctx.stroke();
     }
+
+    segs.clear();
+    if el.kind == "Ellipse" && el.roughness <= 0.0 {
+        // A true ellipse is crisper than any spline approximation.
+        let b = el.geom_bounds();
+        let (cx, cy) = b.center();
+        if let Ok(path) = Path2d::new() {
+            let _ = path.ellipse(cx, cy, (b.width() / 2.0).max(0.5), (b.height() / 2.0).max(0.5), 0.0, 0.0, std::f64::consts::TAU);
+            stroke_styled(ctx, el, &stroke, sw, &path);
+        }
+        return;
+    }
+    shape_stroke_segs(el, &mut segs);
+    if let Some(path) = to_path(&segs) {
+        stroke_styled(ctx, el, &stroke, sw, &path);
+    }
+}
+
+fn stroke_styled(ctx: &CanvasRenderingContext2d, el: &Element, color: &str, sw: f64, path: &Path2d) {
+    ctx.set_stroke_style_str(color);
+    ctx.set_line_width(sw);
+    if let Some((on, off)) = dash_pattern(&el.stroke_style, sw) {
+        let _ = ctx.set_line_dash(&js_sys::Array::of2(&JsValue::from_f64(on), &JsValue::from_f64(off)));
+    }
+    ctx.stroke_with_path(path);
+    let _ = ctx.set_line_dash(&js_sys::Array::new());
+}
+
+fn paint_freehand(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv) {
+    let kind = el.kind.as_str();
+    let (color, glow): (std::borrow::Cow<'_, str>, Option<(&str, f64)>) = match kind {
+        "LaserPen" => {
+            ctx.set_global_alpha(el.font_size.clamp(0.0, 1.0) * env.alpha);
+            ("#ff2d2d".into(), Some(("#ff4d4d", 14.0)))
+        }
+        "MagicPen" => ("#8b5cf6".into(), Some(("#a78bfa", 8.0))),
+        "Highlighter" => {
+            // Real highlighter ink: multiplies on paper so text underneath
+            // stays crisp; on dark paper it glows in its true hue instead of
+            // being inverted to a muddy tone.
+            let base = (el.opacity / 100.0).clamp(0.0, 1.0) * env.alpha;
+            if env.is_dark {
+                ctx.set_global_alpha(base * 0.34);
+                let _ = ctx.set_global_composite_operation("screen");
+                (std::borrow::Cow::Borrowed(el.stroke_color.as_str()), None)
+            } else {
+                ctx.set_global_alpha(base * 0.42);
+                let _ = ctx.set_global_composite_operation("multiply");
+                (themed(&el.stroke_color, false), None)
+            }
+        }
+        _ => (themed(&el.stroke_color, env.is_dark), None),
+    };
+    let preset_kind = if kind == "MagicPen" { "Marker" } else { kind };
+    let opts = freehand::preset(preset_kind, el.stroke_width);
+    let mut outline = env.scratch.outline.borrow_mut();
+    let mut segs = env.scratch.segs.borrow_mut();
+    freehand::outline_segs(&el.points, &el.pressures, &opts, &mut outline, &mut segs);
+    let Some(path) = to_path(&segs) else { return };
+    if let Some((shadow, blur)) = glow {
+        ctx.set_shadow_color(shadow);
+        ctx.set_shadow_blur(blur);
+    }
+    ctx.set_fill_style_str(&color);
+    ctx.fill_with_path_2d(&path);
 }

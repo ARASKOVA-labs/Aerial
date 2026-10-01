@@ -33,3 +33,7 @@ src-tauri/target/
 # Aerial Core specific (WASM)
 aerial-core/aerial-engine/pkg/
 
+
+# Local build logs and data (can contain usernames, paths, or user boards)
+xcodebuild*.txt
+*.redb

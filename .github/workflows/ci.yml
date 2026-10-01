@@ -6,64 +6,98 @@ on:
   pull_request:
     branches: [ main, dev ]
 
+# Least privilege for every job unless a job widens it explicitly.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check-frontend:
-    name: Frontend Build & Typecheck
+  frontend:
+    name: Frontend typecheck & build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-
-      - name: Install dependencies
-        shell: bash
-        run: bun install
-
-      - name: Build frontend
-        shell: bash
+      - name: Install dependencies (lockfile enforced)
+        run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun x tsc --noEmit
+      - name: Build desktop frontend
         run: bun run build
+      - name: Build npm library
+        run: bun run build:lib
 
-  check-rust:
-    name: Rust Workspace Check
+  rust:
+    name: Rust tests, lint & WASM engine
     runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Install Linux dependencies
-        shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          version: 'latest'
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasm-bindgen CLI (version pinned by Cargo.lock)
+        run: |
+          VERSION=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/"/,"",$3); print $3; exit}' Cargo.lock)
+          cargo install wasm-bindgen-cli --version "$VERSION" --locked
+      - name: Frontend dist placeholder for tauri-build
+        run: mkdir -p dist && echo '<!doctype html>' > dist/index.html
+      - name: Clippy (warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
+      - name: Engine scale benchmark (1M elements)
+        run: cargo test -p aerial-engine --release --test scale --locked -- --ignored --nocapture
+      - name: Build WASM engine and check the committed API is current
+        run: |
+          bash scripts/build-engine.sh
+          # The JS/TS surface is deterministic; the binary can differ between
+          # toolchains, so only the bindings are compared.
+          git diff --exit-code -- public/aerial-engine/aerial_engine.d.ts public/aerial-engine/aerial_engine_bg.wasm.d.ts \
+            || (echo "::error::public/aerial-engine is stale — run 'bun run build:engine' and commit" && exit 1)
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: RustSec advisory audit
+        run: cargo audit
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
+      - name: Install dependencies (lockfile enforced)
+        run: bun install --frozen-lockfile
+      - name: npm advisory audit (high and above)
+        run: bun audit --audit-level=high
 
-      - name: Install dependencies & build frontend
-        shell: bash
-        run: |
-          bun install
-          bun run build
-
-      - name: Cargo Check
-        shell: bash
-        run: cargo check --all
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ javascript-typescript, rust ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v3

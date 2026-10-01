@@ -9,7 +9,7 @@ Thank you for your interest in contributing to **Aerial Canvas**! We welcome all
 ### 1. Prerequisites
 - **Node.js** (v20+) & **Bun** (`curl -fsSL https://bun.sh/install | bash`)
 - **Rust** (`rustup default stable`)
-- **wasm-pack** (`cargo install wasm-pack`)
+- **WASM toolchain**: `rustup target add wasm32-unknown-unknown` and `wasm-bindgen-cli` at the version in `Cargo.lock` (`bun run build:engine` prints the exact command)
 - OS dependencies for Tauri (on Linux: `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libappindicator3-dev`, `librsvg2-dev`)
 
 ### 2. Development Setup
@@ -25,12 +25,9 @@ Thank you for your interest in contributing to **Aerial Canvas**! We welcome all
    bun install
    ```
 
-3. **Compile WebAssembly engine**:
+3. **Compile WebAssembly engine** (rebuild and commit `public/aerial-engine` whenever engine code changes — CI checks the bindings are current):
    ```bash
-   cd aerial-core/aerial-engine
-   wasm-pack build --target web
-   cp -r pkg/* ../../public/aerial-engine/
-   cd ../..
+   bun run build:engine
    ```
 
 4. **Launch desktop app in development mode**:
@@ -54,9 +51,10 @@ Thank you for your interest in contributing to **Aerial Canvas**! We welcome all
      - Use functional components with strict TypeScript types.
      - Ensure UI changes adhere to the responsive design tokens and dark/light themes.
    - **Backend (Rust / WebAssembly)**:
-     - Keep WASM calls zero-copy wherever possible.
-     - Ensure memory safety and proper state synchronization in CRDT modules (`yrs`).
-     - Run `cargo fmt` and `cargo clippy` before committing.
+     - Keep per-frame and per-action work proportional to what is visible or changed — never to board size. Route mutations through `Scene` and record undo with `History` (`begin → touch → mutate → commit`).
+     - Validate all untrusted input (scene JSON, IPC arguments, network frames); zero `.unwrap()` in production paths.
+     - Run `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` before committing.
+   - **Security**: read [SECURITY.md](SECURITY.md) and complete the security checklist in the pull request template.
 
 3. **Testing Changes**:
    - Verify frontend builds cleanly: `bun run build`

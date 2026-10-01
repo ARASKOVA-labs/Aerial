@@ -1,0 +1,31 @@
+# Automated dependency updates (SOC 2 CC7.1 / CC8.1 evidence: vulnerabilities in
+# third-party code are surfaced and patched through reviewed pull requests).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      rust-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: bun
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      js-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: "/araskova-labs/collab-server"
+    schedule:
+      interval: weekly

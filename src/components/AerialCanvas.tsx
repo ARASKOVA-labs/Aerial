@@ -1,1696 +1,1427 @@
 // ── Aerial Canvas Library — Core Embeddable Component ───────────────────────
 // A self-contained, Tauri-free canvas component that can be embedded in any
-// React 19 application. Owns the WASM lifecycle, pointer/touch events,
-// resize handling, animation loop, and optional built-in toolbar.
+// React 19 application. Owns the WASM lifecycle, pointer/touch input, the
+// keyboard map, inline text editing and (optionally) the Excalidraw-style
+// editor chrome: main menu, centred toolbar, properties panel, zoom/history.
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  useCallback,
-  useImperativeHandle,
-  forwardRef,
-} from 'react';
-import { loadAerialEngine } from '../lib/wasm-loader';
-import {
-  AerialToolbar,
-  AerialZoomBar,
-  AerialSettingsPopover,
-} from './AerialToolbar';
-import { AerialDraggableTextBox } from './AerialDraggableTextBox';
-import { Edit3, Trash2, Plus, Minus } from 'lucide-react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react';
 import mermaid from 'mermaid';
+import { loadAerialEngine } from '../lib/wasm-loader';
 import { getAraskovaMermaidConfig, applyAraskovaDiagramAesthetics } from '../lib/diagram-theme';
-import type {
-  AerialEngine,
-  AerialCanvasProps,
-  AerialCanvasRef,
-  ToolId,
-} from '../lib/types';
+import type { AerialEngine, AerialCanvasProps, AerialCanvasRef, ToolId } from '../lib/types';
 import { createLogger } from '../lib/logger';
+import { withEmbeddedFonts } from '../lib/svg-fonts';
+import { HelpButton, MainMenu, WelcomeScreen, ZoomBar } from '../ui/Chrome';
+import { ColorPicker } from '../ui/ColorPicker';
+import { InlineTextEditor, type TextDraft } from '../ui/InlineTextEditor';
+import { PropertiesPanel, type StyleChange } from '../ui/PropertiesPanel';
+import { Toolbar } from '../ui/Toolbar';
+import { ExportIcon, MinusIcon, PlusIcon, TrashIcon } from '../ui/icons';
+import { DEFAULT_UI_STYLE, EMPTY_SELECTION, MAIN_TOOLS, isPen, themedColor, type PenTool, type SelectionInfo, type UiStyle } from '../ui/model';
+import { MenuItem, MenuSeparator } from '../ui/primitives';
+import '../ui/theme.css';
 
 const logger = createLogger('AerialCanvas');
 
-// ── Unique canvas ID counter (supports multiple instances) ──────────────────
 let canvasIdCounter = 0;
+
+const STYLE_KEY = 'aerial_ui_style_v1';
+const DIAGRAM_ACCENTS = ['#e73f07', '#6965db', '#1971c2', '#2f9e44', '#e03131'];
+
+/** Reads the persisted UI style, keeping only fields whose type matches the defaults. */
+function loadUiStyle(): UiStyle {
+  try {
+    const raw = localStorage.getItem(STYLE_KEY);
+    if (!raw) return DEFAULT_UI_STYLE;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return DEFAULT_UI_STYLE;
+    const out: Record<string, unknown> = { ...DEFAULT_UI_STYLE };
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (k in DEFAULT_UI_STYLE && typeof v === typeof (DEFAULT_UI_STYLE as unknown as Record<string, unknown>)[k]) out[k] = v;
+    }
+    return out as unknown as UiStyle;
+  } catch {
+    return DEFAULT_UI_STYLE;
+  }
+}
+
+function saveUiStyle(s: UiStyle) {
+  try {
+    localStorage.setItem(STYLE_KEY, JSON.stringify(s));
+  } catch {
+    // Storage blocked (private mode): the style simply isn't remembered.
+  }
+}
+
+/** Width the engine should draw with for a tool. */
+function widthFor(tool: ToolId, s: UiStyle): number {
+  if (tool === 'highlighter') return s.highlighterWidth;
+  if (isPen(tool) || tool === 'magic_pen' || tool === 'laser_pen') return s.penWidth;
+  return s.shapeWidth;
+}
+
+const isEditable = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+
+interface ElementJson {
+  id: number;
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text?: string;
+  font_size?: number;
+  font_family?: string;
+  stroke_color?: string;
+  code?: string | null;
+}
+
+function parseElement(json: string | null | undefined): ElementJson | null {
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as ElementJson;
+  } catch {
+    return null;
+  }
+}
+
+/** Rasterises an SVG string (fonts embedded) into an <img> the engine can draw. */
+async function renderSvgToImage(svg: string): Promise<HTMLImageElement> {
+  const sanitized = await withEmbeddedFonts(svg.replace(/@import\s+url\([^)]+\);?/gi, ''));
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => {
+      // WebKit sometimes rejects large data URLs; fall back to a blob URL.
+      try {
+        const url = URL.createObjectURL(new Blob([sanitized], { type: 'image/svg+xml;charset=utf-8' }));
+        const fallback = new Image();
+        fallback.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(fallback);
+        };
+        fallback.onerror = (e) => {
+          URL.revokeObjectURL(url);
+          reject(e);
+        };
+        fallback.src = url;
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(sanitized)));
+  });
+}
+
+const svgDataUrl = (svg: string) => 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
 
 // ── Component ───────────────────────────────────────────────────────────────
 
-export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(
-  function AerialCanvas(props, ref) {
-    const {
-      initialScene,
-      initialState,
-      onChange,
-      theme,
-      backgroundColor,
-      readOnly = false,
-      showToolbar = true,
-      className = '',
-      onReady,
-      wasmBasePath,
-      changeInterval = 500,
-      palmRejection = true,
-      onZoomChange,
-      onChangeBackgroundColor,
-      magicLanguage = 'en',
-      magicFont = "'Space Grotesk', sans-serif",
-      eraserType: propEraserType = 'precision',
-      eraserSize: propEraserSize = 24,
-      onEraserTypeChange,
-      onToolChange,
-      onNodeDoubleClick,
-      onCanvasPointerDown,
-    } = props;
+export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(function AerialCanvas(props, ref) {
+  const {
+    initialScene,
+    initialState,
+    onChange,
+    onChanges,
+    theme,
+    backgroundColor,
+    readOnly = false,
+    showToolbar = true,
+    className = '',
+    onReady,
+    wasmBasePath,
+    changeInterval = 500,
+    palmRejection = true,
+    onZoomChange,
+    magicLanguage = 'en',
+    magicFont = 'Kalam, Caveat, cursive',
+    eraserType: propEraserType,
+    eraserSize: propEraserSize,
+    onEraserTypeChange,
+    onToolChange,
+    onNodeDoubleClick,
+    onCanvasPointerDown,
+    onExternalRequest,
+    menu,
+    extraTools = [],
+    topRight,
+    showWelcome = false,
+    welcomeItems,
+    logo,
+    onHelp,
+    onInsertImage,
+    onSelectionChange,
+    panelExtra,
+  } = props;
 
-    // ── Refs ──────────────────────────────────────────────────────────────
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const engineRef = useRef<AerialEngine | null>(null);
-    const eraserCursorRef = useRef<HTMLDivElement | null>(null);
-    const initStarted = useRef(false);
-    const [canvasId] = useState(() => `aerial-canvas-${canvasIdCounter++}`);
+  const isDark = theme === 'dark';
+  const canonicalBg = backgroundColor ?? '#ffffff';
+  const paper = themedColor(canonicalBg, isDark);
 
-    // ── Canvas state ──────────────────────────────────────────────────────
-    const [engineReady, setEngineReady] = useState(false);
-    const [loadError, setLoadError] = useState<string | null>(null);
-    const [activeTool, setActiveTool] = useState<ToolId>('freedraw');
-    const [strokeColor, setStrokeColor] = useState('#000000');
-    const [fillColor] = useState('transparent');
-    const [strokeWidth, setStrokeWidth] = useState(2.5);
-    const [eraserSize, setEraserSize] = useState(propEraserSize);
-    const [eraserType, setEraserTypeState] = useState<'stroke' | 'precision' | 'element'>(propEraserType);
-    const [fountainSharpness, setFountainSharpness] = useState(0.5);
-    const [isRough, setIsRough] = useState(true);
-    const [isCurved, setIsCurved] = useState(true);
-    const [zoomLevel, setZoomLevel] = useState(100);
-    const [showSettings, setShowSettings] = useState(false);
-    const [typingText, setTypingText] = useState<{
-      elementId?: bigint | null;
-      screenX: number;
-      screenY: number;
-      worldX: number;
-      worldY: number;
-      value: string;
-      fontSize?: number;
-      fontFamily?: string;
-      color?: string;
-      width?: number;
-      height?: number;
-    } | null>(null);
-    const [selectedTextEl, setSelectedTextEl] = useState<{
-      id: bigint;
-      screenX: number;
-      screenY: number;
-      worldX: number;
-      worldY: number;
-      value: string;
-      fontSize: number;
-      fontFamily: string;
-      color: string;
-      width: number;
-      height: number;
-    } | null>(null);
-    const [selectedDiagramEl, setSelectedDiagramEl] = useState<{
-      id: bigint;
-      screenX: number;
-      screenY: number;
-      worldX: number;
-      worldY: number;
-      width: number;
-      height: number;
-      code: string;
-      accentColor: string;
-    } | null>(null);
-    const [isConvertingMagic, setIsConvertingMagic] = useState(false);
-    const magicDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const [fontFamily] = useState('Caveat');
+  // ── Refs ────────────────────────────────────────────────────────────────
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const engineRef = useRef<AerialEngine | null>(null);
+  const eraserCursorRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const initStarted = useRef(false);
+  const [canvasId] = useState(() => `aerial-canvas-${canvasIdCounter++}`);
 
-    // Determine dark mode from prop
-    const isDarkMode = theme === 'dark';
+  // ── State ───────────────────────────────────────────────────────────────
+  const [engineReady, setEngineReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [activeTool, setActiveTool] = useState<ToolId>('select');
+  const [toolLocked, setToolLocked] = useState(false);
+  const [uiStyle, setUiStyle] = useState<UiStyle>(loadUiStyle);
+  const [selection, setSelection] = useState<SelectionInfo>(EMPTY_SELECTION);
+  const [diagramAccent, setDiagramAccent] = useState<string | null>(null);
+  const [zoomLevel, setZoomLevel] = useState(100);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+  const [isEmpty, setIsEmpty] = useState(true);
+  const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
+  const [, setViewTick] = useState(0);
+  const [isConvertingMagic, setIsConvertingMagic] = useState(false);
 
-    // ── Pointer tracking refs ─────────────────────────────────────────────
-    const isDrawingRef = useRef(false);
-    const activeDrawingPointerIdRef = useRef<number | null>(null);
-    const activeDrawingPointerTypeRef = useRef<string | null>(null);
-    const activePenIdRef = useRef<number | null>(null);
-    const prevToolRef = useRef<ToolId | null>(null);
-    const palmRejectionRef = useRef(palmRejection);
-    useEffect(() => {
-      palmRejectionRef.current = palmRejection;
-    }, [palmRejection]);
+  // Mirrors for event handlers that must not be re-created on every change.
+  const toolRef = useRef(activeTool);
+  const styleRef = useRef(uiStyle);
+  const lockedRef = useRef(toolLocked);
+  const draftRef = useRef(textDraft);
+  const selectionRef = useRef(selection);
+  const palmRejectionRef = useRef(palmRejection);
+  toolRef.current = activeTool;
+  styleRef.current = uiStyle;
+  lockedRef.current = toolLocked;
+  draftRef.current = textDraft;
+  selectionRef.current = selection;
+  palmRejectionRef.current = palmRejection;
 
-    const updateZoom = useCallback((pct: number) => {
+  // Pointer tracking
+  const drawingPointerRef = useRef<{ id: number; type: string } | null>(null);
+  const activePenIdRef = useRef<number | null>(null);
+  const spaceToolRef = useRef<ToolId | null>(null);
+  const touchesRef = useRef<Map<number, { x: number; y: number }>>(new Map());
+  const pinchDistRef = useRef<number | null>(null);
+  const pinchCenterRef = useRef<{ x: number; y: number } | null>(null);
+  const magicTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selVersionRef = useRef(-1);
+
+  useEffect(() => saveUiStyle(uiStyle), [uiStyle]);
+
+  const updateZoom = useCallback(
+    (z: number) => {
+      const pct = Math.round(z * 100);
       setZoomLevel(pct);
       onZoomChange?.(pct);
-    }, [onZoomChange]);
+      if (draftRef.current) setViewTick((t) => t + 1);
+    },
+    [onZoomChange],
+  );
 
-    // Touch / pinch state
-    const activeTouchesRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-    const pinchStartDistRef = useRef<number | null>(null);
-    const lastTouchCenterRef = useRef<{ x: number; y: number } | null>(null);
-
-    // ── WASM Init ─────────────────────────────────────────────────────────
-    useEffect(() => {
-      if (initStarted.current) return;
-      initStarted.current = true;
-
-      async function boot() {
-        try {
-          const canvas = canvasRef.current!;
-          const parent = canvas.parentElement!;
-          const dpr = window.devicePixelRatio || 1;
-          canvas.width = parent.clientWidth * dpr;
-          canvas.height = parent.clientHeight * dpr;
-
-          const engine = await loadAerialEngine(canvasId, {
-            basePath: wasmBasePath,
-          });
-
-          engine.set_dpr(dpr);
-
-          // Load initial state/scene
-          if (initialState) {
-            engine.import_full_state(initialState);
-          } else if (initialScene) {
-            engine.load_scene_json(initialScene);
-          }
-
-          // Sync React state → engine
-          engine.set_dark_mode(isDarkMode);
-          if (backgroundColor && typeof (engine as any).set_background_color === 'function') {
-            (engine as any).set_background_color(backgroundColor);
-          }
-          engine.set_grid_type('dots');
-          engine.set_stroke_color(strokeColor);
-          engine.set_fill_color(fillColor);
-          engine.set_stroke_width(strokeWidth);
-          engine.set_is_rough(isRough);
-          engine.set_is_curved(isCurved);
-          if (typeof engine.set_eraser_type === 'function') {
-            engine.set_eraser_type(eraserType);
-          }
-          if (typeof engine.set_eraser_radius === 'function') {
-            engine.set_eraser_radius(eraserSize / 2);
-          } else if (typeof engine.set_eraser_size === 'function') {
-            engine.set_eraser_size(eraserSize);
-          }
-          engine.set_tool_freedraw();
-
-          engine.render();
-          engineRef.current = engine;
-          setEngineReady(true);
-
-          // ResizeObserver for dynamic canvas sizing
-          const observer = new ResizeObserver((entries) => {
-            for (const entry of entries) {
-              const { width, height } = entry.contentRect;
-              const currentDpr = window.devicePixelRatio || 1;
-              canvas.width = width * currentDpr;
-              canvas.height = height * currentDpr;
-              engine.set_dpr(currentDpr);
-              engine.render();
-            }
-          });
-          observer.observe(canvas);
-
-          return () => observer.disconnect();
-        } catch (e: unknown) {
-          const msg = e instanceof Error ? e.message : String(e);
-          setLoadError(msg);
-        }
-      }
-
-      boot();
-
-      return () => {
-        if (engineRef.current) {
-          engineRef.current.free?.();
-          engineRef.current = null;
-        }
-      };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // ── Notify onReady ────────────────────────────────────────────────────
-    useEffect(() => {
-      if (engineReady && onReady && refApi.current) {
-        onReady(refApi.current);
-      }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [engineReady]);
-
-    // ── Animation Loop ────────────────────────────────────────────────────
-    useEffect(() => {
-      if (!engineReady) return;
-      let animationFrameId: number;
-      let errorLogged = false;
-      const loop = () => {
-        const e = engineRef.current;
-        if (e && e.tick_animations) {
-          try {
-            e.tick_animations();
-          } catch (err) {
-            if (!errorLogged) {
-              logger.warn('tick_animations threw:', err);
-              errorLogged = true;
-            }
-          }
-        }
-        animationFrameId = requestAnimationFrame(loop);
-      };
-      loop();
-      return () => cancelAnimationFrame(animationFrameId);
-    }, [engineReady]);
-
-    // ── onChange Dirty Check Loop ──────────────────────────────────────────
-    useEffect(() => {
-      if (!engineReady || !onChange) return;
-      const interval = setInterval(() => {
-        const e = engineRef.current;
-        if (!e) return;
-        const needsNotify = e.check_and_clear_dirty();
-        if (needsNotify) {
-          onChange(e.get_scene_json());
-        }
-      }, changeInterval);
-      return () => clearInterval(interval);
-    }, [engineReady, onChange, changeInterval]);
-
-    // ── SVG to Image Rasterizer (Handles WebKit Data URLs & Blob URLs) ──
-    const renderSvgToImage = useCallback((cleanSvg: string): Promise<HTMLImageElement> => {
-      return new Promise((resolve, reject) => {
-        const sanitized = cleanSvg.replace(/@import\s+url\([^)]+\);?/gi, '');
-        const svg64 = btoa(unescape(encodeURIComponent(sanitized)));
-        const dataUrl = 'data:image/svg+xml;base64,' + svg64;
-
-        const img = new Image();
-        img.onload = () => resolve(img);
-        img.onerror = () => {
-          try {
-            const blob = new Blob([sanitized], { type: 'image/svg+xml;charset=utf-8' });
-            const blobUrl = URL.createObjectURL(blob);
-            const fallbackImg = new Image();
-            fallbackImg.onload = () => {
-              URL.revokeObjectURL(blobUrl);
-              resolve(fallbackImg);
-            };
-            fallbackImg.onerror = (e) => {
-              URL.revokeObjectURL(blobUrl);
-              reject(e);
-            };
-            fallbackImg.src = blobUrl;
-          } catch (e) {
-            reject(e);
-          }
-        };
-        img.src = dataUrl;
-      });
-    }, []);
-
-    // ── Dynamic Diagram Re-Theming on Canvas ──────────────────────────────
-    const rethemeDiagrams = useCallback(async (isDark: boolean) => {
-      if (!engineRef.current) return;
+  // ── Engine ↔ UI sync ────────────────────────────────────────────────────
+  const syncUi = useCallback(
+    (forceSelection = false) => {
+      const e = engineRef.current;
+      if (!e) return;
+      setCanUndo(e.can_undo());
+      setCanRedo(e.can_redo());
+      setIsEmpty(e.element_count() === 0);
+      const v = e.selection_version();
+      if (!forceSelection && v === selVersionRef.current) return;
+      selVersionRef.current = v;
+      let info = EMPTY_SELECTION;
       try {
-        const sceneJson = engineRef.current.get_scene_json();
-        const parsed = JSON.parse(sceneJson);
-        const diagramElements = (parsed.elements || []).filter(
-          (el: any) => el.kind && el.kind.toLowerCase() === 'diagram' && (el.code || el.svg)
-        );
+        info = JSON.parse(e.get_selection_info()) as SelectionInfo;
+      } catch {
+        // keep EMPTY_SELECTION
+      }
+      setSelection(info);
+      if (info.count === 1 && info.kinds[0] === 'Diagram') {
+        const el = parseElement(e.get_selected_element_json());
+        setDiagramAccent(el?.stroke_color && el.stroke_color !== 'transparent' ? el.stroke_color : '#e73f07');
+      } else {
+        setDiagramAccent(null);
+      }
+      onSelectionChange?.(info);
+    },
+    [onSelectionChange],
+  );
 
-        if (diagramElements.length > 0) {
-          const style = isDark ? 'brutalist' : 'industrial_light';
-          if ((mermaid as any).mermaidAPI?.reset) {
-            try {
-              (mermaid as any).mermaidAPI.reset();
-            } catch (_) {}
+  /** Sends the current style for `tool` to the engine (used for new elements). */
+  const pushStyle = useCallback((tool: ToolId, s: UiStyle) => {
+    const e = engineRef.current;
+    if (!e || tool === 'select' || tool === 'hand' || tool === 'eraser') return;
+    e.apply_style(
+      JSON.stringify({
+        strokeColor: tool === 'highlighter' ? s.highlighterColor : s.strokeColor,
+        backgroundColor: s.backgroundColor,
+        fillStyle: s.fillStyle,
+        strokeWidth: widthFor(tool, s),
+        strokeStyle: s.strokeStyle,
+        roughness: s.roughness,
+        roundness: s.roundness,
+        opacity: tool === 'highlighter' ? 100 : s.opacity,
+        fontFamily: s.fontFamily,
+        fontSize: s.fontSize,
+      }),
+    );
+  }, []);
+
+  const cancelMagicTimer = () => {
+    if (magicTimerRef.current) {
+      clearTimeout(magicTimerRef.current);
+      magicTimerRef.current = null;
+    }
+  };
+
+  const applyTool = useCallback(
+    (id: ToolId, notify = true) => {
+      const e = engineRef.current;
+      if (readOnly && id !== 'hand' && id !== 'select') return;
+      if (id !== 'magic_pen') cancelMagicTimer();
+      if (e) {
+        switch (id) {
+          case 'freedraw': e.set_tool_freedraw(); break;
+          case 'fountain': e.set_tool_fountain_pen(); break;
+          case 'marker': e.set_tool_marker(); break;
+          case 'highlighter': e.set_tool_highlighter(); break;
+          case 'rectangle': e.set_tool_rectangle(); break;
+          case 'diamond': e.set_tool_diamond(); break;
+          case 'ellipse': e.set_tool_ellipse(); break;
+          case 'line': e.set_tool_line(); break;
+          case 'arrow': e.set_tool_arrow(); break;
+          case 'select': e.set_tool_select(); break;
+          case 'hand': e.set_tool_hand(); break;
+          case 'eraser': e.set_tool_eraser(); break;
+          case 'laser_pen': e.set_tool_laser_pen(); break;
+          case 'magic_pen': e.set_tool_magic_pen(); break;
+          case 'text': e.set_tool_text(); break;
+        }
+        pushStyle(id, styleRef.current);
+      }
+      if (isPen(id) && styleRef.current.lastPen !== id) {
+        setUiStyle((s) => ({ ...s, lastPen: id as PenTool }));
+      }
+      setActiveTool(id);
+      toolRef.current = id;
+      if (notify) onToolChange?.(id);
+      syncUi();
+    },
+    [readOnly, pushStyle, onToolChange, syncUi],
+  );
+
+  const applyEraser = useCallback(
+    (patch: Partial<Pick<UiStyle, 'eraserMode' | 'eraserSize'>>) => {
+      const e = engineRef.current;
+      if (patch.eraserMode) {
+        e?.set_eraser_type?.(patch.eraserMode);
+        onEraserTypeChange?.(patch.eraserMode);
+      }
+      if (patch.eraserSize) e?.set_eraser_radius(patch.eraserSize / 2);
+      setUiStyle((s) => ({ ...s, ...patch }));
+    },
+    [onEraserTypeChange],
+  );
+
+  /** Style edits from the panel: go to the selection, and become the default for new elements. */
+  const applyStyleChange = useCallback(
+    (change: StyleChange) => {
+      const e = engineRef.current;
+      const tool = toolRef.current;
+      const sel = selectionRef.current;
+      const selecting = tool === 'select' && sel.count > 0;
+      const next: UiStyle = { ...styleRef.current };
+      const penOnly = selecting && sel.kinds.every((k) => ['FreeDraw', 'FountainPen', 'Marker', 'Highlighter'].includes(k));
+      const highlighterOnly = selecting ? sel.kinds.length === 1 && sel.kinds[0] === 'Highlighter' : tool === 'highlighter';
+      const penLike = selecting ? penOnly : isPen(tool) || tool === 'magic_pen' || tool === 'laser_pen';
+      for (const [k, v] of Object.entries(change) as Array<[keyof StyleChange, never]>) {
+        if (k === 'strokeColor') next[highlighterOnly ? 'highlighterColor' : 'strokeColor'] = v;
+        else if (k === 'strokeWidth') next[highlighterOnly ? 'highlighterWidth' : penLike ? 'penWidth' : 'shapeWidth'] = v;
+        else (next as unknown as Record<string, unknown>)[k] = v;
+      }
+      setUiStyle(next);
+      if (!e) return;
+      if (selecting) {
+        e.apply_style(JSON.stringify(change));
+        syncUi(true);
+      } else {
+        pushStyle(tool, next);
+      }
+    },
+    [pushStyle, syncUi],
+  );
+
+  // ── WASM boot ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (initStarted.current) return;
+    initStarted.current = true;
+    let observer: ResizeObserver | null = null;
+
+    (async () => {
+      try {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const parent = canvas.parentElement ?? canvas;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, parent.clientWidth * dpr);
+        canvas.height = Math.max(1, parent.clientHeight * dpr);
+
+        const engine = await loadAerialEngine(canvasId, { basePath: wasmBasePath });
+        engine.set_dpr(dpr);
+        if (initialState) engine.import_full_state(initialState);
+        else if (initialScene) engine.load_scene_json(initialScene);
+
+        engine.set_dark_mode(isDark);
+        engine.set_background_color(canonicalBg);
+        const s = styleRef.current;
+        engine.set_eraser_type?.(propEraserType ?? s.eraserMode);
+        engine.set_eraser_radius((propEraserSize ?? s.eraserSize) / 2);
+        engineRef.current = engine;
+        applyTool(toolRef.current, false);
+        engine.render();
+        setEngineReady(true);
+
+        observer = new ResizeObserver((entries) => {
+          for (const entry of entries) {
+            const { width, height } = entry.contentRect;
+            const d = window.devicePixelRatio || 1;
+            canvas.width = Math.max(1, width * d);
+            canvas.height = Math.max(1, height * d);
+            engine.set_dpr(d);
+            engine.render();
           }
-          mermaid.initialize(getAraskovaMermaidConfig(isDark, style));
+        });
+        observer.observe(canvas);
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setLoadError(msg);
+        window.__aerialBoot?.('error', msg);
+      }
+    })();
 
-          for (const el of diagramElements) {
-            try {
-              let newSvg = '';
-              const code = (el.code || '').trim();
-              if (code.startsWith('node ') || code.startsWith('group ')) {
-                try {
-                  const { invoke } = await import('@tauri-apps/api/core');
-                  const res = await invoke<{ svg: string }>('render_diagram', { code });
-                  if (res?.svg) {
-                    newSvg = applyAraskovaDiagramAesthetics(res.svg, isDark, style);
-                  }
-                } catch {
-                  // Fall back if not running in Tauri
-                }
-              }
+    return () => {
+      observer?.disconnect();
+      engineRef.current?.free?.();
+      engineRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-              if (!newSvg && code) {
-                const id = 'retheme-' + el.id + '-' + Math.random().toString(36).substring(2, 7);
-                const { svg } = await mermaid.render(id, code);
-                newSvg = applyAraskovaDiagramAesthetics(svg, isDark, style);
-              }
+  // ── Frame loop ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!engineReady) return;
+    let raf = 0;
+    let errorLogged = false;
+    const loop = () => {
+      try {
+        engineRef.current?.tick_animations();
+      } catch (err) {
+        if (!errorLogged) {
+          logger.warn('tick_animations threw:', err);
+          errorLogged = true;
+        }
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [engineReady]);
 
-              if (!newSvg && el.svg) {
-                newSvg = applyAraskovaDiagramAesthetics(el.svg, isDark, style);
-              }
+  // Periodic UI sync catches changes made outside pointer handlers (remote
+  // collaboration, host API calls, undo via menu).
+  useEffect(() => {
+    if (!engineReady) return;
+    const id = setInterval(() => syncUi(), 250);
+    return () => clearInterval(id);
+  }, [engineReady, syncUi]);
 
-              if (newSvg && engineRef.current) {
-                const img = await renderSvgToImage(newSvg);
-                engineRef.current.set_cached_image(BigInt(el.id), img);
-                engineRef.current.render();
-                logger.info(`Re-themed diagram #${el.id} for ${isDark ? 'dark' : 'light'} mode`);
-              }
-            } catch (err) {
-              logger.warn(`Failed to re-theme diagram #${el.id}:`, err);
-            }
+  // ── Change notification loop ────────────────────────────────────────────
+  useEffect(() => {
+    if (!engineReady || (!onChange && !onChanges)) return;
+    let seen = engineRef.current?.scene_version() ?? 0;
+    const id = setInterval(() => {
+      const e = engineRef.current;
+      if (!e) return;
+      if (onChanges && e.has_pending_changes()) onChanges(e.take_changes());
+      const v = e.scene_version();
+      if (onChange && v !== seen) {
+        seen = v;
+        onChange(e.get_scene_json());
+      }
+    }, changeInterval);
+    return () => clearInterval(id);
+  }, [engineReady, onChange, onChanges, changeInterval]);
+
+  // ── Diagram re-theming ──────────────────────────────────────────────────
+  const rethemeDiagrams = useCallback(async (dark: boolean) => {
+    const e = engineRef.current;
+    if (!e) return;
+    let diagrams: Array<{ id: number; code?: string; svg?: string }> = [];
+    try {
+      const parsed = JSON.parse(e.get_scene_json()) as { elements?: Array<{ id: number; kind?: string; code?: string; svg?: string }> };
+      diagrams = (parsed.elements ?? []).filter((el) => el.kind?.toLowerCase() === 'diagram' && (el.code || el.svg));
+    } catch (err) {
+      logger.warn('Failed to parse scene for diagram re-theming:', err);
+      return;
+    }
+    if (diagrams.length === 0) return;
+    const style = dark ? 'brutalist' : 'industrial_light';
+    try {
+      (mermaid as unknown as { mermaidAPI?: { reset?: () => void } }).mermaidAPI?.reset?.();
+    } catch {
+      // older mermaid builds have no reset
+    }
+    mermaid.initialize(getAraskovaMermaidConfig(dark, style));
+    for (const el of diagrams) {
+      try {
+        let svg = '';
+        const code = (el.code ?? '').trim();
+        if (code.startsWith('node ') || code.startsWith('group ')) {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const res = await invoke<{ svg: string }>('render_diagram', { code });
+            if (res?.svg) svg = applyAraskovaDiagramAesthetics(res.svg, dark, style);
+          } catch {
+            // Not running in Tauri.
           }
+        }
+        if (!svg && code) {
+          const out = await mermaid.render(`retheme-${el.id}-${Math.random().toString(36).slice(2, 7)}`, code);
+          svg = applyAraskovaDiagramAesthetics(out.svg, dark, style);
+        }
+        if (!svg && el.svg) svg = applyAraskovaDiagramAesthetics(el.svg, dark, style);
+        if (svg && engineRef.current) {
+          engineRef.current.set_cached_image(BigInt(el.id), await renderSvgToImage(svg));
+          engineRef.current.render();
         }
       } catch (err) {
-        logger.warn('Failed to parse scene for diagram re-theming:', err);
+        logger.warn(`Failed to re-theme diagram #${el.id}:`, err);
       }
-    }, [renderSvgToImage]);
+    }
+  }, []);
 
-    // ── Dark mode sync & Dynamic Diagram Re-Theming ───────────────────────
-    useEffect(() => {
-      if (!engineReady || !engineRef.current) return;
-      engineRef.current.set_dark_mode(isDarkMode);
-      rethemeDiagrams(isDarkMode);
-      engineRef.current.render();
-    }, [isDarkMode, engineReady, rethemeDiagrams]);
-
-    // ── Background color sync ──────────────────────────────────────────────
-    useEffect(() => {
-      if (engineReady && engineRef.current && backgroundColor !== undefined) {
-        if (typeof (engineRef.current as any).set_background_color === 'function') {
-          (engineRef.current as any).set_background_color(backgroundColor);
-        }
-        engineRef.current.render();
-      }
-    }, [backgroundColor, engineReady]);
-
-    // ── Prevent native elastic scroll on canvas ───────────────────────────
-    useEffect(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const preventScroll = (e: WheelEvent) => e.preventDefault();
-      canvas.addEventListener('wheel', preventScroll, { passive: false });
-      return () => canvas.removeEventListener('wheel', preventScroll);
-    }, [engineReady]);
-
-    // ── Eraser prop sync ──────────────────────────────────────────────────
-    useEffect(() => {
-      if (propEraserType && propEraserType !== eraserType) {
-        setEraserTypeState(propEraserType);
-        engineRef.current?.set_eraser_type?.(propEraserType);
-      }
-    }, [propEraserType]);
-
-    useEffect(() => {
-      if (propEraserSize && propEraserSize !== eraserSize) {
-        setEraserSize(propEraserSize);
-        if (engineRef.current) {
-          if (typeof engineRef.current.set_eraser_radius === 'function') {
-            engineRef.current.set_eraser_radius(propEraserSize / 2);
-          } else if (typeof engineRef.current.set_eraser_size === 'function') {
-            engineRef.current.set_eraser_size(propEraserSize);
-          }
-        }
-      }
-    }, [propEraserSize]);
-
-    const changeEraserType = useCallback((t: 'stroke' | 'precision' | 'element') => {
-      setEraserTypeState(t);
-      engineRef.current?.set_eraser_type?.(t);
-      onEraserTypeChange?.(t);
-    }, [onEraserTypeChange]);
-
-    const changeEraserSize = useCallback((s: number) => {
-      setEraserSize(s);
-      if (engineRef.current) {
-        if (typeof engineRef.current.set_eraser_radius === 'function') {
-          engineRef.current.set_eraser_radius(s / 2);
-        } else if (typeof engineRef.current.set_eraser_size === 'function') {
-          engineRef.current.set_eraser_size(s);
-        }
-      }
-    }, []);
-
-    const cycleEraserType = useCallback(() => {
-      const nextType: 'stroke' | 'precision' | 'element' =
-        eraserType === 'stroke' ? 'precision' : eraserType === 'precision' ? 'element' : 'stroke';
-      changeEraserType(nextType);
-    }, [eraserType, changeEraserType]);
-
-    // ── Tool selection ────────────────────────────────────────────────────
-    const applyTool = useCallback((id: ToolId, notifyParent: boolean = true) => {
-      if (readOnly) return;
-      if (notifyParent) {
-        onToolChange?.(id);
-      }
-      setActiveTool((prev) => {
-        if (prev === id) {
-          if (id === 'eraser') {
-            cycleEraserType();
-          } else if (['freedraw', 'fountain', 'highlighter', 'rectangle', 'ellipse', 'line', 'arrow'].includes(id)) {
-            setShowSettings(s => !s);
-          }
-          return prev;
-        }
-        setShowSettings(false);
-        if (id !== 'magic_pen' && magicDebounceTimerRef.current) {
-          clearTimeout(magicDebounceTimerRef.current);
-          magicDebounceTimerRef.current = null;
-        }
-        const e = engineRef.current;
-        if (!e) return id;
-        switch (id) {
-          case 'freedraw':  e.set_tool_freedraw();    break;
-          case 'fountain':  e.set_tool_fountain_pen(); break;
-          case 'rectangle': e.set_tool_rectangle();   break;
-          case 'ellipse':   e.set_tool_ellipse();     break;
-          case 'line':      e.set_tool_line();        break;
-          case 'arrow':     e.set_tool_arrow();       break;
-          case 'select':    e.set_tool_select();      break;
-          case 'hand':      e.set_tool_hand();        break;
-          case 'highlighter': e.set_tool_highlighter(); break;
-          case 'eraser':    e.set_tool_eraser();      break;
-          case 'laser_pen': e.set_tool_laser_pen();   break;
-          case 'magic_pen': e.set_tool_magic_pen();   break;
-          case 'text':      e.set_tool_text();        break;
-        }
-        return id;
-      });
-    }, [readOnly, onToolChange, cycleEraserType]);
-
-    const selectTool = useCallback((id: ToolId) => {
-      applyTool(id, true);
-    }, [applyTool]);
-
-    // ── Color / width helpers ─────────────────────────────────────────────
-    const changeColor = useCallback((color: string) => {
-      setStrokeColor(color);
-      engineRef.current?.set_stroke_color(color);
-    }, []);
-
-    const changeWidth = useCallback((w: number) => {
-      setStrokeWidth(w);
-      engineRef.current?.set_stroke_width(w);
-    }, []);
-
-    const changeSharpness = useCallback((s: number) => {
-      setFountainSharpness(s);
-      engineRef.current?.set_fountain_sharpness(s);
-    }, []);
-
-    // ── Magic Pen Handwriting Recognition Pipeline ────────────────────────
-    const convertMagicStrokes = useCallback(async (): Promise<string | null> => {
-      const engine = engineRef.current;
-      if (!engine) return null;
-      const jsonStr = engine.extract_magic_strokes();
-      if (!jsonStr) return null;
+  const recolorDiagram = useCallback(
+    async (color: string) => {
+      const e = engineRef.current;
+      const id = selectionRef.current.ids[0];
+      const el = parseElement(e?.get_selected_element_json());
+      if (!e || id === undefined || !el?.code) return;
       try {
-        const parsed = JSON.parse(jsonStr);
-        const { ink, bounds } = parsed;
-        if (!ink || !Array.isArray(ink) || ink.length === 0) return null;
+        const style = isDark ? 'brutalist' : 'industrial_light';
+        mermaid.initialize(getAraskovaMermaidConfig(isDark, style, color));
+        const { svg } = await mermaid.render(`recolor-${Math.random().toString(36).slice(2, 9)}`, el.code);
+        const styled = applyAraskovaDiagramAesthetics(svg, isDark, style, color);
+        const img = await renderSvgToImage(styled);
+        const parsed = JSON.parse(e.get_scene_json()) as { elements?: Array<Record<string, unknown>> };
+        const target = parsed.elements?.find((x) => Number(x.id) === id);
+        if (target) {
+          target.stroke_color = color;
+          target.svg = svgDataUrl(styled);
+          e.load_scene_json(JSON.stringify(parsed));
+        }
+        e.set_cached_image(BigInt(id), img);
+        e.set_accent_color(color);
+        e.set_selected_id(BigInt(id));
+        e.render();
+        setDiagramAccent(color);
+      } catch (err) {
+        logger.error('Failed to recolor diagram:', err);
+      }
+    },
+    [isDark],
+  );
 
-        setIsConvertingMagic(true);
-        const itcLang = magicLanguage || 'en';
-        const url = `https://inputtools.google.com/request?itc=${itcLang}-t-i0-handwrit&app=translate`;
+  // ── Theme / background / eraser prop sync ───────────────────────────────
+  useEffect(() => {
+    const e = engineRef.current;
+    if (!engineReady || !e) return;
+    e.set_dark_mode(isDark);
+    e.render();
+    rethemeDiagrams(isDark);
+  }, [isDark, engineReady, rethemeDiagrams]);
 
-        const payload = {
+  useEffect(() => {
+    if (engineReady) engineRef.current?.set_background_color(canonicalBg);
+  }, [canonicalBg, engineReady]);
+
+  useEffect(() => {
+    if (!engineReady || !propEraserType) return;
+    engineRef.current?.set_eraser_type?.(propEraserType);
+    if (propEraserType !== 'element') setUiStyle((s) => (s.eraserMode === propEraserType ? s : { ...s, eraserMode: propEraserType }));
+  }, [propEraserType, engineReady]);
+
+  useEffect(() => {
+    if (!engineReady || !propEraserSize) return;
+    engineRef.current?.set_eraser_radius(propEraserSize / 2);
+    setUiStyle((s) => (s.eraserSize === propEraserSize ? s : { ...s, eraserSize: propEraserSize }));
+  }, [propEraserSize, engineReady]);
+
+  // ── Magic pen ───────────────────────────────────────────────────────────
+  const convertMagicStrokes = useCallback(async (): Promise<string | null> => {
+    const engine = engineRef.current;
+    if (!engine) return null;
+    // Recognition uploads the ink to Google Input Tools; let the host gate it.
+    if (onExternalRequest && !(await onExternalRequest('handwriting'))) return null;
+    const jsonStr = engine.extract_magic_strokes();
+    if (!jsonStr) return null;
+    try {
+      const { ink, bounds } = JSON.parse(jsonStr) as {
+        ink?: unknown[];
+        bounds?: { min_x?: number; min_y?: number; max_x?: number; max_y?: number; baseline_y?: number };
+      };
+      if (!Array.isArray(ink) || ink.length === 0) return null;
+      setIsConvertingMagic(true);
+      const lang = magicLanguage || 'en';
+      const resp = await fetch(`https://inputtools.google.com/request?itc=${encodeURIComponent(lang)}-t-i0-handwrit&app=translate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           app_version: 0.4,
           api_level: '533.0.0',
-          device: typeof navigator !== 'undefined' ? navigator.userAgent : 'AerialCanvas',
+          device: navigator.userAgent,
           input_type: '0',
           options: 'enable_pre_space',
           requests: [
             {
               writing_guide: {
-                writing_area_width: Math.max(800, (bounds?.max_x || 800) - (bounds?.min_x || 0)),
-                writing_area_height: Math.max(300, (bounds?.max_y || 300) - (bounds?.min_y || 0)),
+                writing_area_width: Math.max(800, (bounds?.max_x ?? 800) - (bounds?.min_x ?? 0)),
+                writing_area_height: Math.max(300, (bounds?.max_y ?? 300) - (bounds?.min_y ?? 0)),
               },
-              ink: ink,
-              language: itcLang,
+              ink,
+              language: lang,
             },
           ],
-        };
-
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-
-        if (!resp.ok) {
-          throw new Error(`Recognition API HTTP error: ${resp.status}`);
-        }
-
-        const data = await resp.json();
-        if (data && data[0] === 'SUCCESS' && data[1]?.[0]?.[1]?.[0]) {
-          const recognized = data[1][0][1][0] as string;
-          const targetX = bounds?.min_x ?? 250;
-          // Align text with the baseline: 28px font size
-          const targetY = bounds?.baseline_y ? bounds.baseline_y - 28.0 : (bounds?.min_y ?? 250);
-          const font = magicFont || "'Space Grotesk', sans-serif";
-          engine.add_text(recognized, targetX, targetY, 28, font, strokeColor);
-          engine.render();
-          return recognized;
-        }
-      } catch (err) {
-        logger.warn('Handwriting recognition failed:', err);
-      } finally {
-        setIsConvertingMagic(false);
+        }),
+      });
+      if (!resp.ok) throw new Error(`Recognition API HTTP error: ${resp.status}`);
+      const data = await resp.json();
+      const recognized = data?.[0] === 'SUCCESS' ? (data?.[1]?.[0]?.[1]?.[0] as string | undefined) : undefined;
+      if (recognized) {
+        const size = 28;
+        const x = bounds?.min_x ?? 250;
+        const y = bounds?.baseline_y ? bounds.baseline_y - size : (bounds?.min_y ?? 250);
+        engine.add_text(recognized, x, y, size, magicFont, styleRef.current.strokeColor);
         engine.render();
+        syncUi();
+        return recognized;
       }
-      return null;
-    }, [magicLanguage, magicFont, strokeColor]);
+    } catch (err) {
+      logger.warn('Handwriting recognition failed:', err);
+    } finally {
+      setIsConvertingMagic(false);
+      engine.render();
+    }
+    return null;
+  }, [magicLanguage, magicFont, onExternalRequest, syncUi]);
 
-    // ── Pointer events ────────────────────────────────────────────────────
-    const onPointerDown = useCallback((e: React.PointerEvent) => {
-      const dismissed = onCanvasPointerDown?.();
-      setShowSettings(false);
-      if (dismissed) {
-        // Tapping canvas dismissed an open popup menu cleanly.
-        // Suppress drawing or selection to prevent accidental marks.
+  // ── Text editing ────────────────────────────────────────────────────────
+  const openTextEditor = useCallback((el: ElementJson | null, worldX?: number, worldY?: number) => {
+    const e = engineRef.current;
+    if (!e) return;
+    const s = styleRef.current;
+    if (el) {
+      e.hide_element(BigInt(el.id));
+      setTextDraft({
+        elementId: BigInt(el.id),
+        worldX: el.x,
+        worldY: el.y,
+        text: el.text ?? '',
+        fontSize: el.font_size || s.fontSize,
+        fontFamily: el.font_family || s.fontFamily,
+        color: el.stroke_color || s.strokeColor,
+      });
+    } else if (worldX !== undefined && worldY !== undefined) {
+      setTextDraft({
+        elementId: null,
+        worldX,
+        worldY: worldY - s.fontSize * 0.65,
+        text: '',
+        fontSize: s.fontSize,
+        fontFamily: s.fontFamily,
+        color: s.strokeColor,
+      });
+    }
+  }, []);
+
+  const commitText = useCallback(
+    (text: string) => {
+      const e = engineRef.current;
+      const draft = draftRef.current;
+      setTextDraft(null);
+      draftRef.current = null;
+      if (!e || !draft) return;
+      e.show_all_elements();
+      const value = text.replace(/\s+$/, '');
+      if (draft.elementId != null) {
+        if (!value.trim()) {
+          e.set_selected_id(draft.elementId);
+          e.delete_selected();
+        } else {
+          e.update_text_element(draft.elementId, value, draft.worldX, draft.worldY, draft.fontSize, draft.fontFamily, draft.color);
+        }
+      } else if (value.trim()) {
+        e.add_text(value, draft.worldX, draft.worldY, draft.fontSize, draft.fontFamily, draft.color);
+      }
+      e.render();
+      if (toolRef.current === 'text' && !lockedRef.current) applyTool('select');
+      syncUi();
+    },
+    [applyTool, syncUi],
+  );
+
+  // ── Pointer input ───────────────────────────────────────────────────────
+  const localPoint = (e: { clientX: number; clientY: number }) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    return { x: e.clientX - (rect?.left ?? 0), y: e.clientY - (rect?.top ?? 0) };
+  };
+  const pressureOf = (e: PointerEvent | React.PointerEvent) => (e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : -1);
+
+  const moveEraserCursor = (x: number, y: number) => {
+    const c = eraserCursorRef.current;
+    if (!c) return;
+    const size = styleRef.current.eraserSize;
+    c.style.transform = `translate3d(${x - size / 2}px, ${y - size / 2}px, 0)`;
+    c.style.opacity = '1';
+  };
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (onCanvasPointerDown?.()) return; // host consumed it (dismissed a popover)
+      const engine = engineRef.current;
+      if (!engine) return;
+
+      // Clicking away from the inline editor commits it, like Excalidraw.
+      if (draftRef.current) {
+        e.preventDefault();
+        (document.activeElement as HTMLElement | null)?.blur?.();
         return;
       }
-      if (!engineReady || !engineRef.current || readOnly) return;
 
-      // Multi-touch tracking
+      const { x, y } = localPoint(e);
+      engine.set_modifiers(e.shiftKey, e.altKey);
+
       if (e.pointerType === 'touch') {
-        activeTouchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (activeTouchesRef.current.size === 2) {
-          const touches = Array.from(activeTouchesRef.current.values());
-          pinchStartDistRef.current = Math.hypot(touches[0].x - touches[1].x, touches[0].y - touches[1].y);
-          lastTouchCenterRef.current = {
-            x: (touches[0].x + touches[1].x) / 2,
-            y: (touches[0].y + touches[1].y) / 2,
-          };
-          if (activeDrawingPointerTypeRef.current === 'touch') {
-            activeDrawingPointerIdRef.current = null;
-            activeDrawingPointerTypeRef.current = null;
-            isDrawingRef.current = false;
-            if (engineRef.current) {
-              const rect = canvasRef.current!.getBoundingClientRect();
-              engineRef.current.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
-            }
+        touchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touchesRef.current.size === 2) {
+          const [a, b] = Array.from(touchesRef.current.values());
+          pinchDistRef.current = Math.hypot(a.x - b.x, a.y - b.y);
+          pinchCenterRef.current = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          // A second finger turns a one-finger stroke into a pinch.
+          if (drawingPointerRef.current?.type === 'touch') {
+            drawingPointerRef.current = null;
+            engine.pointer_up(x, y);
           }
           return;
         }
+        if (palmRejectionRef.current && toolRef.current !== 'hand') return;
       }
 
-      // Palm rejection
-      if (palmRejectionRef.current && e.pointerType === 'touch' && activeTool !== 'hand') return;
-
-      // Stylus synthetic mouse filter
-      if (e.pointerType === 'mouse' && (e.nativeEvent as unknown as { _isStylusSynthetic?: boolean })._isStylusSynthetic) return;
+      // Pens win over the synthetic mouse events some drivers emit.
       if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
       if (e.pointerType === 'pen') activePenIdRef.current = e.pointerId;
+      if (drawingPointerRef.current !== null) return;
+      if (readOnly && toolRef.current !== 'hand') return;
+      if (e.button === 1) return; // middle button: reserved
 
-      if (magicDebounceTimerRef.current) {
-        clearTimeout(magicDebounceTimerRef.current);
-        magicDebounceTimerRef.current = null;
-      }
-
-      // Already drawing with another pointer
-      if (activeDrawingPointerIdRef.current !== null) return;
-
-      activeDrawingPointerIdRef.current = e.pointerId;
-      activeDrawingPointerTypeRef.current = e.pointerType;
-
+      cancelMagicTimer();
       e.preventDefault();
-      if (e.target instanceof Element && e.target.id === canvasId) {
-        try { e.target.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // capture can fail if the pointer is already gone
       }
 
-      isDrawingRef.current = true;
-
-      const rect = canvasRef.current!.getBoundingClientRect();
-
-      if (activeTool === 'text') {
-        if (typingText) return;
-        if (engineRef.current) {
-          const screenX = e.clientX - rect.left;
-          const screenY = e.clientY - rect.top;
-
-          // Check if an existing text element was clicked
-          const elJson = engineRef.current.get_element_at?.(screenX, screenY);
-          if (elJson) {
-            try {
-              const el = JSON.parse(elJson);
-              if (el.kind && el.kind.toLowerCase() === 'text') {
-                const sx = engineRef.current.world_to_screen_x(el.x);
-                const sy = engineRef.current.world_to_screen_y(el.y);
-                setTypingText({
-                  elementId: BigInt(el.id),
-                  screenX: Math.round(sx),
-                  screenY: Math.round(sy),
-                  worldX: el.x,
-                  worldY: el.y,
-                  value: el.text || '',
-                  fontSize: el.font_size || 28,
-                  fontFamily: el.font_family || "'Inter', sans-serif",
-                  color: el.stroke_color || strokeColor,
-                  width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
-                  height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
-                });
-                setSelectedTextEl(null);
-                return;
-              }
-            } catch (_) {}
-          }
-
-          const worldX = engineRef.current.screen_to_world_x(screenX);
-          const worldY = engineRef.current.screen_to_world_y(screenY);
-          setTypingText({
-            elementId: null,
-            screenX,
-            screenY,
-            worldX,
-            worldY,
-            value: '',
-            fontSize: 28,
-            fontFamily: "'Inter', sans-serif",
-            color: strokeColor,
-            width: 320,
-            height: 140,
-          });
-        }
+      if (toolRef.current === 'text') {
+        const hit = parseElement(engine.get_element_at?.(x, y));
+        if (hit?.kind === 'Text') openTextEditor(hit);
+        else openTextEditor(null, engine.screen_to_world_x(x), engine.screen_to_world_y(y));
         return;
       }
 
-      engineRef.current?.on_mouse_down(e.clientX - rect.left, e.clientY - rect.top);
-    }, [activeTool, typingText, engineReady, readOnly, canvasId, strokeColor, eraserSize]);
+      drawingPointerRef.current = { id: e.pointerId, type: e.pointerType };
+      engine.pointer_down(x, y, pressureOf(e));
+      if (toolRef.current === 'hand' && canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
+    },
+    [onCanvasPointerDown, openTextEditor, readOnly],
+  );
 
-    const onPointerMove = useCallback((e: React.PointerEvent) => {
-      e.preventDefault();
-      if (!engineReady || !engineRef.current) return;
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const { x, y } = localPoint(e);
+      if (toolRef.current === 'eraser') moveEraserCursor(x, y);
 
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-
-      // Always update custom eraser cursor directly on DOM element - zero lag, never gets stuck
-      if (activeTool === 'eraser' && eraserCursorRef.current) {
-        eraserCursorRef.current.style.transform = `translate3d(${x - eraserSize / 2}px, ${y - eraserSize / 2}px, 0)`;
-        eraserCursorRef.current.style.display = 'block';
-      }
-
-      // 2-finger pinch/pan
-      if (e.pointerType === 'touch') {
-        activeTouchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        if (activeTouchesRef.current.size === 2) {
-          const touches = Array.from(activeTouchesRef.current.values());
-          const newDist = Math.hypot(touches[0].x - touches[1].x, touches[0].y - touches[1].y);
-          const newCenter = {
-            x: (touches[0].x + touches[1].x) / 2,
-            y: (touches[0].y + touches[1].y) / 2,
-          };
-          const screenX = newCenter.x - rect.left;
-          const screenY = newCenter.y - rect.top;
-          if (lastTouchCenterRef.current) {
-            const dx = lastTouchCenterRef.current.x - newCenter.x;
-            const dy = lastTouchCenterRef.current.y - newCenter.y;
-            if (pinchStartDistRef.current && Math.abs(newDist - pinchStartDistRef.current) > 3) {
-              const zoomDelta = (pinchStartDistRef.current - newDist) * 1.5;
-              const newZoom = engineRef.current.on_wheel(0, zoomDelta, true, screenX, screenY);
-              updateZoom(Math.round(newZoom * 100));
-              pinchStartDistRef.current = newDist;
-            } else if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-              engineRef.current.on_wheel(dx, dy, false, screenX, screenY);
+      if (e.pointerType === 'touch' && touchesRef.current.has(e.pointerId)) {
+        touchesRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touchesRef.current.size === 2) {
+          const [a, b] = Array.from(touchesRef.current.values());
+          const dist = Math.hypot(a.x - b.x, a.y - b.y);
+          const center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+          const p = localPoint({ clientX: center.x, clientY: center.y });
+          const last = pinchCenterRef.current;
+          if (last) {
+            const start = pinchDistRef.current;
+            if (start && Math.abs(dist - start) > 3) {
+              updateZoom(engine.on_wheel(0, (start - dist) * 1.5, true, p.x, p.y));
+              pinchDistRef.current = dist;
             }
+            const dx = last.x - center.x;
+            const dy = last.y - center.y;
+            if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) engine.on_wheel(dx, dy, false, p.x, p.y);
           }
-          lastTouchCenterRef.current = newCenter;
+          pinchCenterRef.current = center;
           return;
         }
       }
 
-      if (activeDrawingPointerIdRef.current !== e.pointerId) return;
-      if (e.pointerType === 'mouse' && activePenIdRef.current !== null) return;
-
-      if (isDrawingRef.current) engineRef.current?.on_mouse_move(x, y);
-    }, [activeTool, engineReady, updateZoom, eraserSize]);
-
-    const onPointerUp = useCallback((e: React.PointerEvent) => {
-      if (e.pointerType === 'touch') {
-        activeTouchesRef.current.delete(e.pointerId);
-        if (activeTouchesRef.current.size < 2) {
-          pinchStartDistRef.current = null;
-          lastTouchCenterRef.current = null;
+      const active = drawingPointerRef.current;
+      if (!active) {
+        // Hover feedback for the selection tool (move / resize cursors).
+        if (toolRef.current === 'select' && e.pointerType !== 'touch' && canvasRef.current) {
+          canvasRef.current.style.cursor = engine.get_cursor(x, y);
         }
+        return;
       }
-      if (e.pointerType === 'pen' && e.pointerId === activePenIdRef.current) {
-        activePenIdRef.current = null;
-      }
-      if (activeDrawingPointerIdRef.current !== e.pointerId) return;
-
-      activeDrawingPointerIdRef.current = null;
-      activeDrawingPointerTypeRef.current = null;
-      if (e.target instanceof Element) {
-        try { e.target.releasePointerCapture(e.pointerId); } catch (_) { /* noop */ }
-      }
-      isDrawingRef.current = false;
-      if (!engineReady || !engineRef.current) return;
-
-      const rect = canvasRef.current!.getBoundingClientRect();
-      engineRef.current?.on_mouse_up(e.clientX - rect.left, e.clientY - rect.top);
-
-      if (activeTool === 'select') {
-        const elJson = engineRef.current?.get_selected_element_json();
-        if (elJson) {
-          try {
-            const el = JSON.parse(elJson);
-            if (el.kind && el.kind.toLowerCase() === 'text') {
-              const sx = engineRef.current!.world_to_screen_x(el.x);
-              const sy = engineRef.current!.world_to_screen_y(el.y);
-              setSelectedTextEl({
-                id: BigInt(el.id),
-                screenX: Math.round(sx),
-                screenY: Math.round(sy),
-                worldX: el.x,
-                worldY: el.y,
-                value: el.text || '',
-                fontSize: el.font_size || 28,
-                fontFamily: el.font_family || "'Inter', sans-serif",
-                color: el.stroke_color || strokeColor,
-                width: Math.max(260, Math.round((el.w || 260) * (engineRef.current!.get_zoom() || 1))),
-                height: Math.max(100, Math.round((el.h || 100) * (engineRef.current!.get_zoom() || 1))),
-              });
-              setSelectedDiagramEl(null);
-            } else if (el.kind && el.kind.toLowerCase() === 'diagram') {
-              const sx = engineRef.current!.world_to_screen_x(el.x);
-              const sy = engineRef.current!.world_to_screen_y(el.y);
-              setSelectedDiagramEl({
-                id: BigInt(el.id),
-                screenX: Math.round(sx),
-                screenY: Math.round(sy),
-                worldX: el.x,
-                worldY: el.y,
-                width: Math.round((el.w || 600) * (engineRef.current!.get_zoom() || 1)),
-                height: Math.round((el.h || 400) * (engineRef.current!.get_zoom() || 1)),
-                code: el.code || '',
-                accentColor: el.stroke_color && el.stroke_color !== 'transparent' ? el.stroke_color : '#e73f07',
-              });
-              setSelectedTextEl(null);
-            } else {
-              setSelectedTextEl(null);
-              setSelectedDiagramEl(null);
-            }
-          } catch (_) {
-            setSelectedTextEl(null);
-            setSelectedDiagramEl(null);
-          }
-        } else {
-          setSelectedTextEl(null);
-          setSelectedDiagramEl(null);
+      if (active.id !== e.pointerId) return;
+      engine.set_modifiers(e.shiftKey, e.altKey);
+      // Coalesced events keep fast strokes smooth on high-rate digitisers.
+      const events = e.nativeEvent.getCoalescedEvents?.() ?? [];
+      if (events.length > 1) {
+        for (const ce of events) {
+          const p = localPoint(ce);
+          engine.pointer_move(p.x, p.y, pressureOf(ce));
         }
       } else {
-        setSelectedTextEl(null);
-        setSelectedDiagramEl(null);
+        engine.pointer_move(x, y, pressureOf(e));
       }
+      if (toolRef.current === 'hand' && draftRef.current) setViewTick((t) => t + 1);
+    },
+    [updateZoom],
+  );
 
-      if (activeTool === 'magic_pen') {
-        if (magicDebounceTimerRef.current) {
-          clearTimeout(magicDebounceTimerRef.current);
-        }
-        magicDebounceTimerRef.current = setTimeout(() => {
-          convertMagicStrokes();
-        }, 1200);
-      }
-    }, [engineReady, activeTool, convertMagicStrokes, strokeColor]);
-
-    const onPointerLeave = useCallback((e: React.PointerEvent) => {
-      if (isDrawingRef.current && activeDrawingPointerIdRef.current === e.pointerId) {
-        onPointerUp(e);
-      }
-      if (eraserCursorRef.current) {
-        eraserCursorRef.current.style.display = 'none';
-      }
-    }, [onPointerUp]);
-
-    const onPointerEnter = useCallback((e: React.PointerEvent) => {
-      if (activeTool === 'eraser' && eraserCursorRef.current && canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        eraserCursorRef.current.style.transform = `translate3d(${x - eraserSize / 2}px, ${y - eraserSize / 2}px, 0)`;
-        eraserCursorRef.current.style.display = 'block';
-      }
-    }, [activeTool, eraserSize]);
-
-    const onDoubleClick = useCallback((e: React.MouseEvent) => {
-      if (!engineRef.current || readOnly) return;
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const rawX = e.clientX - rect.left;
-      const rawY = e.clientY - rect.top;
-
-      // 1. Direct hit test on element at double-click position
-      const atElJson = engineRef.current.get_element_at?.(rawX, rawY);
-      if (atElJson) {
-        try {
-          const el = JSON.parse(atElJson);
-          if (el.kind && el.kind.toLowerCase() === 'text') {
-            const screenX = engineRef.current.world_to_screen_x(el.x);
-            const screenY = engineRef.current.world_to_screen_y(el.y);
-            setTypingText({
-              elementId: BigInt(el.id),
-              screenX: Math.round(screenX),
-              screenY: Math.round(screenY),
-              worldX: el.x,
-              worldY: el.y,
-              value: el.text || '',
-              fontSize: el.font_size || 28,
-              fontFamily: el.font_family || "'Inter', sans-serif",
-              color: el.stroke_color || strokeColor,
-              width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
-              height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
-            });
-            setSelectedTextEl(null);
-            return;
-          }
-        } catch (_) {}
-      }
-
-      // 2. Delegate to on_double_click
-      const hitIdStr = engineRef.current.on_double_click(rawX, rawY);
-      if (hitIdStr) {
-        const parts = hitIdStr.split(',');
-        if (parts[1]) {
-          if (onNodeDoubleClick && engineRef.current) {
-            const elId = BigInt(parts[0]);
-            const code = engineRef.current.get_element_code(elId);
-            onNodeDoubleClick(elId, parts[1], code);
-          }
-        } else {
-          // Check if hit element is a text element
-          const elJson = engineRef.current.get_selected_element_json();
-          if (elJson) {
-            try {
-              const el = JSON.parse(elJson);
-              if (el.kind && el.kind.toLowerCase() === 'text') {
-                const screenX = engineRef.current.world_to_screen_x(el.x);
-                const screenY = engineRef.current.world_to_screen_y(el.y);
-                setTypingText({
-                  elementId: BigInt(el.id),
-                  screenX: Math.round(screenX),
-                  screenY: Math.round(screenY),
-                  worldX: el.x,
-                  worldY: el.y,
-                  value: el.text || '',
-                  fontSize: el.font_size || 28,
-                  fontFamily: el.font_family || "'Inter', sans-serif",
-                  color: el.stroke_color || strokeColor,
-                  width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
-                  height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
-                });
-                setSelectedTextEl(null);
-                return;
-              }
-            } catch (err) {
-              logger.warn('Failed to parse selected element for text edit:', err);
-            }
-          }
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (e.pointerType === 'touch') {
+        touchesRef.current.delete(e.pointerId);
+        if (touchesRef.current.size < 2) {
+          pinchDistRef.current = null;
+          pinchCenterRef.current = null;
         }
       }
-    }, [readOnly, onNodeDoubleClick, strokeColor]);
+      if (e.pointerType === 'pen' && e.pointerId === activePenIdRef.current) activePenIdRef.current = null;
+      if (drawingPointerRef.current?.id !== e.pointerId) return;
+      drawingPointerRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // already released
+      }
+      const engine = engineRef.current;
+      if (!engine) return;
+      const { x, y } = localPoint(e);
+      engine.set_modifiers(e.shiftKey, e.altKey);
+      engine.pointer_up(x, y);
 
-    const onWheel = useCallback((e: React.WheelEvent) => {
-      if (!engineRef.current) return;
+      const switched = engine.take_tool_switch();
+      if (switched === 'select') {
+        setActiveTool('select');
+        toolRef.current = 'select';
+        onToolChange?.('select');
+      }
+      if (toolRef.current === 'hand' && canvasRef.current) canvasRef.current.style.cursor = 'grab';
+      if (toolRef.current === 'magic_pen') {
+        cancelMagicTimer();
+        magicTimerRef.current = setTimeout(() => void convertMagicStrokes(), 1200);
+      }
+      syncUi();
+    },
+    [convertMagicStrokes, onToolChange, syncUi],
+  );
+
+  const onPointerLeave = useCallback(() => {
+    if (eraserCursorRef.current) eraserCursorRef.current.style.opacity = '0';
+  }, []);
+
+  const onDoubleClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      const engine = engineRef.current;
+      if (!engine || readOnly || toolRef.current !== 'select' || draftRef.current) return;
+      const { x, y } = localPoint(e);
+      const hit = parseElement(engine.get_element_at?.(x, y));
+      if (hit?.kind === 'Text') {
+        openTextEditor(hit);
+        return;
+      }
+      const hitId = engine.on_double_click(x, y);
+      if (hitId) {
+        const [elId, nodeId] = hitId.split(',');
+        if (nodeId && onNodeDoubleClick) {
+          const id = BigInt(elId);
+          onNodeDoubleClick(id, nodeId, engine.get_element_code(id));
+        }
+        syncUi();
+        return;
+      }
+      // Double-click on empty canvas starts a text box (Excalidraw).
+      openTextEditor(null, engine.screen_to_world_x(x), engine.screen_to_world_y(y));
+    },
+    [readOnly, onNodeDoubleClick, openTextEditor, syncUi],
+  );
+
+  // Wheel: native listener so preventDefault works (React's is passive).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !engineReady) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const engine = engineRef.current;
+      if (!engine) return;
+      const { x, y } = localPoint(e);
       const ctrl = e.ctrlKey || e.metaKey;
-      const rect = canvasRef.current!.getBoundingClientRect();
-      const screenX = e.clientX - rect.left;
-      const screenY = e.clientY - rect.top;
-      const newZoom = engineRef.current.on_wheel(e.deltaX, e.deltaY, ctrl, screenX, screenY);
-      if (ctrl) updateZoom(Math.round(newZoom * 100));
-    }, [updateZoom]);
+      // Shift+wheel scrolls horizontally on mice without a horizontal wheel.
+      const dx = e.shiftKey && !e.deltaX ? e.deltaY : e.deltaX;
+      const dy = e.shiftKey && !e.deltaX ? 0 : e.deltaY;
+      const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.clientHeight : 1;
+      const z = engine.on_wheel(dx * scale, dy * scale, ctrl, x, y);
+      if (ctrl) updateZoom(z);
+      else if (draftRef.current) setViewTick((t) => t + 1);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [engineReady, updateZoom]);
 
-    // ── Keyboard shortcuts ────────────────────────────────────────────────
-    useEffect(() => {
+  // ── Actions ─────────────────────────────────────────────────────────────
+  const act = useCallback(
+    (fn: (e: AerialEngine) => void) => {
+      const e = engineRef.current;
+      if (!e) return;
+      fn(e);
+      e.render();
+      syncUi();
+    },
+    [syncUi],
+  );
+  const undo = useCallback(() => act((e) => e.undo()), [act]);
+  const redo = useCallback(() => act((e) => e.redo()), [act]);
+  const deleteSelected = useCallback(() => act((e) => e.delete_selected()), [act]);
+  const duplicateSelected = useCallback(() => act((e) => e.duplicate_selected()), [act]);
+  const reorderSelected = useCallback((a: 'front' | 'forward' | 'backward' | 'back') => act((e) => e.reorder_selected(a)), [act]);
+  const zoomIn = useCallback(() => engineRef.current && updateZoom(engineRef.current.zoom_in()), [updateZoom]);
+  const zoomOut = useCallback(() => engineRef.current && updateZoom(engineRef.current.zoom_out()), [updateZoom]);
+  const resetView = useCallback(() => engineRef.current && updateZoom(engineRef.current.reset_view()), [updateZoom]);
+  const toggleLock = useCallback(() => {
+    setToolLocked((l) => {
+      engineRef.current?.set_tool_locked(!l);
+      return !l;
+    });
+  }, []);
+
+  const insertImageFile = useCallback(
+    (file: File) => {
+      if (!file.type.startsWith('image/')) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const e = engineRef.current;
+          const canvas = canvasRef.current;
+          if (!e || !canvas) return;
+          const zoom = e.get_zoom() || 1;
+          const max = 600 / zoom;
+          const k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+          const w = img.naturalWidth * k;
+          const h = img.naturalHeight * k;
+          const cx = e.screen_to_world_x(canvas.clientWidth / 2);
+          const cy = e.screen_to_world_y(canvas.clientHeight / 2);
+          e.add_image(img, cx - w / 2, cy - h / 2, w, h, `img-${Date.now().toString(36)}`);
+          e.render();
+          applyTool('select');
+        };
+        img.src = String(reader.result);
+      };
+      reader.readAsDataURL(file);
+    },
+    [applyTool],
+  );
+
+  const insertImage = useCallback(() => {
+    if (onInsertImage) onInsertImage();
+    else fileInputRef.current?.click();
+  }, [onInsertImage]);
+
+  const exportPngBlob = useCallback(
+    () =>
+      new Promise<Blob>((resolve, reject) => {
+        const canvas = canvasRef.current;
+        const e = engineRef.current;
+        if (!canvas) return reject(new Error('Canvas not available'));
+        // Selection chrome is painted on the same canvas: clear it first.
+        e?.deselect();
+        e?.render();
+        syncUi();
+        canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Failed to export PNG'))), 'image/png');
+      }),
+    [syncUi],
+  );
+
+  // ── Keyboard ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const toolKeys: Record<string, ToolId | 'image' | 'pen'> = {};
+    for (const t of MAIN_TOOLS) {
+      const id = t.id === 'freedraw' ? 'pen' : t.id;
+      if (t.key) toolKeys[t.key.toLowerCase()] = id;
+      if (t.num) toolKeys[t.num] = id;
+    }
+    toolKeys.x = 'pen';
+    toolKeys.k = 'laser_pen';
+    toolKeys.w = 'magic_pen';
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.set_modifiers(e.shiftKey, e.altKey);
+      if (isEditable(e.target) || draftRef.current || e.defaultPrevented) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      const sel = selectionRef.current;
+
+      if (mod) {
+        if (key === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) redo();
+          else undo();
+        } else if (key === 'y') {
+          e.preventDefault();
+          redo();
+        } else if (readOnly) {
+          return;
+        } else if (key === 'd' && sel.count > 0) {
+          e.preventDefault();
+          duplicateSelected();
+        } else if (key === 'a') {
+          e.preventDefault();
+          if (toolRef.current !== 'select') applyTool('select');
+          act((en) => en.select_all());
+        } else if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+          if (sel.count === 0) return;
+          e.preventDefault();
+          const fwd = e.code === 'BracketRight';
+          reorderSelected(e.shiftKey ? (fwd ? 'front' : 'back') : fwd ? 'forward' : 'backward');
+        } else if (key === '=' || key === '+') {
+          e.preventDefault();
+          zoomIn();
+        } else if (key === '-') {
+          e.preventDefault();
+          zoomOut();
+        } else if (key === '0') {
+          e.preventDefault();
+          resetView();
+        }
+        return;
+      }
+      if (e.altKey) return;
+
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (!e.repeat && toolRef.current !== 'hand' && !drawingPointerRef.current) {
+          spaceToolRef.current = toolRef.current;
+          applyTool('hand', false);
+        }
+        return;
+      }
+      if (e.key === '?') {
+        if (onHelp) {
+          e.preventDefault();
+          onHelp();
+        }
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (sel.count > 0) act((en) => en.deselect());
+        return;
+      }
       if (readOnly) return;
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-          engineRef.current?.delete_selected();
-          setSelectedTextEl(null);
-        }
-        if (e.key === 'Enter') {
-          if (selectedTextEl) {
-            e.preventDefault();
-            setTypingText({
-              elementId: selectedTextEl.id,
-              screenX: selectedTextEl.screenX,
-              screenY: selectedTextEl.screenY,
-              worldX: selectedTextEl.worldX,
-              worldY: selectedTextEl.worldY,
-              value: selectedTextEl.value,
-              fontSize: selectedTextEl.fontSize,
-              fontFamily: selectedTextEl.fontFamily,
-              color: selectedTextEl.color,
-              width: selectedTextEl.width,
-              height: selectedTextEl.height,
-            });
-            setSelectedTextEl(null);
-            return;
-          }
-          if (activeTool === 'select' && engineRef.current) {
-            const elJson = engineRef.current.get_selected_element_json();
-            if (elJson) {
-              try {
-                const el = JSON.parse(elJson);
-                if (el.kind && el.kind.toLowerCase() === 'text') {
-                  e.preventDefault();
-                  const sx = engineRef.current.world_to_screen_x(el.x);
-                  const sy = engineRef.current.world_to_screen_y(el.y);
-                  setTypingText({
-                    elementId: BigInt(el.id),
-                    screenX: Math.round(sx),
-                    screenY: Math.round(sy),
-                    worldX: el.x,
-                    worldY: el.y,
-                    value: el.text || '',
-                    fontSize: el.font_size || 28,
-                    fontFamily: el.font_family || "'Inter', sans-serif",
-                    color: el.stroke_color || strokeColor,
-                    width: Math.max(260, Math.round((el.w || 260) * (engineRef.current.get_zoom() || 1))),
-                    height: Math.max(100, Math.round((el.h || 100) * (engineRef.current.get_zoom() || 1))),
-                  });
-                  setSelectedTextEl(null);
-                  return;
-                }
-              } catch (_) {}
-            }
-          }
-        }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (sel.count > 0) {
           e.preventDefault();
-          if (e.shiftKey) engineRef.current?.redo();
-          else engineRef.current?.undo();
+          deleteSelected();
         }
-        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
-          e.preventDefault();
-          engineRef.current?.redo();
-        }
-        if (e.key === ' ') {
-          e.preventDefault();
-          if (activeTool !== 'hand') {
-            prevToolRef.current = activeTool;
-            setActiveTool('hand');
-            engineRef.current?.set_tool_hand();
-          }
-        }
-        if (e.key.toLowerCase() === 'e' || e.key === '9') {
-          if (activeTool === 'eraser') {
-            e.preventDefault();
-            cycleEraserType();
-          }
-        }
-        if (e.key === 'Escape') {
-          setShowSettings(false);
-          setSelectedTextEl(null);
-        }
-      };
-      const handleKeyUp = (e: KeyboardEvent) => {
-        if (e.key === ' ') {
-          const prev = prevToolRef.current;
-          if (prev) {
-            setActiveTool(prev);
-            applyTool(prev, true);
-            prevToolRef.current = null;
-          }
-        }
-      };
-      document.addEventListener('keydown', handleKeyDown);
-      document.addEventListener('keyup', handleKeyUp);
-      return () => {
-        document.removeEventListener('keydown', handleKeyDown);
-        document.removeEventListener('keyup', handleKeyUp);
-      };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [readOnly, activeTool, selectedTextEl, strokeColor, cycleEraserType]);
-
-    // ── Cursor class ──────────────────────────────────────────────────────
-    const cursorClass =
-      activeTool === 'hand'   ? 'cursor-grab' :
-      activeTool === 'select' ? 'cursor-default' :
-      activeTool === 'eraser' ? 'cursor-none' :
-      'cursor-crosshair';
-
-    // ── Imperative ref API ────────────────────────────────────────────────
-    const refApi = useRef<AerialCanvasRef | null>(null);
-
-    const apiInstance: AerialCanvasRef = {
-      getSceneJson: () => engineRef.current?.get_scene_json() ?? '{}',
-      loadSceneJson: (json: string) => {
-        engineRef.current?.load_scene_json(json);
-        engineRef.current?.render();
-      },
-      exportFullState: () => engineRef.current?.export_full_state() ?? new Uint8Array(),
-      importFullState: (bytes: Uint8Array) => {
-        engineRef.current?.import_full_state(bytes);
-        engineRef.current?.render();
-      },
-      addDiagram: async (code: string, rawSvg: string, scale = 1.0, accentColor = '#e73f07') => {
-        if (!engineRef.current) return;
-
-        try {
-          const style = isDarkMode ? 'brutalist' : 'industrial_light';
-          const cleanSvg = applyAraskovaDiagramAesthetics(rawSvg, isDarkMode, style, accentColor);
-
-          let svgW = 600;
-          let svgH = 400;
-          if (typeof DOMParser !== 'undefined') {
-            try {
-              const parser = new DOMParser();
-              const doc = parser.parseFromString(cleanSvg, 'image/svg+xml');
-              const svgEl = doc.querySelector('svg');
-              if (svgEl) {
-                const vb = svgEl.getAttribute('viewBox');
-                if (vb) {
-                  const parts = vb.trim().split(/[\s,]+/).map(parseFloat);
-                  if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
-                    svgW = Math.round(parts[2]);
-                    svgH = Math.round(parts[3]);
-                  }
-                } else {
-                  const wAttr = parseFloat(svgEl.getAttribute('width') || '0');
-                  const hAttr = parseFloat(svgEl.getAttribute('height') || '0');
-                  if (wAttr > 0 && hAttr > 0) {
-                    svgW = Math.round(wAttr);
-                    svgH = Math.round(hAttr);
-                  }
-                }
-              }
-            } catch (e) {
-              logger.warn('SVG parse error in addDiagram:', e);
-            }
-          }
-
-          const img = await renderSvgToImage(cleanSvg);
-          const baseW = svgW || img.naturalWidth || 600;
-          const baseH = svgH || img.naturalHeight || 400;
-          const w = Math.round(baseW * scale);
-          const h = Math.round(baseH * scale);
-
-          // Position at the visible center of the screen
-          const cx = window.innerWidth / 2;
-          const cy = window.innerHeight / 2;
-          const wx = engineRef.current ? engineRef.current.screen_to_world_x(cx - w / 2) : 100;
-          const wy = engineRef.current ? engineRef.current.screen_to_world_y(cy - h / 2) : 100;
-
-          const svg64 = btoa(unescape(encodeURIComponent(cleanSvg)));
-          const dataUrl = 'data:image/svg+xml;base64,' + svg64;
-
-          engineRef.current?.add_diagram(img, wx, wy, w, h, code, dataUrl, '{}');
-          engineRef.current?.set_accent_color(accentColor);
-          engineRef.current?.render();
-          logger.info(`Inserted diagram at (${wx.toFixed(1)}, ${wy.toFixed(1)}) size (${w}x${h})`);
-        } catch (err) {
-          logger.error('Error in addDiagram:', err);
-        }
-      },
-      scaleSelected: (factor: number) => {
-        engineRef.current?.scale_selected(factor);
-        engineRef.current?.render();
-      },
-      setAccentColor: (color: string) => {
-        engineRef.current?.set_accent_color(color);
-        engineRef.current?.render();
-      },
-      addText: (text: string, x = 250, y = 250, size = 28, color?: string, fontFamily?: string) => {
-        engineRef.current?.add_text(text, x, y, size, fontFamily || "'Inter', sans-serif", color);
-        engineRef.current?.render();
-      },
-      convertMagicStrokes: () => convertMagicStrokes(),
-      exportPngBlob: () => {
-        return new Promise<Blob>((resolve, reject) => {
-          const canvas = canvasRef.current;
-          if (!canvas) return reject(new Error('Canvas not available'));
-          canvas.toBlob((blob) => {
-            if (blob) resolve(blob);
-            else reject(new Error('Failed to export PNG'));
-          }, 'image/png');
-        });
-      },
-      exportSvgString: () => {
-        return new Promise<string>((resolve, reject) => {
-          const canvas = canvasRef.current;
-          if (!canvas) return reject(new Error('Canvas not available'));
-          const dataUrl = canvas.toDataURL('image/png');
-          const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}"><image href="${dataUrl}" width="${canvas.width}" height="${canvas.height}"/></svg>`;
-          resolve(svg);
-        });
-      },
-      clearBoard: () => {
-        engineRef.current?.clear_board();
-        engineRef.current?.render();
-      },
-      zoomIn: () => {
-        if (engineRef.current) updateZoom(Math.round(engineRef.current.zoom_in() * 100));
-      },
-      zoomOut: () => {
-        if (engineRef.current) updateZoom(Math.round(engineRef.current.zoom_out() * 100));
-      },
-      resetView: () => {
-        if (engineRef.current) updateZoom(Math.round(engineRef.current.reset_view() * 100));
-      },
-      getZoom: () => {
-        if (!engineRef.current) return zoomLevel;
-        return Math.round(engineRef.current.get_zoom() * 100);
-      },
-      setTool: (tool: ToolId) => applyTool(tool, false),
-      setStrokeColor: (color: string) => changeColor(color),
-      setStrokeWidth: (width: number) => changeWidth(width),
-      setEraserType: (type: 'stroke' | 'precision' | 'element') => changeEraserType(type),
-      setEraserSize: (size: number) => changeEraserSize(size),
-      undo: () => { engineRef.current?.undo(); },
-      redo: () => { engineRef.current?.redo(); },
-      deleteSelected: () => { engineRef.current?.delete_selected(); },
-      setDarkMode: (isDark: boolean) => {
-        engineRef.current?.set_dark_mode(isDark);
-        rethemeDiagrams(isDark);
-        engineRef.current?.render();
-      },
-      setBackgroundColor: (color: string) => {
-        if (engineRef.current) {
-          if (typeof (engineRef.current as any).set_background_color === 'function') {
-            (engineRef.current as any).set_background_color(color);
-          }
-          engineRef.current.render();
-        }
-      },
-      getEngine: () => engineRef.current,
-      addImage: (img, x, y, w, h, assetId) => {
-        engineRef.current?.add_image(img, x, y, w, h, assetId);
-        engineRef.current?.render();
-      },
+        return;
+      }
+      if (e.key === 'Enter' && sel.count === 1 && sel.kinds[0] === 'Text') {
+        e.preventDefault();
+        openTextEditor(parseElement(engine.get_selected_element_json()));
+        return;
+      }
+      if (e.key.startsWith('Arrow') && sel.count > 0) {
+        e.preventDefault();
+        const step = e.shiftKey ? 5 : 1;
+        const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+        const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+        act((en) => en.nudge_selected(dx, dy));
+        return;
+      }
+      if (e.repeat || e.shiftKey) return;
+      if (key === 'q') {
+        toggleLock();
+        return;
+      }
+      const target = toolKeys[key];
+      if (!target) return;
+      e.preventDefault();
+      if (target === 'image') insertImage();
+      else if (target === 'pen') applyTool(isPen(toolRef.current) ? toolRef.current : styleRef.current.lastPen);
+      else applyTool(target);
     };
 
-    refApi.current = apiInstance;
-    useImperativeHandle(ref, () => apiInstance, [selectTool, changeColor, changeWidth, fontFamily, updateZoom, zoomLevel]);
+    const onKeyUp = (e: KeyboardEvent) => {
+      engineRef.current?.set_modifiers(e.shiftKey, e.altKey);
+      if (e.key === ' ' && spaceToolRef.current) {
+        const prev = spaceToolRef.current;
+        spaceToolRef.current = null;
+        applyTool(prev, false);
+      }
+    };
 
-    // ── Render ────────────────────────────────────────────────────────────
-    return (
-      <div
-        className={`relative w-full h-full overflow-hidden select-none ${isDarkMode ? 'dark' : ''} ${className}`}
-        style={{ background: backgroundColor || 'var(--background, #fff)' }}
-      >
-        {/* Loading overlay */}
-        {!engineReady && !loadError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background z-10">
-            <div className="flex flex-col items-center gap-4">
-              <div className="flex gap-1.5 items-center justify-center h-7">
-                <div className="w-2.5 h-2.5 rounded-full bg-[#6366f1] animate-bounce [animation-delay:-0.3s]" />
-                <div className="w-2.5 h-2.5 rounded-full bg-[#6366f1] animate-bounce [animation-delay:-0.15s]" />
-                <div className="w-2.5 h-2.5 rounded-full bg-[#6366f1] animate-bounce" />
-              </div>
-              <p className="text-[10px] text-muted-foreground font-mono tracking-[0.2em] uppercase">Loading Engine…</p>
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('keyup', onKeyUp);
+    };
+  }, [readOnly, act, applyTool, deleteSelected, duplicateSelected, insertImage, onHelp, openTextEditor, redo, reorderSelected, resetView, toggleLock, undo, zoomIn, zoomOut]);
+
+  // ── Cursor ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    c.style.cursor =
+      activeTool === 'hand' ? 'grab' : activeTool === 'select' ? 'default' : activeTool === 'eraser' ? 'none' : activeTool === 'text' ? 'text' : 'crosshair';
+  }, [activeTool]);
+
+  // ── Imperative API ──────────────────────────────────────────────────────
+  const api: AerialCanvasRef = {
+    getSceneJson: () => engineRef.current?.get_scene_json() ?? '{}',
+    loadSceneJson: (json) => act((e) => e.load_scene_json(json)),
+    exportFullState: () => engineRef.current?.export_full_state() ?? new Uint8Array(),
+    takeChanges: () => engineRef.current?.take_changes() ?? '{"reset":false,"upserts":[],"deletes":[]}',
+    getElementCount: () => engineRef.current?.element_count() ?? 0,
+    getRenderStats: () => {
+      try {
+        return JSON.parse(engineRef.current?.get_render_stats() ?? '{}');
+      } catch {
+        return {};
+      }
+    },
+    setLodThreshold: (px) => engineRef.current?.set_lod_threshold(px),
+    importFullState: (bytes) => act((e) => e.import_full_state(bytes)),
+    addDiagram: async (code, rawSvg, scale = 1.0, accentColor = '#e73f07') => {
+      const engine = engineRef.current;
+      const canvas = canvasRef.current;
+      if (!engine || !canvas) return;
+      try {
+        const style = isDark ? 'brutalist' : 'industrial_light';
+        const cleanSvg = applyAraskovaDiagramAesthetics(rawSvg, isDark, style, accentColor);
+        let svgW = 600;
+        let svgH = 400;
+        const svgEl = new DOMParser().parseFromString(cleanSvg, 'image/svg+xml').querySelector('svg');
+        if (svgEl) {
+          const vb = svgEl.getAttribute('viewBox')?.trim().split(/[\s,]+/).map(parseFloat);
+          if (vb && vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
+            svgW = Math.round(vb[2]);
+            svgH = Math.round(vb[3]);
+          } else {
+            const w = parseFloat(svgEl.getAttribute('width') || '0');
+            const h = parseFloat(svgEl.getAttribute('height') || '0');
+            if (w > 0 && h > 0) {
+              svgW = Math.round(w);
+              svgH = Math.round(h);
+            }
+          }
+        }
+        const img = await renderSvgToImage(cleanSvg);
+        const w = Math.round((svgW || img.naturalWidth || 600) * scale);
+        const h = Math.round((svgH || img.naturalHeight || 400) * scale);
+        const wx = engine.screen_to_world_x(canvas.clientWidth / 2) - w / 2;
+        const wy = engine.screen_to_world_y(canvas.clientHeight / 2) - h / 2;
+        engine.add_diagram(img, wx, wy, w, h, code, svgDataUrl(cleanSvg), '{}');
+        engine.set_accent_color(accentColor);
+        engine.render();
+        syncUi();
+      } catch (err) {
+        logger.error('Error in addDiagram:', err);
+      }
+    },
+    scaleSelected: (factor) => act((e) => e.scale_selected(factor)),
+    setAccentColor: (color) => act((e) => e.set_accent_color(color)),
+    addText: (text, x = 250, y = 250, size = 28, color, fontFamily) =>
+      act((e) => e.add_text(text, x, y, size, fontFamily || styleRef.current.fontFamily, color)),
+    convertMagicStrokes: () => convertMagicStrokes(),
+    exportPngBlob,
+    exportSvgString: async () => {
+      const canvas = canvasRef.current;
+      if (!canvas) throw new Error('Canvas not available');
+      await exportPngBlob();
+      const dataUrl = canvas.toDataURL('image/png');
+      return `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}"><image href="${dataUrl}" width="${canvas.width}" height="${canvas.height}"/></svg>`;
+    },
+    clearBoard: () => act((e) => e.clear_board()),
+    zoomIn,
+    zoomOut,
+    resetView,
+    getZoom: () => (engineRef.current ? Math.round(engineRef.current.get_zoom() * 100) : zoomLevel),
+    setTool: (tool) => applyTool(tool, false),
+    setStrokeColor: (color) => applyStyleChange({ strokeColor: color }),
+    setStrokeWidth: (width) => applyStyleChange({ strokeWidth: width }),
+    setEraserType: (type) => {
+      engineRef.current?.set_eraser_type?.(type);
+      if (type !== 'element') applyEraser({ eraserMode: type });
+    },
+    setEraserSize: (size) => applyEraser({ eraserSize: size }),
+    undo,
+    redo,
+    deleteSelected,
+    setDarkMode: (dark) => {
+      engineRef.current?.set_dark_mode(dark);
+      engineRef.current?.render();
+      void rethemeDiagrams(dark);
+    },
+    setBackgroundColor: (color) => engineRef.current?.set_background_color(color),
+    getEngine: () => engineRef.current,
+    addImage: (img, x, y, w, h, assetId) => act((e) => e.add_image(img, x, y, w, h, assetId)),
+    applyStyle: applyStyleChange,
+    getSelectionInfo: () => selectionRef.current,
+    selectAll: () => {
+      if (toolRef.current !== 'select') applyTool('select');
+      act((e) => e.select_all());
+    },
+    duplicateSelected,
+    reorderSelected,
+    setToolLocked: (locked) => {
+      engineRef.current?.set_tool_locked(locked);
+      setToolLocked(locked);
+    },
+    getUiStyle: () => styleRef.current,
+  };
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  useImperativeHandle(ref, () => api);
+
+  useEffect(() => {
+    if (engineReady) onReady?.(apiRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineReady]);
+
+  // ── Render ──────────────────────────────────────────────────────────────
+  const engine = engineRef.current;
+  const draftScreen =
+    textDraft && engine ? { x: engine.world_to_screen_x(textDraft.worldX), y: engine.world_to_screen_y(textDraft.worldY), zoom: engine.get_zoom() || 1 } : null;
+
+  const diagramSelected = activeTool === 'select' && selection.count === 1 && selection.kinds[0] === 'Diagram' && diagramAccent !== null;
+  const extra: ReactNode = (
+    <>
+      {diagramSelected && (
+        <>
+          <fieldset className="ae-section" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <legend className="ae-section__label" style={{ padding: 0, marginBottom: 6 }}>
+              Diagram accent
+            </legend>
+            <ColorPicker value={diagramAccent} quick={DIAGRAM_ACCENTS} onChange={(c) => void recolorDiagram(c)} />
+          </fieldset>
+          <fieldset className="ae-section" style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <legend className="ae-section__label" style={{ padding: 0, marginBottom: 6 }}>
+              Size
+            </legend>
+            <div className="ae-options">
+              <button type="button" className="ae-opt" title="Shrink 10%" aria-label="Shrink diagram" onClick={() => api.scaleSelected?.(0.9)}>
+                <MinusIcon />
+              </button>
+              <button type="button" className="ae-opt" title="Grow 10%" aria-label="Grow diagram" onClick={() => api.scaleSelected?.(1.1)}>
+                <PlusIcon />
+              </button>
             </div>
-          </div>
-        )}
+          </fieldset>
+        </>
+      )}
+      {panelExtra?.(activeTool)}
+    </>
+  );
+  const hasExtra = diagramSelected || !!panelExtra?.(activeTool);
 
-        {/* Error overlay */}
-        {loadError && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background z-10">
-            <div className="text-center p-6 max-w-sm">
-              <p className="text-sm font-semibold text-foreground mb-2">Engine failed to load</p>
-              <p className="text-xs text-muted-foreground font-mono bg-muted p-3 rounded-lg break-all">{loadError}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Canvas */}
-        <canvas
-          id={canvasId}
-          ref={canvasRef}
-          style={{ background: backgroundColor || 'transparent' }}
-          className={`block w-full h-full touch-none select-none ${cursorClass}`}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onPointerLeave={onPointerLeave}
-          onPointerEnter={onPointerEnter}
-          onDoubleClick={onDoubleClick}
-          onWheel={onWheel}
+  const defaultMenu = useMemo(
+    () => (close: () => void) => (
+      <>
+        <MenuItem
+          icon={<ExportIcon />}
+          label="Export image"
+          onSelect={() => {
+            close();
+            void apiRef.current.exportPngBlob().then((blob) => {
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = 'aerial.png';
+              a.click();
+              setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            });
+          }}
         />
+        <MenuSeparator />
+        <MenuItem
+          icon={<TrashIcon />}
+          label="Reset the canvas"
+          danger
+          onSelect={() => {
+            close();
+            apiRef.current.clearBoard();
+          }}
+        />
+      </>
+    ),
+    [],
+  );
 
-        {/* Eraser cursor */}
-        {activeTool === 'eraser' && (
-          <div
-            ref={eraserCursorRef}
-            className="pointer-events-none absolute top-0 left-0 z-30 will-change-transform"
-            style={{
-              width: eraserSize,
-              height: eraserSize,
-              display: 'none',
-            }}
-          >
-            <svg viewBox="0 0 40 40" width={eraserSize} height={eraserSize} className="overflow-visible">
-              <circle
-                cx="20"
-                cy="20"
-                r="18"
-                fill={isDarkMode ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'}
-                stroke={eraserType === 'precision' ? '#e73f07' : isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'}
-                strokeWidth={eraserType === 'precision' ? '2' : '1.5'}
-                strokeDasharray={eraserType === 'stroke' ? '4 2' : eraserType === 'precision' ? undefined : '2 2'}
-              />
-              {eraserType === 'precision' ? (
-                <>
-                  <line x1="15" y1="20" x2="25" y2="20" stroke="#e73f07" strokeWidth="1.5" strokeLinecap="round" />
-                  <line x1="20" y1="15" x2="20" y2="25" stroke="#e73f07" strokeWidth="1.5" strokeLinecap="round" />
-                  <circle cx="20" cy="20" r="1.5" fill="#e73f07" />
-                </>
-              ) : eraserType === 'element' ? (
-                <>
-                  <rect x="14" y="14" width="12" height="12" rx="2" fill="none" stroke={isDarkMode ? '#ffffff' : '#000000'} strokeWidth="1.5" />
-                </>
-              ) : (
-                <>
-                  <line x1="14" y1="20" x2="26" y2="20" stroke={isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'} strokeWidth="1.5" strokeLinecap="round" />
-                  <line x1="20" y1="14" x2="20" y2="26" stroke={isDarkMode ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)'} strokeWidth="1.5" strokeLinecap="round" />
-                </>
-              )}
-            </svg>
-          </div>
-        )}
+  return (
+    <div
+      className={`ae-root ${className}`}
+      data-theme={isDark ? 'dark' : 'light'}
+      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', userSelect: 'none', background: paper }}
+    >
+      <canvas
+        id={canvasId}
+        ref={canvasRef}
+        aria-label="Drawing canvas"
+        style={{ display: 'block', width: '100%', height: '100%', touchAction: 'none' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onPointerLeave={onPointerLeave}
+        onDoubleClick={onDoubleClick}
+        onContextMenu={(e) => e.preventDefault()}
+      />
 
-        {/* Draggable & Droppable Text Box with Readjustment Features */}
-        {typingText && (
-          <AerialDraggableTextBox
-            initialText={typingText.value}
-            screenX={typingText.screenX}
-            screenY={typingText.screenY}
-            initialFontSize={typingText.fontSize || 28}
-            initialFontFamily={typingText.fontFamily || "'Inter', sans-serif"}
-            initialColor={typingText.color || strokeColor}
-            initialWidth={typingText.width || 320}
-            initialHeight={typingText.height || 140}
-            isDarkMode={isDarkMode}
-            onCommit={(data) => {
-              const engine = engineRef.current;
-              if (engine) {
-                const wx = engine.screen_to_world_x(data.screenX);
-                const wy = engine.screen_to_world_y(data.screenY);
-                if (typingText.elementId != null) {
-                  engine.update_text_element(
-                    typingText.elementId,
-                    data.text,
-                    wx,
-                    wy,
-                    data.fontSize,
-                    data.fontFamily,
-                    data.color
-                  );
-                } else {
-                  engine.add_text(data.text, wx, wy, data.fontSize, data.fontFamily, data.color);
-                }
-                engine.render();
-                selectTool('select');
-              }
-              setTypingText(null);
-            }}
-            onCancel={() => setTypingText(null)}
-            onDragMove={(newSx, newSy) => {
-              if (engineRef.current) {
-                const wx = engineRef.current.screen_to_world_x(newSx);
-                const wy = engineRef.current.screen_to_world_y(newSy);
-                setTypingText((prev) =>
-                  prev ? { ...prev, screenX: newSx, screenY: newSy, worldX: wx, worldY: wy } : null
-                );
-              }
-            }}
-          />
-        )}
-        {selectedTextEl && !typingText && activeTool === 'select' && (
-          <div
-            style={{
-              position: 'absolute',
-              left: `${selectedTextEl.screenX}px`,
-              top: `${Math.max(12, selectedTextEl.screenY - 42)}px`,
-              zIndex: 45,
-            }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--card)]/95 backdrop-blur-md border border-[#e73f07] shadow-xl text-xs font-mono text-[var(--foreground)] animate-in fade-in zoom-in-95 duration-150"
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setTypingText({
-                  elementId: selectedTextEl.id,
-                  screenX: selectedTextEl.screenX,
-                  screenY: selectedTextEl.screenY,
-                  worldX: selectedTextEl.worldX,
-                  worldY: selectedTextEl.worldY,
-                  value: selectedTextEl.value,
-                  fontSize: selectedTextEl.fontSize,
-                  fontFamily: selectedTextEl.fontFamily,
-                  color: selectedTextEl.color,
-                  width: selectedTextEl.width,
-                  height: selectedTextEl.height,
-                });
-                setSelectedTextEl(null);
-              }}
-              className="flex items-center gap-1.5 text-xs font-sans font-semibold text-[#e73f07] hover:underline cursor-pointer"
-            >
-              <Edit3 size={13} />
-              <span>EDIT TEXT</span>
-            </button>
-            <span className="text-[10px] text-brand-gray font-mono pl-1 border-l border-brand-border">Press ↵ Enter</span>
-          </div>
-        )}
+      {activeTool === 'eraser' && (
+        <div
+          ref={eraserCursorRef}
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: uiStyle.eraserSize,
+            height: uiStyle.eraserSize,
+            borderRadius: '50%',
+            pointerEvents: 'none',
+            opacity: 0,
+            zIndex: 12,
+            willChange: 'transform',
+            border: `1.5px solid ${isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.6)'}`,
+            background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+            boxShadow: `0 0 0 1px ${isDark ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.8)'}`,
+          }}
+        />
+      )}
 
-        {/* Floating HUD for Selected Diagram */}
-        {selectedDiagramEl && activeTool === 'select' && (
-          <div
-            style={{
-              position: 'absolute',
-              left: `${Math.max(12, selectedDiagramEl.screenX)}px`,
-              top: `${Math.max(12, selectedDiagramEl.screenY - 48)}px`,
-              zIndex: 45,
-            }}
-            className="flex items-center gap-1.5 p-1.5 rounded-2xl bg-[#0a0a0a]/95 border border-[#2a2a2a] shadow-2xl backdrop-blur-md animate-in fade-in zoom-in-95 duration-150 pointer-events-auto"
-          >
-            <span className="px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider text-[#81868b] border-r border-[#2a2a2a]">
-              Diagram
-            </span>
+      {textDraft && draftScreen && (
+        <InlineTextEditor
+          key={`${String(textDraft.elementId)}-${textDraft.worldX}-${textDraft.worldY}`}
+          draft={textDraft}
+          screenX={draftScreen.x}
+          screenY={draftScreen.y}
+          zoom={draftScreen.zoom}
+          displayColor={themedColor(textDraft.color, isDark)}
+          onCommit={commitText}
+        />
+      )}
 
-            {/* Quick Scale Buttons */}
-            <div className="flex items-center gap-1 px-1">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!engineRef.current) return;
-                  engineRef.current.scale_selected(0.9);
-                  engineRef.current.render();
-                  const elJson = engineRef.current.get_selected_element_json();
-                  if (elJson) {
-                    try {
-                      const el = JSON.parse(elJson);
-                      const sx = engineRef.current.world_to_screen_x(el.x);
-                      const sy = engineRef.current.world_to_screen_y(el.y);
-                      setSelectedDiagramEl(prev => prev ? {
-                        ...prev,
-                        screenX: Math.round(sx),
-                        screenY: Math.round(sy),
-                        worldX: el.x,
-                        worldY: el.y,
-                        width: Math.round((el.w || 600) * (engineRef.current!.get_zoom() || 1)),
-                        height: Math.round((el.h || 400) * (engineRef.current!.get_zoom() || 1)),
-                      } : null);
-                    } catch (_) {}
-                  }
-                }}
-                title="Scale Down 10%"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-mono font-bold text-[#f3f3f2] hover:bg-[#1f1f1f] border border-[#2a2a2a] transition-all cursor-pointer"
-              >
-                <Minus size={12} />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!engineRef.current) return;
-                  engineRef.current.scale_selected(1.1);
-                  engineRef.current.render();
-                  const elJson = engineRef.current.get_selected_element_json();
-                  if (elJson) {
-                    try {
-                      const el = JSON.parse(elJson);
-                      const sx = engineRef.current.world_to_screen_x(el.x);
-                      const sy = engineRef.current.world_to_screen_y(el.y);
-                      setSelectedDiagramEl(prev => prev ? {
-                        ...prev,
-                        screenX: Math.round(sx),
-                        screenY: Math.round(sy),
-                        worldX: el.x,
-                        worldY: el.y,
-                        width: Math.round((el.w || 600) * (engineRef.current!.get_zoom() || 1)),
-                        height: Math.round((el.h || 400) * (engineRef.current!.get_zoom() || 1)),
-                      } : null);
-                    } catch (_) {}
-                  }
-                }}
-                title="Scale Up 10%"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-mono font-bold text-[#f3f3f2] hover:bg-[#1f1f1f] border border-[#2a2a2a] transition-all cursor-pointer"
-              >
-                <Plus size={12} />
-              </button>
+      {showWelcome && engineReady && isEmpty && !textDraft && <WelcomeScreen logo={logo ?? <span>Aerial</span>} items={welcomeItems} hasHelp={!!onHelp} />}
+
+      {showToolbar && engineReady && (
+        <div className="ae-layer">
+          <div className="ae-top">
+            <div className="ae-row" style={{ alignItems: 'flex-start' }}>
+              <MainMenu>{menu ?? defaultMenu}</MainMenu>
             </div>
-
-            {/* Color Palette Swatches */}
-            <div className="flex items-center gap-1 px-1 border-l border-[#2a2a2a]">
-              {[
-                { color: '#e73f07', name: 'Araskova Orange' },
-                { color: '#0ea5e9', name: 'Electric Cyan' },
-                { color: '#10b981', name: 'Emerald Green' },
-                { color: '#8b5cf6', name: 'Radiant Violet' },
-                { color: '#f59e0b', name: 'Cyber Amber' },
-                { color: '#ef4444', name: 'Crimson Red' },
-                { color: '#f3f3f2', name: 'Crisp White' },
-              ].map((swatch) => (
-                <button
-                  key={swatch.color}
-                  type="button"
-                  onClick={async () => {
-                    if (!engineRef.current || !selectedDiagramEl || !selectedDiagramEl.code) return;
-                    try {
-                      const style = isDarkMode ? 'brutalist' : 'industrial_light';
-                      mermaid.initialize(getAraskovaMermaidConfig(isDarkMode, style, swatch.color));
-                      const id = 'mermaid-recolor-' + Math.random().toString(36).substring(2, 9);
-                      const { svg } = await mermaid.render(id, selectedDiagramEl.code);
-                      const styledSvg = applyAraskovaDiagramAesthetics(svg, isDarkMode, style, swatch.color);
-                      const img = await renderSvgToImage(styledSvg);
-                      const numId = Number(selectedDiagramEl.id);
-
-                      engineRef.current.set_cached_image(numId, img);
-                      engineRef.current.set_accent_color(swatch.color);
-
-                      const sceneJson = engineRef.current.get_scene_json();
-                      if (sceneJson) {
-                        try {
-                          const parsed = JSON.parse(sceneJson);
-                          const target = parsed.elements?.find((e: any) => BigInt(e.id) === selectedDiagramEl.id);
-                          if (target) {
-                            target.stroke_color = swatch.color;
-                            target.svg = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(styledSvg)));
-                            engineRef.current.load_scene_json(JSON.stringify(parsed));
-                            engineRef.current.set_cached_image(numId, img);
-                            engineRef.current.set_selected_id(numId);
-                          }
-                        } catch (_) {}
-                      }
-                      engineRef.current.render();
-                      setSelectedDiagramEl(prev => prev ? { ...prev, accentColor: swatch.color } : null);
-                    } catch (err) {
-                      logger.error('Failed to update diagram accent color:', err);
-                    }
-                  }}
-                  title={swatch.name}
-                  style={{ backgroundColor: swatch.color }}
-                  className={`w-5 h-5 rounded-full border transition-all cursor-pointer shadow-xs ${
-                    selectedDiagramEl.accentColor.toLowerCase() === swatch.color.toLowerCase()
-                      ? 'border-white scale-110 ring-2 ring-white/30'
-                      : 'border-white/20 hover:scale-110 active:scale-95'
-                  }`}
+            {!readOnly && (
+              <div className="ae-top-center">
+                <Toolbar
+                  activeTool={activeTool}
+                  lastPen={uiStyle.lastPen}
+                  locked={toolLocked}
+                  onToggleLock={toggleLock}
+                  onSelectTool={(t) => applyTool(t)}
+                  onInsertImage={insertImage}
+                  extraTools={extraTools}
                 />
-              ))}
-              <label
-                title="Custom Color"
-                className="relative w-5 h-5 rounded-full border border-white/30 flex items-center justify-center cursor-pointer overflow-hidden bg-gradient-to-tr from-pink-500 via-purple-500 to-cyan-500 hover:scale-110 transition-transform"
-              >
-                <input
-                  type="color"
-                  value={selectedDiagramEl.accentColor}
-                  className="opacity-0 absolute inset-0 cursor-pointer w-full h-full"
-                  onChange={async (e) => {
-                    const customCol = e.target.value;
-                    if (!engineRef.current || !selectedDiagramEl || !selectedDiagramEl.code) return;
-                    try {
-                      const style = isDarkMode ? 'brutalist' : 'industrial_light';
-                      mermaid.initialize(getAraskovaMermaidConfig(isDarkMode, style, customCol));
-                      const id = 'mermaid-recolor-' + Math.random().toString(36).substring(2, 9);
-                      const { svg } = await mermaid.render(id, selectedDiagramEl.code);
-                      const styledSvg = applyAraskovaDiagramAesthetics(svg, isDarkMode, style, customCol);
-                      const img = await renderSvgToImage(styledSvg);
-                      const numId = Number(selectedDiagramEl.id);
-
-                      engineRef.current.set_cached_image(numId, img);
-                      engineRef.current.set_accent_color(customCol);
-
-                      const sceneJson = engineRef.current.get_scene_json();
-                      if (sceneJson) {
-                        try {
-                          const parsed = JSON.parse(sceneJson);
-                          const target = parsed.elements?.find((e: any) => BigInt(e.id) === selectedDiagramEl.id);
-                          if (target) {
-                            target.stroke_color = customCol;
-                            target.svg = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(styledSvg)));
-                            engineRef.current.load_scene_json(JSON.stringify(parsed));
-                            engineRef.current.set_cached_image(numId, img);
-                            engineRef.current.set_selected_id(numId);
-                          }
-                        } catch (_) {}
-                      }
-                      engineRef.current.render();
-                      setSelectedDiagramEl(prev => prev ? { ...prev, accentColor: customCol } : null);
-                    } catch (err) {
-                      logger.error('Failed to update diagram accent color:', err);
-                    }
-                  }}
-                />
-              </label>
-            </div>
-
-            {/* Delete Button */}
-            <div className="pl-1 border-l border-[#2a2a2a]">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!engineRef.current) return;
-                  engineRef.current.delete_selected();
-                  engineRef.current.render();
-                  setSelectedDiagramEl(null);
-                }}
-                title="Delete Diagram"
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-[#ef4444] hover:bg-red-950/40 border border-transparent hover:border-red-900/50 transition-all cursor-pointer"
-              >
-                <Trash2 size={13} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Magic Pen Guided Baseline & Handwriting HUD */}
-        {activeTool === 'magic_pen' && (
-          <div className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2.5 px-3.5 py-1.5 rounded-full bg-[var(--card)]/90 backdrop-blur-xl border border-[#e73f07]/80 shadow-lg text-[10px] font-mono tracking-wider text-[var(--foreground)] uppercase animate-in fade-in slide-in-from-top-2 duration-300">
-            <span className={`w-2 h-2 rounded-full bg-[#e73f07] ${isConvertingMagic ? 'animate-ping' : 'animate-pulse'}`} />
-            <span>
-              {isConvertingMagic
-                ? 'Converting handwriting to text…'
-                : `Magic Pen · ${magicLanguage?.toUpperCase() || 'EN'} · Straight-Line Guide`}
-            </span>
-          </div>
-        )}
-
-        {/* Eraser Mode & Size HUD */}
-        {activeTool === 'eraser' && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-[var(--card)]/90 backdrop-blur-xl border border-[var(--border)] shadow-xl animate-in fade-in slide-in-from-bottom-3 duration-200 pointer-events-auto">
-            <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold px-1 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#e73f07] animate-pulse" />
-              Eraser
-            </span>
-            <div className="w-px h-4 bg-[var(--border)]" />
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => changeEraserType('stroke')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase font-bold tracking-wider transition-all cursor-pointer ${
-                  eraserType === 'stroke'
-                    ? 'bg-[#e73f07] text-white shadow-sm'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
-                }`}
-                title="Whole Stroke: Erases the entire stroke upon touch"
-              >
-                Stroke
-              </button>
-              <button
-                type="button"
-                onClick={() => changeEraserType('precision')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase font-bold tracking-wider transition-all cursor-pointer ${
-                  eraserType === 'precision'
-                    ? 'bg-[#e73f07] text-white shadow-sm'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
-                }`}
-                title="Precision: Surgically cuts and trims exact points inside the circle"
-              >
-                Precision
-              </button>
-              <button
-                type="button"
-                onClick={() => changeEraserType('element')}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase font-bold tracking-wider transition-all cursor-pointer ${
-                  eraserType === 'element'
-                    ? 'bg-[#e73f07] text-white shadow-sm'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
-                }`}
-                title="Object: Erases entire shapes, text, diagram or images upon touch"
-              >
-                Object
-              </button>
-            </div>
-            <div className="w-px h-4 bg-[var(--border)]" />
-            <div className="flex items-center gap-1">
-              {[14, 24, 40, 64].map((sz) => (
-                <button
-                  key={sz}
-                  type="button"
-                  onClick={() => changeEraserSize(sz)}
-                  className={`w-6 h-6 rounded-md text-[10px] font-mono font-bold flex items-center justify-center transition-all cursor-pointer ${
-                    eraserSize === sz
-                      ? 'bg-[var(--foreground)] text-[var(--background)] font-black'
-                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--secondary)]'
-                  }`}
-                  title={`${sz}px size`}
-                >
-                  {sz === 14 ? 'S' : sz === 24 ? 'M' : sz === 40 ? 'L' : 'XL'}
-                </button>
-              ))}
-            </div>
-            <span className="hidden sm:inline-block text-[9px] font-mono text-[var(--muted-foreground)]/80 pl-1">
-              (Tap E to cycle)
-            </span>
-          </div>
-        )}
-
-        {/* Built-in toolbar (optional) */}
-        {showToolbar && engineReady && (
-          <div className="absolute inset-0 z-50 pointer-events-none">
-            <AerialToolbar
-              activeTool={activeTool}
-              onSelectTool={selectTool}
-            />
-            <AerialZoomBar
-              zoomLevel={zoomLevel}
-              onZoomIn={() => apiInstance.zoomIn()}
-              onZoomOut={() => apiInstance.zoomOut()}
-              onResetView={() => apiInstance.resetView()}
-              onUndo={() => engineRef.current?.undo()}
-              onRedo={() => engineRef.current?.redo()}
-            />
-            {showSettings && (
-              <AerialSettingsPopover
-                activeTool={activeTool}
-                strokeColor={strokeColor}
-                strokeWidth={strokeWidth}
-                eraserSize={eraserSize}
-                fountainSharpness={fountainSharpness}
-                isRough={isRough}
-                isCurved={isCurved}
-                onChangeColor={changeColor}
-                onChangeWidth={changeWidth}
-                onChangeEraserSize={(s) => {
-                  setEraserSize(s);
-                  engineRef.current?.set_stroke_width(s / 4);
-                }}
-                onChangeSharpness={changeSharpness}
-                onChangeRough={(rough) => {
-                  setIsRough(rough);
-                  engineRef.current?.set_is_rough(rough);
-                }}
-                onChangeCurved={(curved) => {
-                  setIsCurved(curved);
-                  engineRef.current?.set_is_curved(curved);
-                }}
-                backgroundColor={backgroundColor}
-                onChangeBackgroundColor={(color) => {
-                  if (onChangeBackgroundColor) {
-                    onChangeBackgroundColor(color);
-                  } else {
-                    apiInstance.setBackgroundColor(color);
-                  }
-                }}
-              />
+              </div>
             )}
+            <div className="ae-row">{topRight}</div>
           </div>
-        )}
-      </div>
-    );
-  },
-);
+
+          {!readOnly && (
+            <PropertiesPanel
+                tool={activeTool}
+                selection={selection}
+                style={uiStyle}
+                onChange={applyStyleChange}
+                onPenChange={(p) => applyTool(p)}
+                onEraser={applyEraser}
+                onLayer={reorderSelected}
+                onDuplicate={duplicateSelected}
+                onDelete={deleteSelected}
+                extra={hasExtra ? extra : undefined}
+              />
+          )}
+
+          <div className="ae-bottom">
+            <ZoomBar
+              zoom={zoomLevel}
+              onZoomIn={zoomIn}
+              onZoomOut={zoomOut}
+              onReset={resetView}
+              onUndo={undo}
+              onRedo={redo}
+              canUndo={canUndo && !readOnly}
+              canRedo={canRedo && !readOnly}
+            />
+            {onHelp && <HelpButton onClick={onHelp} />}
+          </div>
+        </div>
+      )}
+
+      {isConvertingMagic && (
+        <div className="ae-toast" role="status">
+          Recognizing handwriting…
+        </div>
+      )}
+
+      {!engineReady && !loadError && (
+        <div role="status" aria-label="Loading canvas" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', zIndex: 30 }}>
+          <span className="ae-spinner" />
+        </div>
+      )}
+      {loadError && (
+        <div role="alert" style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', zIndex: 30, padding: 24 }}>
+          <div className="ae-dialog" style={{ position: 'static' }}>
+            <h2>Canvas failed to load</h2>
+            <p style={{ wordBreak: 'break-all', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>{loadError}</p>
+          </div>
+        </div>
+      )}
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) insertImageFile(f);
+          e.target.value = '';
+        }}
+      />
+    </div>
+  );
+});

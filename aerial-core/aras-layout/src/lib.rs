@@ -1,8 +1,46 @@
 use aras_dsl::ast::{Diagram, Stmt, Group};
 use std::collections::HashMap;
 
-pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64, f64)>) {
-    let mut hit_map: HashMap<String, (f64, f64, f64, f64)> = HashMap::new();
+/// Escapes text for use as SVG/XML character data or a quoted attribute.
+/// Diagram source is user- or LLM-supplied and the SVG is injected into the
+/// DOM, so every interpolated string must pass through here.
+pub fn escape_xml(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Accepts only plain colour values (`#hex`, named colours, `rgb()/hsl()`
+/// functional notation). Anything else falls back to `default`.
+pub fn safe_color<'a>(value: Option<&'a str>, default: &'a str) -> &'a str {
+    match value {
+        Some(v)
+            if !v.is_empty()
+                && v.len() <= 48
+                && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '#' | '(' | ')' | ',' | '.' | '%' | ' '))
+                && !v.to_ascii_lowercase().contains("url") =>
+        {
+            v
+        }
+        _ => default,
+    }
+}
+
+/// Node id → (x, y, width, height) in SVG user units.
+pub type HitMap = HashMap<String, (f64, f64, f64, f64)>;
+
+pub fn render_svg(diagram: &Diagram) -> (String, HitMap) {
+    let mut hit_map: HitMap = HashMap::new();
     let mut nodes: Vec<(String, String)> = Vec::new(); // (id, label)
     let mut groups: Vec<Group> = Vec::new();
     let mut connections: Vec<(String, String, Option<String>)> = Vec::new(); // (from, to, label)
@@ -86,7 +124,7 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
 
     // Calculate canvas size
     let max_x = unique_nodes.len().min(cols) as f64 * (node_width + gap_x) + start_x + 100.0;
-    let rows = (unique_nodes.len() + cols - 1) / cols;
+    let rows = unique_nodes.len().div_ceil(cols);
     let max_y = rows as f64 * (node_height + gap_y) + start_y + 100.0;
 
     let mut svg = String::new();
@@ -126,7 +164,7 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
             ));
             svg.push_str(&format!(
                 "<text x=\"{:.1}\" y=\"{:.1}\" font-family=\"'Space Mono', monospace\" font-size=\"10\" font-weight=\"700\" letter-spacing=\"0.15em\" text-transform=\"uppercase\" fill=\"#e73f07\">// SYS.{}</text>",
-                min_gx + 12.0, min_gy + 20.0, group.name.to_uppercase()
+                min_gx + 12.0, min_gy + 20.0, escape_xml(&group.name.to_uppercase())
             ));
         }
     }
@@ -153,18 +191,18 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
                 ));
                 svg.push_str(&format!(
                     "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" font-family=\"'Space Mono', monospace\" font-size=\"9\" font-weight=\"700\" letter-spacing=\"0.1em\" text-transform=\"uppercase\" fill=\"#e73f07\">{}</text>",
-                    mid_x, mid_y, lbl
+                    mid_x, mid_y, escape_xml(lbl)
                 ));
             }
         }
     }
 
     // Draw Nodes (Crisp High-Contrast Machinery Cards)
-    for (_idx, (id, label)) in unique_nodes.iter().enumerate() {
+    for (id, label) in unique_nodes.iter() {
         if let Some(&(x, y)) = node_positions.get(id) {
             let style_map = styles.get(id);
-            let fill = style_map.and_then(|m| m.get("fill")).map(|s| s.as_str()).unwrap_or("#18181b");
-            let stroke = style_map.and_then(|m| m.get("stroke")).map(|s| s.as_str()).unwrap_or("#3f3f46");
+            let fill = safe_color(style_map.and_then(|m| m.get("fill")).map(|s| s.as_str()), "#18181b");
+            let stroke = safe_color(style_map.and_then(|m| m.get("stroke")).map(|s| s.as_str()), "#3f3f46");
 
             // Main node card — crisp, zero drop shadow
             svg.push_str(&format!(
@@ -175,11 +213,43 @@ pub fn render_svg(diagram: &Diagram) -> (String, HashMap<String, (f64, f64, f64,
             // Node title text — bright crisp white
             svg.push_str(&format!(
                 "<text x=\"{:.1}\" y=\"{:.1}\" text-anchor=\"middle\" font-family=\"'Inter', 'Roboto', sans-serif\" font-size=\"13\" font-weight=\"700\" letter-spacing=\"-0.01em\" fill=\"#f4f4f5\">{}</text>",
-                x + node_width / 2.0, y + node_height / 2.0 + 4.5, label
+                x + node_width / 2.0, y + node_height / 2.0 + 4.5, escape_xml(label)
             ));
         }
     }
 
     svg.push_str("</svg>");
     (svg, hit_map)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_and_styles_cannot_inject_markup() {
+        let src = r#"@type: architecture
+group "<script>alert(1)</script>" {
+[a]: "<img src=x onerror=alert(1)>"
+}
+[a] --> [b]: "</text><script>x</script>"
+style [a] { fill: "red\" onload=\"alert(1)", stroke: "url(javascript:alert(1))" }
+"#;
+        let diagram = aras_dsl::parse(src).expect("parses");
+        let (svg, _) = render_svg(&diagram);
+        assert!(!svg.contains("<script"), "{svg}");
+        assert!(!svg.contains("<img"), "{svg}");
+        assert!(!svg.contains("onload"), "{svg}");
+        assert!(!svg.contains("javascript"), "{svg}");
+        assert!(svg.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    }
+
+    #[test]
+    fn safe_color_allowlist() {
+        assert_eq!(safe_color(Some("#e73f07"), "d"), "#e73f07");
+        assert_eq!(safe_color(Some("rgb(1, 2, 3)"), "d"), "rgb(1, 2, 3)");
+        assert_eq!(safe_color(Some("red\" x=\"1"), "d"), "d");
+        assert_eq!(safe_color(Some("url(#x)"), "d"), "d");
+        assert_eq!(safe_color(None, "d"), "d");
+    }
 }

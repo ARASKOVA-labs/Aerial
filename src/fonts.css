@@ -1,0 +1,50 @@
+/* Self-hosted fonts for the desktop app (bundled by Vite). Loading from
+ * fonts.googleapis.com leaked users' IPs to Google, failed offline, and is
+ * blocked by the CSP. Kept out of index.css so the npm library's aerial.css
+ * stays small — embedders choose their own fonts (the stacks have fallbacks). */
+@import '@fontsource/inter/latin-400.css';
+@import '@fontsource/inter/latin-ext-400.css';
+@import '@fontsource/inter/latin-500.css';
+@import '@fontsource/inter/latin-ext-500.css';
+@import '@fontsource/inter/latin-600.css';
+@import '@fontsource/inter/latin-ext-600.css';
+@import '@fontsource/inter/latin-700.css';
+@import '@fontsource/inter/latin-ext-700.css';
+@import '@fontsource/inter/latin-800.css';
+@import '@fontsource/inter/latin-ext-800.css';
+@import '@fontsource/inter/latin-900.css';
+@import '@fontsource/inter/latin-ext-900.css';
+@import '@fontsource/roboto/latin-400.css';
+@import '@fontsource/roboto/latin-ext-400.css';
+@import '@fontsource/roboto/latin-500.css';
+@import '@fontsource/roboto/latin-ext-500.css';
+@import '@fontsource/roboto/latin-700.css';
+@import '@fontsource/roboto/latin-ext-700.css';
+@import '@fontsource/roboto/latin-900.css';
+@import '@fontsource/roboto/latin-ext-900.css';
+@import '@fontsource/caveat/latin-400.css';
+@import '@fontsource/caveat/latin-ext-400.css';
+@import '@fontsource/caveat/latin-500.css';
+@import '@fontsource/caveat/latin-ext-500.css';
+@import '@fontsource/caveat/latin-600.css';
+@import '@fontsource/caveat/latin-ext-600.css';
+@import '@fontsource/caveat/latin-700.css';
+@import '@fontsource/caveat/latin-ext-700.css';
+@import '@fontsource/kalam/latin-300.css';
+@import '@fontsource/kalam/latin-ext-300.css';
+@import '@fontsource/kalam/latin-400.css';
+@import '@fontsource/kalam/latin-ext-400.css';
+@import '@fontsource/kalam/latin-700.css';
+@import '@fontsource/kalam/latin-ext-700.css';
+@import '@fontsource/space-grotesk/latin-400.css';
+@import '@fontsource/space-grotesk/latin-ext-400.css';
+@import '@fontsource/space-grotesk/latin-500.css';
+@import '@fontsource/space-grotesk/latin-ext-500.css';
+@import '@fontsource/space-grotesk/latin-600.css';
+@import '@fontsource/space-grotesk/latin-ext-600.css';
+@import '@fontsource/space-grotesk/latin-700.css';
+@import '@fontsource/space-grotesk/latin-ext-700.css';
+@import '@fontsource/space-mono/latin-400.css';
+@import '@fontsource/space-mono/latin-ext-400.css';
+@import '@fontsource/space-mono/latin-700.css';
+@import '@fontsource/space-mono/latin-ext-700.css';

@@ -1,0 +1,9 @@
+.git
+target
+node_modules
+dist
+public
+src-tauri/gen
+src-tauri/icons
+**/*.log
+*.base64

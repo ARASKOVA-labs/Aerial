@@ -67,11 +67,12 @@ fn parse_single_stmt(line: &str) -> Option<Stmt> {
     // Style statement: style [id] { icon: "client" }
     if line.starts_with("style ") {
         if let Some(bracket_start) = line.find('[') {
-            if let Some(bracket_end) = line.find(']') {
+            if let Some(rel_end) = line[bracket_start..].find(']') {
+                let bracket_end = bracket_start + rel_end;
                 let id_str = &line[bracket_start + 1..bracket_end];
                 let mut props = Vec::new();
                 if let Some(brace_start) = line.find('{') {
-                    if let Some(brace_end) = line.rfind('}') {
+                    if let Some(brace_end) = line.rfind('}').filter(|&e| e > brace_start) {
                         let content = &line[brace_start + 1..brace_end];
                         for pair in content.split(',') {
                             let pair = pair.trim();
@@ -122,7 +123,7 @@ fn parse_single_stmt(line: &str) -> Option<Stmt> {
     }
 
     // Simple Node reference: [id]
-    if line.starts_with('[') && line.ends_with(']') {
+    if line.len() >= 2 && line.starts_with('[') && line.ends_with(']') {
         let id = line[1..line.len() - 1].trim().to_string();
         if !id.is_empty() {
             return Some(Stmt::Node(NodeId(id)));
@@ -134,7 +135,7 @@ fn parse_single_stmt(line: &str) -> Option<Stmt> {
 
 fn extract_node_id(s: &str) -> Option<String> {
     let s = s.trim();
-    if s.starts_with('[') && s.ends_with(']') {
+    if s.len() >= 2 && s.starts_with('[') && s.ends_with(']') {
         Some(s[1..s.len() - 1].trim().to_string())
     } else {
         None
@@ -143,9 +144,31 @@ fn extract_node_id(s: &str) -> Option<String> {
 
 fn extract_quoted_string(s: &str) -> Option<String> {
     let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
+    if s.len() >= 2 && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\''))) {
         Some(s[1..s.len() - 1].to_string())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_input_never_panics() {
+        for src in [
+            "[a]: \"", "[", "]", "[]", "style ][", "style [a] }{", "style [a] { fill: \" }", "[a] --> ", "--> [b]",
+            "group \"x\" {", "group", "[a] --> [b]: \"", "'", "\"", "[a]:", "style [", "\u{0}\u{1}",
+            "[é]: \"ü\"", "style [ü] { k: 'v' }",
+        ] {
+            let _ = parse(src);
+        }
+    }
+
+    #[test]
+    fn parses_the_documented_format() {
+        let d = parse("@type: flowchart\n[a]: \"A\"\n[a] --> [b]: \"go\"\nstyle [a] { icon: \"server\" }").unwrap();
+        assert_eq!(d.stmts.len(), 4);
     }
 }

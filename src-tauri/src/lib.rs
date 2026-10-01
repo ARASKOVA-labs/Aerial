@@ -1,162 +1,86 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{State, Window};
+//! Aerial desktop shell.
+//!
+//! IPC surface (all inputs validated in `security`):
+//!   boards   load_board_scene · save_board_changes · delete_board
+//!   assets   save_asset · load_asset · read_dropped_image
+//!   diagrams render_diagram · update_diagram_node · openrouter_generate
+//!   window   hide_window
 
-use futures::StreamExt;
-use redb::{Database, TableDefinition};
-use std::path::PathBuf;
+mod ai;
+mod diagram;
+mod security;
+mod storage;
+
 use std::sync::Arc;
 
-mod diagram;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use tauri::{Emitter, Manager, State, Window};
 
-// ─── OpenRouter ────────────────────────────────────────────────────────────────
-
-const ARAS_SYSTEM_PROMPT: &str = r##"You are an expert diagram generator. Output ONLY raw ArasDiagram DSL code. No markdown, no explanation, no code fences, no preamble.
-
-STRICT RULES — violating ANY of these will break the parser:
-1. Node IDs: single words, NO spaces. Use underscores. [api_gateway] ✓  [api gateway] ✗
-2. Arrows: ONLY use -->. Never use ->, =>, >, or any variant.
-3. Labels: ALWAYS use double quotes after a colon. [a] --> [b]: "label" ✓
-4. @type must be EXACTLY one of: architecture, flowchart
-5. Groups: ALWAYS write `group "Name" {` with a SPACE before the quote. NEVER write group"Name"{
-6. Opening braces { MUST be on the SAME LINE as the group/style declaration.
-7. Closing braces } MUST be on their OWN LINE — never on the same line as another statement.
-8. Each statement (node, connection, group, style) MUST be on its OWN LINE.
-9. NO <think> or </think> blocks. NO markdown fences.
-
-Example output (copy this exact format):
-@type: architecture
-group "Frontend" {
-[browser]: "Web Browser"
-[cdn]: "CDN"
-}
-group "Backend" {
-[api]: "API Gateway"
-[db]: "PostgreSQL DB"
-}
-[browser] --> [cdn]: "Static Assets"
-[browser] --> [api]: "HTTPS"
-[api] --> [db]: "SQL Query"
-style [browser] { icon: "client" }
-style [api] { icon: "server" }
-style [db] { icon: "database" }
-"##;
-
-#[tauri::command]
-async fn openrouter_generate(
-    window: Window,
-    model: String,
-    prompt: String,
-    api_key: String,
-) -> Result<String, String> {
-    let client = reqwest::Client::new();
-
-    let body = serde_json::json!({
-        "model": model,
-        "stream": true,
-        "messages": [
-            { "role": "system", "content": ARAS_SYSTEM_PROMPT },
-            { "role": "user", "content": prompt }
-        ]
-    });
-
-    let response = client
-        .post("https://openrouter.ai/api/v1/chat/completions")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .header("HTTP-Referer", "https://araskova.com")
-        .header("X-Title", "Aerial by Araskova")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenRouter error {}: {}", status, text));
-    }
-
-    let mut stream = response.bytes_stream();
-    let mut full = String::new();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| e.to_string())?;
-        let text = String::from_utf8_lossy(&chunk);
-
-        for line in text.lines() {
-            if let Some(data) = line.strip_prefix("data: ") {
-                if data == "[DONE]" {
-                    break;
-                }
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                    if let Some(tok) = json["choices"][0]["delta"]["content"].as_str() {
-                        full.push_str(tok);
-                        let _ = window.emit("rustama://token", tok);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(full)
-}
-
-const BOARDS_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("boards_v2");
+use security::{image_mime_for, DropGrants, MAX_DROPPED_FILE_BYTES};
+use storage::Store;
 
 struct AppState {
-    db: Arc<Database>,
-    app_data_dir: PathBuf,
+    store: Arc<Store>,
+    drops: DropGrants,
+}
+
+/// Runs blocking storage work on the blocking pool, off the async runtime.
+async fn blocking<T: Send + 'static>(
+    state: &State<'_, AppState>,
+    f: impl FnOnce(&Store) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let store = Arc::clone(&state.store);
+    tokio::task::spawn_blocking(move || f(&store)).await.map_err(|_| "storage task failed".to_string())?
 }
 
 #[tauri::command]
-fn save_board(state: State<'_, AppState>, payload_b64: String, board_id: Option<String>) -> Result<(), String> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    let payload = STANDARD.decode(&payload_b64).map_err(|e| e.to_string())?;
-    let key = board_id.unwrap_or_else(|| "default_board".to_string());
+async fn load_board_scene(state: State<'_, AppState>, board_id: String) -> Result<Option<String>, String> {
+    blocking(&state, move |s| s.load_scene(&board_id)).await
+}
 
-    let write_txn = state.db.begin_write().map_err(|e| e.to_string())?;
-    {
-        let mut table = write_txn
-            .open_table(BOARDS_TABLE)
-            .map_err(|e| e.to_string())?;
-        table
-            .insert(key.as_str(), payload.as_slice())
-            .map_err(|e| e.to_string())?;
+#[tauri::command]
+async fn save_board_changes(state: State<'_, AppState>, board_id: String, changes: String) -> Result<(), String> {
+    blocking(&state, move |s| s.apply_changes(&board_id, &changes)).await
+}
+
+#[tauri::command]
+async fn delete_board(state: State<'_, AppState>, board_id: String) -> Result<usize, String> {
+    blocking(&state, move |s| s.delete_board(&board_id)).await
+}
+
+#[tauri::command]
+async fn save_asset(state: State<'_, AppState>, id: String, base64_data: String) -> Result<(), String> {
+    blocking(&state, move |s| s.save_asset(&id, &base64_data)).await
+}
+
+#[tauri::command]
+async fn load_asset(state: State<'_, AppState>, id: String) -> Result<String, String> {
+    blocking(&state, move |s| s.load_asset(&id)).await
+}
+
+/// Reads an image the user just dropped onto the window and returns it as a
+/// data URL. Only paths reported by the OS drop event in the last minute are
+/// readable, only image extensions are accepted, and size is capped.
+#[tauri::command]
+async fn read_dropped_image(state: State<'_, AppState>, path: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(path);
+    if !state.drops.is_granted(&path) {
+        tracing::warn!(target: "audit", "rejected read of a path that was not dropped by the user");
+        return Err("file was not dropped onto Aerial".to_string());
     }
-    write_txn.commit().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn load_board(state: State<'_, AppState>, board_id: Option<String>) -> Result<Option<Vec<u8>>, String> {
-    let key = board_id.unwrap_or_else(|| "default_board".to_string());
-    let read_txn = state.db.begin_read().map_err(|e| e.to_string())?;
-    let table = read_txn
-        .open_table(BOARDS_TABLE)
-        .map_err(|e| e.to_string())?;
-
-    match table.get(key.as_str()).map_err(|e| e.to_string())? {
-        Some(guard) => Ok(Some(guard.value().to_vec())),
-        None => Ok(None),
+    let mime = image_mime_for(&path).ok_or("unsupported file type")?;
+    let meta = std::fs::metadata(&path).map_err(|_| "file not readable".to_string())?;
+    if !meta.is_file() || meta.len() > MAX_DROPPED_FILE_BYTES {
+        return Err("file is too large or not a regular file".to_string());
     }
-}
-
-#[tauri::command]
-fn save_asset(state: State<'_, AppState>, id: String, base64_data: String) -> Result<(), String> {
-    let assets_dir = state.app_data_dir.join("assets");
-    std::fs::create_dir_all(&assets_dir).map_err(|e| e.to_string())?;
-
-    let file_path = assets_dir.join(&id);
-    std::fs::write(file_path, base64_data).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-fn load_asset(state: State<'_, AppState>, id: String) -> Result<String, String> {
-    let file_path = state.app_data_dir.join("assets").join(&id);
-    std::fs::read_to_string(file_path).map_err(|e| e.to_string())
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
+        .await
+        .map_err(|_| "read failed".to_string())?
+        .map_err(|_| "file not readable".to_string())?;
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
 #[tauri::command]
@@ -164,23 +88,47 @@ fn hide_window(window: Window) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
 
-use tauri::{Manager, Emitter};
+fn show_main(app: &tauri::AppHandle, quick_note: bool) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        if quick_note {
+            let _ = window.emit("quick-canvas:open", true);
+        }
+    }
+}
+
+fn init_tracing() {
+    // Structured logs to stderr. `audit` target lines record security-relevant
+    // events (rejected input, deletions, AI requests) without user content.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(true)
+        .try_init();
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_http::init());
+    init_tracing();
 
-    #[cfg(desktop)]
-    let builder = builder.on_window_event(|window, event| {
-        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-            // Keep app resident in background with near-zero memory footprint
+    let builder = tauri::Builder::default().plugin(tauri_plugin_http::init());
+
+    let builder = builder.on_window_event(|window, event| match event {
+        tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+            if let Some(state) = window.try_state::<AppState>() {
+                state.drops.grant(paths);
+            }
+        }
+        #[cfg(desktop)]
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            // Keep the app resident in the background (menu bar / tray).
             let _ = window.hide();
             api.prevent_close();
         }
+        _ => {}
     });
 
     #[cfg(desktop)]
@@ -188,120 +136,92 @@ pub fn run() {
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(|app, _shortcut, event| {
                 if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.unminimize();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        let _ = window.emit("quick-canvas:open", true);
-                    }
+                    show_main(app, true);
                 }
             })
             .build(),
     );
 
-    builder
+    let result = builder
         .setup(|app| {
-            let app_data_dir = app
-                .path()
-                .app_data_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
-            std::fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
-            let db_path = app_data_dir.join("aerial_store.redb");
-            let db = Database::create(db_path).map_err(|e| e.to_string())?;
-
-            let write_txn = db.begin_write().map_err(|e| e.to_string())?;
-            {
-                let _ = write_txn
-                    .open_table(BOARDS_TABLE)
-                    .map_err(|e| e.to_string())?;
-            }
-            write_txn.commit().map_err(|e| e.to_string())?;
-
-            app.manage(AppState {
-                db: Arc::new(db),
-                app_data_dir,
-            });
+            let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+            let store = Store::open(&app_data_dir)?;
+            app.manage(AppState { store: Arc::new(store), drops: DropGrants::default() });
 
             #[cfg(desktop)]
-            {
-                use tauri_plugin_global_shortcut::GlobalShortcutExt;
-                // Register global shortcuts: Alt+Space and Super+Shift+A for instant desktop Quick Canvas
-                if let Ok(shortcut) = "alt+space".parse::<tauri_plugin_global_shortcut::Shortcut>() {
-                    let _ = app.global_shortcut().register(shortcut);
-                }
-                if let Ok(shortcut) = "super+shift+a".parse::<tauri_plugin_global_shortcut::Shortcut>() {
-                    let _ = app.global_shortcut().register(shortcut);
-                }
-
-                // Setup Menu Bar Tray Icon for laptop users & background status
-                use tauri::menu::{Menu, MenuItem};
-                use tauri::tray::{TrayIconBuilder, TrayIconEvent};
-
-                if let (Ok(note_i), Ok(show_i), Ok(quit_i)) = (
-                    MenuItem::with_id(app, "quick_note", "Quick Note (⌥Space / ⌘⇧N)", true, None::<&str>),
-                    MenuItem::with_id(app, "show", "Open Aerial Canvas", true, None::<&str>),
-                    MenuItem::with_id(app, "quit", "Quit Aerial", true, None::<&str>),
-                ) {
-                    if let Ok(menu) = Menu::with_items(app, &[&note_i, &show_i, &quit_i]) {
-                        let mut tray_builder = TrayIconBuilder::new()
-                            .menu(&menu)
-                            .show_menu_on_left_click(false)
-                            .on_menu_event(|app, event| {
-                                match event.id.as_ref() {
-                                    "quit" => {
-                                        app.exit(0);
-                                    }
-                                    "show" => {
-                                        if let Some(window) = app.get_webview_window("main") {
-                                            let _ = window.unminimize();
-                                            let _ = window.show();
-                                            let _ = window.set_focus();
-                                        }
-                                    }
-                                    "quick_note" => {
-                                        if let Some(window) = app.get_webview_window("main") {
-                                            let _ = window.unminimize();
-                                            let _ = window.show();
-                                            let _ = window.set_focus();
-                                            let _ = window.emit("quick-canvas:open", true);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            })
-                            .on_tray_icon_event(|tray, event| {
-                                if let TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, button_state: tauri::tray::MouseButtonState::Up, .. } = event {
-                                    let app = tray.app_handle();
-                                    if let Some(window) = app.get_webview_window("main") {
-                                        let _ = window.unminimize();
-                                        let _ = window.show();
-                                        let _ = window.set_focus();
-                                        let _ = window.emit("quick-canvas:open", true);
-                                    }
-                                }
-                            });
-
-                        if let Some(icon) = app.default_window_icon() {
-                            tray_builder = tray_builder.icon(icon.clone());
-                        }
-
-                        let _ = tray_builder.build(app);
-                    }
-                }
-            }
-
+            setup_desktop(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            save_board,
-            load_board,
+            load_board_scene,
+            save_board_changes,
+            delete_board,
             save_asset,
             load_asset,
+            read_dropped_image,
             hide_window,
-            openrouter_generate,
+            ai::openrouter_generate,
             diagram::render_diagram,
             diagram::update_diagram_node
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    if let Err(e) = result {
+        tracing::error!(error = %e, "Aerial failed to start");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(desktop)]
+fn setup_desktop(app: &tauri::App) {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Global shortcuts for the instant Quick Canvas.
+    for combo in ["alt+space", "super+shift+a"] {
+        match combo.parse::<tauri_plugin_global_shortcut::Shortcut>() {
+            Ok(shortcut) => {
+                if let Err(e) = app.global_shortcut().register(shortcut) {
+                    tracing::warn!(combo, error = %e, "global shortcut unavailable");
+                }
+            }
+            Err(e) => tracing::warn!(combo, error = %e, "invalid shortcut"),
+        }
+    }
+
+    // Menu bar tray icon.
+    let items = (
+        MenuItem::with_id(app, "quick_note", "Quick Note (⌥Space / ⌘⇧A)", true, None::<&str>),
+        MenuItem::with_id(app, "show", "Open Aerial Canvas", true, None::<&str>),
+        MenuItem::with_id(app, "quit", "Quit Aerial", true, None::<&str>),
+    );
+    let (Ok(note), Ok(show), Ok(quit)) = items else {
+        tracing::warn!("tray menu items could not be created");
+        return;
+    };
+    let Ok(menu) = Menu::with_items(app, &[&note, &show, &quit]) else {
+        tracing::warn!("tray menu could not be created");
+        return;
+    };
+    let mut tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "quit" => app.exit(0),
+            "show" => show_main(app, false),
+            "quick_note" => show_main(app, true),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_main(tray.app_handle(), true);
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    if let Err(e) = tray.build(app) {
+        tracing::warn!(error = %e, "tray icon could not be created");
+    }
 }

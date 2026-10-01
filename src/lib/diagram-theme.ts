@@ -8,6 +8,8 @@ export interface MermaidThemeConfig {
   theme: 'base';
   themeVariables: Record<string, string | boolean | number>;
   themeCSS: string;
+  /** Always 'strict': diagram source is user/AI supplied and the SVG is injected into the DOM. */
+  securityLevel: 'strict';
 }
 
 /**
@@ -295,6 +297,7 @@ export function getAraskovaMermaidConfig(
     theme: 'base',
     themeVariables,
     themeCSS,
+    securityLevel: 'strict',
   };
 }
 

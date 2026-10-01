@@ -1,6 +1,11 @@
 // ── Aerial Canvas Library — Shared Type Definitions ─────────────────────────
 // These types are the public API surface for the embeddable <AerialCanvas />.
 
+import type { ReactNode } from 'react';
+import type { ExtraTool } from '../ui/Toolbar';
+import type { SelectionInfo, UiStyle } from '../ui/model';
+import type { StyleChange } from '../ui/PropertiesPanel';
+
 // ── Tool Identifiers ────────────────────────────────────────────────────────
 
 /** Tools available in the core canvas component (library-safe, no Tauri deps) */
@@ -8,7 +13,9 @@ export type ToolId =
   | 'select'
   | 'freedraw'
   | 'fountain'
+  | 'marker'
   | 'rectangle'
+  | 'diamond'
   | 'ellipse'
   | 'line'
   | 'arrow'
@@ -28,6 +35,31 @@ export type DesktopToolId = ToolId | 'image' | 'pdf';
 export interface AerialEngine {
   // Tool setters
   set_tool_freedraw: () => void;
+  set_tool_marker: () => void;
+  set_tool_diamond: () => void;
+  set_tool_locked: (locked: boolean) => void;
+  take_tool_switch: () => string | undefined;
+  set_modifiers: (shift: boolean, alt: boolean) => void;
+
+  // Pressure-aware pointer input (pressure < 0 = unknown → simulated)
+  pointer_down: (x: number, y: number, pressure: number) => void;
+  pointer_move: (x: number, y: number, pressure: number) => void;
+  pointer_up: (x: number, y: number) => void;
+
+  // Style & selection
+  apply_style: (json: string) => void;
+  get_style: () => string;
+  get_selection_info: () => string;
+  selection_version: () => number;
+  select_ids: (json: string) => void;
+  select_all: () => void;
+  duplicate_selected: () => void;
+  nudge_selected: (dx: number, dy: number) => void;
+  reorder_selected: (action: string) => void;
+  get_cursor: (x: number, y: number) => string;
+  hide_element: (id: bigint | number) => void;
+  show_all_elements: () => void;
+  set_background_color: (color: string) => void;
   set_tool_rectangle: () => void;
   set_tool_ellipse: () => void;
   set_tool_line: () => void;
@@ -63,8 +95,25 @@ export interface AerialEngine {
   export_full_state: () => Uint8Array;
   import_full_state: (bytes: Uint8Array) => void;
 
-  // Dirty tracking
+  // Change tracking
+  /** @deprecated single-consumer flag; use scene_version() */
   check_and_clear_dirty: () => boolean;
+  /** Monotonic revision, bumped by every scene mutation. */
+  scene_version: () => number;
+  element_count: () => number;
+  /** Drains changes since the last call: {"reset","upserts","deletes"} JSON. O(changed). */
+  take_changes: () => string;
+  has_pending_changes: () => boolean;
+  /** [[elementId, assetId], ...] for asset-backed elements. */
+  get_asset_refs: () => string;
+  last_load_rejected: () => number;
+  can_undo: () => boolean;
+  can_redo: () => boolean;
+
+  // Performance
+  /** CSS px below which zoomed-out content is drawn as density blocks (0 disables). */
+  set_lod_threshold: (px: number) => void;
+  get_render_stats: () => string;
 
   // CRDT / Collaboration
   get_local_state_vector: () => Uint8Array;
@@ -139,8 +188,17 @@ export interface AerialCanvasProps {
   initialScene?: string;
   /** Initial full binary state (takes precedence over initialScene) */
   initialState?: Uint8Array;
-  /** Callback fired whenever strokes or elements are updated */
+  /**
+   * Fired with the full scene JSON after changes. Serialising the whole board
+   * is O(board size) — for large boards prefer `onChanges`.
+   */
   onChange?: (sceneJson: string) => void;
+  /**
+   * Fired with only what changed since the last call
+   * (`{"reset":bool,"upserts":[...],"deletes":[ids]}`). O(changed elements).
+   * Drains the engine's change feed: do not also call `takeChanges()`.
+   */
+  onChanges?: (changesJson: string) => void;
   /** Canvas color theme */
   theme?: 'dark' | 'light';
   /** Custom background color override (e.g. #0a0a0a, #18181b, #0f172a, #ffffff, #fdfbf7) */
@@ -177,6 +235,32 @@ export interface AerialCanvasProps {
   onEraserTypeChange?: (type: 'stroke' | 'precision' | 'element') => void;
   /** Callback when a diagram node is double-clicked (for rename/re-render) */
   onNodeDoubleClick?: (elementId: bigint, nodeId: string, code?: string) => void;
+  /**
+   * Called before a feature sends user content to a third-party service
+   * (currently: Magic Pen handwriting → Google Input Tools). Return false to
+   * cancel. Omit to allow.
+   */
+  onExternalRequest?: (service: 'handwriting') => boolean | Promise<boolean>;
+  /** Content of the hamburger menu (receives a `close` callback). Omit for the default menu. */
+  menu?: ReactNode | ((close: () => void) => ReactNode);
+  /** Extra entries for the toolbar's "more tools" menu. */
+  extraTools?: ExtraTool[];
+  /** Content for the top-right corner. */
+  topRight?: ReactNode;
+  /** Show Excalidraw-style welcome hints while the board is empty. */
+  showWelcome?: boolean;
+  /** Clickable items in the centre of the welcome screen. */
+  welcomeItems?: ReactNode;
+  /** Brand mark shown on the welcome screen. */
+  logo?: ReactNode;
+  /** Called by the help button / `?` key. The button is hidden when omitted. */
+  onHelp?: () => void;
+  /** Overrides the image tool (e.g. to persist the asset first). */
+  onInsertImage?: () => void;
+  /** Fired when the selection changes. */
+  onSelectionChange?: (info: SelectionInfo) => void;
+  /** Extra controls for the properties panel, per active tool. */
+  panelExtra?: (tool: ToolId) => ReactNode;
   /** Callback when canvas receives pointer down (used to dismiss menus/popovers; return true to consume event and suppress drawing) */
   onCanvasPointerDown?: () => boolean | void;
 }
@@ -188,8 +272,15 @@ export interface AerialCanvasRef {
   getSceneJson: () => string;
   /** Load a scene from serialized JSON */
   loadSceneJson: (json: string) => void;
-  /** Export full binary state (includes CRDT history) */
+  /** Export the scene as UTF-8 JSON bytes */
   exportFullState: () => Uint8Array;
+  /** Drain changes since the last call (see `onChanges`). */
+  takeChanges: () => string;
+  getElementCount: () => number;
+  /** Renderer statistics: drawn/batched counts, LOD level, repaint counters, timings. */
+  getRenderStats: () => Record<string, number>;
+  /** CSS px below which zoomed-out content is aggregated (0 disables LOD). */
+  setLodThreshold: (px: number) => void;
   /** Import full binary state */
   importFullState: (bytes: Uint8Array) => void;
   /** Add a diagram element to the canvas */
@@ -240,6 +331,14 @@ export interface AerialCanvasRef {
   getEngine: () => AerialEngine | null;
   /** Add an image element at world coordinates */
   addImage: (img: HTMLImageElement, x: number, y: number, w: number, h: number, assetId: string) => void;
+  /** Apply style fields to the selection and to new elements. */
+  applyStyle: (change: StyleChange) => void;
+  getSelectionInfo: () => SelectionInfo;
+  selectAll: () => void;
+  duplicateSelected: () => void;
+  reorderSelected: (action: 'front' | 'forward' | 'backward' | 'back') => void;
+  setToolLocked: (locked: boolean) => void;
+  getUiStyle: () => UiStyle;
 }
 
 // ── Toolbar Props ───────────────────────────────────────────────────────────

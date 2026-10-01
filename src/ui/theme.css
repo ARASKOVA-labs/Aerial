@@ -1,0 +1,951 @@
+/* ── Aerial UI ──────────────────────────────────────────────────────────────
+ * Excalidraw-style editor chrome: floating "islands", 36px tool buttons with
+ * number hints, a left properties panel, soft shadows, violet accent.
+ * Scoped to .ae-root so it never leaks into a host app.
+ */
+
+.ae-root {
+  --ae-font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ae-hand: Kalam, Caveat, "Comic Sans MS", cursive;
+  --ae-primary: #6965db;
+  --ae-primary-darker: #5b57d1;
+  --ae-primary-light: #e0dfff;
+  --ae-on-primary-light: #030064;
+  --ae-surface: #ffffff;
+  --ae-surface-low: #f2f2f6;
+  --ae-surface-high: #f1f0ff;
+  --ae-hover: #f1f0ff;
+  --ae-text: #1b1b1f;
+  --ae-text-muted: #707077;
+  --ae-hint: #a8a8b0;
+  --ae-divider: #e6e6ec;
+  --ae-danger: #e03131;
+  --ae-danger-bg: #fff0f0;
+  --ae-shadow: 0 0 0.9px rgba(0, 0, 0, 0.17), 0 0 3.1px rgba(0, 0, 0, 0.08), 0 7px 14px rgba(0, 0, 0, 0.05);
+  --ae-shadow-lg: 0 0 1px rgba(0, 0, 0, 0.17), 0 2px 8px rgba(0, 0, 0, 0.08), 0 16px 40px rgba(0, 0, 0, 0.12);
+  --ae-radius: 8px;
+  --ae-radius-lg: 12px;
+  --ae-ease: cubic-bezier(0.2, 0.9, 0.3, 1);
+  font-family: var(--ae-font);
+  color: var(--ae-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+.ae-root[data-theme="dark"] {
+  --ae-primary: #a8a5ff;
+  --ae-primary-darker: #b8b6ff;
+  --ae-primary-light: #403e6a;
+  --ae-on-primary-light: #e0dfff;
+  --ae-surface: #232329;
+  --ae-surface-low: #2e2d39;
+  --ae-surface-high: #2e2d39;
+  --ae-hover: #33323f;
+  --ae-text: #e3e3e8;
+  --ae-text-muted: #9a9aa5;
+  --ae-hint: #5f5f6b;
+  --ae-divider: #36353f;
+  --ae-danger: #ff8787;
+  --ae-danger-bg: #3b2025;
+  --ae-shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 1px 3px rgba(0, 0, 0, 0.4), 0 7px 14px rgba(0, 0, 0, 0.25);
+  --ae-shadow-lg: 0 0 0 1px rgba(255, 255, 255, 0.04), 0 4px 12px rgba(0, 0, 0, 0.45), 0 20px 48px rgba(0, 0, 0, 0.4);
+}
+
+.ae-root *,
+.ae-root *::before,
+.ae-root *::after {
+  box-sizing: border-box;
+}
+
+/* ── Layout layer ──────────────────────────────────────────────────────── */
+.ae-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+.ae-layer > * {
+  pointer-events: auto;
+}
+.ae-top {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+}
+.ae-top > * {
+  pointer-events: auto;
+}
+.ae-top-center {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 140px);
+}
+.ae-bottom {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  pointer-events: none;
+}
+.ae-bottom > * {
+  pointer-events: auto;
+}
+.ae-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ── Islands & buttons ─────────────────────────────────────────────────── */
+.ae-island {
+  background: var(--ae-surface);
+  border-radius: var(--ae-radius);
+  box-shadow: var(--ae-shadow);
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.ae-btn {
+  position: relative;
+  appearance: none;
+  border: 0;
+  margin: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--ae-radius);
+  display: inline-grid;
+  place-items: center;
+  background: transparent;
+  color: var(--ae-text);
+  cursor: pointer;
+  font: inherit;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.12s var(--ae-ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.ae-btn:hover {
+  background: var(--ae-hover);
+}
+.ae-btn:active {
+  transform: scale(0.92);
+}
+.ae-btn:focus-visible {
+  outline: 2px solid var(--ae-primary);
+  outline-offset: 1px;
+}
+.ae-btn[aria-pressed="true"] {
+  background: var(--ae-primary-light);
+  color: var(--ae-on-primary-light);
+}
+.ae-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+  transform: none;
+}
+.ae-btn--sm {
+  width: 32px;
+  height: 32px;
+}
+.ae-btn--wide {
+  width: auto;
+  padding: 0 10px;
+  gap: 8px;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 500;
+}
+.ae-btn--plain {
+  background: var(--ae-surface);
+  box-shadow: var(--ae-shadow);
+}
+.ae-btn__key {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  font-size: 9px;
+  line-height: 1;
+  font-weight: 500;
+  color: var(--ae-hint);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+.ae-btn[aria-pressed="true"] .ae-btn__key {
+  color: var(--ae-on-primary-light);
+  opacity: 0.6;
+}
+.ae-btn__dot {
+  position: absolute;
+  left: 50%;
+  bottom: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  transform: translateX(-50%);
+  background: var(--ae-primary);
+}
+.ae-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 6px 4px;
+  background: var(--ae-divider);
+}
+
+/* Tooltips: label + shortcut, shown after a short hover delay. */
+.ae-tip {
+  position: relative;
+}
+.ae-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translate(-50%, -4px);
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: #fff;
+  background: #1b1b1f;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 50;
+}
+.ae-root[data-theme="dark"] .ae-tip::after {
+  background: #e3e3e8;
+  color: #1b1b1f;
+}
+.ae-tip:hover::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: 0.45s;
+}
+.ae-tip--up::after {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+.ae-tip--right::after {
+  top: 50%;
+  left: calc(100% + 8px);
+  transform: translate(-4px, -50%);
+}
+.ae-tip--right:hover::after {
+  transform: translate(0, -50%);
+}
+
+/* ── Popovers / menus ──────────────────────────────────────────────────── */
+.ae-pop {
+  position: absolute;
+  z-index: 40;
+  background: var(--ae-surface);
+  border-radius: var(--ae-radius-lg);
+  box-shadow: var(--ae-shadow-lg);
+  padding: 8px;
+  animation: ae-pop-in 0.16s var(--ae-ease);
+  transform-origin: top left;
+}
+@keyframes ae-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+.ae-menu {
+  min-width: 248px;
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.ae-menu-item {
+  appearance: none;
+  border: 0;
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ae-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ae-menu-item:hover,
+.ae-menu-item:focus-visible {
+  background: var(--ae-hover);
+  outline: none;
+}
+.ae-menu-item svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: var(--ae-text-muted);
+}
+.ae-menu-item__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ae-menu-item__hint {
+  font-size: 11px;
+  color: var(--ae-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ae-menu-item--danger {
+  color: var(--ae-danger);
+}
+.ae-menu-item--danger svg {
+  color: var(--ae-danger);
+}
+.ae-menu-item[aria-current="true"] {
+  background: var(--ae-surface-high);
+  font-weight: 600;
+}
+.ae-menu-sep {
+  height: 1px;
+  background: var(--ae-divider);
+  margin: 6px 4px;
+}
+.ae-menu-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ae-text-muted);
+  padding: 8px 10px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ae-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Properties panel ──────────────────────────────────────────────────── */
+.ae-panel {
+  position: absolute;
+  top: 64px;
+  left: 16px;
+  width: 204px;
+  max-height: calc(100% - 140px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  padding: 12px;
+  animation: ae-panel-in 0.18s var(--ae-ease);
+  scrollbar-width: thin;
+}
+@keyframes ae-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+.ae-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ae-section__label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ae-text-muted);
+  margin: 0;
+}
+.ae-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.ae-opt {
+  appearance: none;
+  border: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--ae-radius);
+  display: inline-grid;
+  place-items: center;
+  background: var(--ae-surface-low);
+  color: var(--ae-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.12s, box-shadow 0.12s, transform 0.12s var(--ae-ease);
+}
+.ae-opt:hover {
+  background: var(--ae-hover);
+}
+.ae-opt:active {
+  transform: scale(0.92);
+}
+.ae-opt[aria-pressed="true"] {
+  background: var(--ae-primary-light);
+  color: var(--ae-on-primary-light);
+  box-shadow: inset 0 0 0 1px var(--ae-primary);
+}
+.ae-opt--text {
+  width: auto;
+  padding: 0 10px;
+}
+.ae-opt svg {
+  width: 18px;
+  height: 18px;
+}
+
+.ae-swatches {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ae-swatch {
+  appearance: none;
+  position: relative;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+  transition: transform 0.12s var(--ae-ease), box-shadow 0.12s;
+}
+.ae-swatch:hover {
+  transform: scale(1.08);
+}
+.ae-swatch__color {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+/* Swatches show exactly what the canvas will paint in dark mode. */
+.ae-root[data-theme="dark"] .ae-swatch__color {
+  filter: invert(93%) hue-rotate(180deg);
+}
+.ae-swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--ae-surface), 0 0 0 3.5px var(--ae-primary);
+}
+.ae-swatch--transparent .ae-swatch__color {
+  background-color: #fff;
+  background-image: linear-gradient(45deg, #d5d5dc 25%, transparent 25%), linear-gradient(-45deg, #d5d5dc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d5d5dc 75%), linear-gradient(-45deg, transparent 75%, #d5d5dc 75%);
+  background-size: 8px 8px;
+  background-position: 0 0, 0 4px, 4px -4px, -4px 0;
+}
+.ae-swatch-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--ae-divider);
+  margin: 0 2px;
+}
+.ae-palette {
+  width: 228px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ae-palette__grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+.ae-palette__grid .ae-swatch {
+  width: 100%;
+  height: 26px;
+}
+.ae-hex {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--ae-surface-low);
+  border-radius: var(--ae-radius);
+  padding: 0 8px;
+  height: 32px;
+}
+.ae-hex span {
+  color: var(--ae-text-muted);
+  font-size: 13px;
+}
+.ae-hex input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ae-text);
+  font: 500 13px var(--ae-font);
+  text-transform: lowercase;
+}
+
+.ae-range {
+  width: 100%;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--ae-primary) 0%, var(--ae-primary) var(--ae-fill, 50%), var(--ae-surface-low) var(--ae-fill, 50%));
+  outline: none;
+  cursor: pointer;
+}
+.ae-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--ae-surface);
+  box-shadow: 0 0 0 1.5px var(--ae-primary), 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.12s;
+}
+.ae-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.ae-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ae-surface);
+  box-shadow: 0 0 0 1.5px var(--ae-primary), 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.ae-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ae-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ae-select {
+  width: 100%;
+  height: 32px;
+  border: 0;
+  border-radius: var(--ae-radius);
+  background: var(--ae-surface-low);
+  color: var(--ae-text);
+  font: 500 13px var(--ae-font);
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+/* ── Zoom / history ────────────────────────────────────────────────────── */
+.ae-zoom-label {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ae-text);
+  font: 500 12px var(--ae-font);
+  min-width: 52px;
+  height: 36px;
+  border-radius: var(--ae-radius);
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+.ae-zoom-label:hover {
+  background: var(--ae-hover);
+}
+
+/* ── Welcome hints ─────────────────────────────────────────────────────── */
+.ae-welcome {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  color: var(--ae-hint);
+  font-family: var(--ae-hand);
+  animation: ae-fade-in 0.6s ease 0.15s both;
+}
+@keyframes ae-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+.ae-welcome__hint {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  font-size: 17px;
+  line-height: 1.25;
+  color: var(--ae-text-muted);
+  opacity: 0.85;
+}
+.ae-welcome__hint svg {
+  color: var(--ae-hint);
+  flex: none;
+}
+.ae-welcome__center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -54%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+  width: min(420px, calc(100% - 32px));
+}
+.ae-welcome__logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--ae-font);
+  font-weight: 800;
+  font-size: 40px;
+  letter-spacing: -0.03em;
+  color: var(--ae-text);
+}
+.ae-welcome__tag {
+  font-size: 19px;
+  color: var(--ae-text-muted);
+}
+.ae-welcome__items {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 260px;
+  font-family: var(--ae-font);
+}
+.ae-welcome__items .ae-menu-item {
+  color: var(--ae-text-muted);
+}
+.ae-welcome__items .ae-menu-item:hover {
+  color: var(--ae-text);
+}
+
+/* ── Inline text editor ────────────────────────────────────────────────── */
+.ae-text-editor {
+  position: absolute;
+  z-index: 15;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  white-space: pre;
+  line-height: 1.25;
+  caret-color: var(--ae-primary);
+  transform-origin: 0 0;
+}
+
+/* ── Dialogs (used by the desktop app's modals) ────────────────────────── */
+.ae-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(18, 18, 24, 0.28);
+  backdrop-filter: blur(2px);
+  animation: ae-fade-in 0.15s ease;
+}
+.ae-dialog {
+  width: min(440px, 100%);
+  background: var(--ae-surface);
+  color: var(--ae-text);
+  border-radius: var(--ae-radius-lg);
+  box-shadow: var(--ae-shadow-lg);
+  padding: 20px;
+  animation: ae-pop-in 0.18s var(--ae-ease);
+}
+.ae-dialog h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 700;
+}
+.ae-dialog p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ae-text-muted);
+}
+.ae-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.ae-cta {
+  appearance: none;
+  border: 0;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--ae-radius);
+  font: 600 13px var(--ae-font);
+  cursor: pointer;
+  background: var(--ae-surface-low);
+  color: var(--ae-text);
+  transition: background 0.12s, transform 0.12s var(--ae-ease);
+}
+.ae-cta:hover {
+  background: var(--ae-hover);
+}
+.ae-cta:active {
+  transform: scale(0.96);
+}
+.ae-cta--primary {
+  background: var(--ae-primary);
+  color: #fff;
+}
+.ae-root[data-theme="dark"] .ae-cta--primary {
+  color: #1b1b1f;
+}
+.ae-cta--primary:hover {
+  background: var(--ae-primary-darker);
+}
+.ae-cta--danger {
+  background: var(--ae-danger);
+  color: #fff;
+}
+
+.ae-cta:disabled {
+  opacity: 0.5;
+  cursor: default;
+  transform: none;
+}
+a.ae-cta {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.ae-dialog p + .ae-input {
+  margin-top: 12px;
+}
+
+/* ── Help dialog ───────────────────────────────────────────────────────── */
+.ae-dialog.ae-help {
+  width: min(880px, 100%);
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.ae-help__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 10px 22px;
+}
+.ae-help__head h2 {
+  margin: 0;
+}
+.ae-help__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 28px;
+  padding: 0 22px 22px;
+  overflow-y: auto;
+}
+.ae-help__section h3 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ae-primary);
+}
+.ae-help__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--ae-divider);
+  font-size: 13px;
+}
+.ae-help__keys {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+.ae-help__combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ae-help__or {
+  margin: 0 4px;
+  color: var(--ae-text-muted);
+  font-size: 11px;
+}
+.ae-help kbd {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--ae-surface-low);
+  box-shadow: inset 0 -1px 0 var(--ae-divider);
+  font: 600 11px var(--ae-font);
+  color: var(--ae-text);
+  text-align: center;
+}
+@media (max-width: 720px) {
+  .ae-help__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Inputs & menu extras ──────────────────────────────────────────────── */
+.ae-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid var(--ae-divider);
+  border-radius: 6px;
+  background: var(--ae-surface);
+  color: var(--ae-text);
+  font: 13px/1.45 var(--ae-font);
+  outline: none;
+  user-select: text;
+}
+.ae-input:focus {
+  border-color: var(--ae-primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ae-primary) 22%, transparent);
+}
+.ae-menu-board {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.ae-menu-board__actions {
+  position: absolute;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+}
+.ae-menu-board__actions .ae-btn {
+  width: 26px;
+  height: 26px;
+}
+.ae-menu-board:has(.ae-menu-board__actions) .ae-menu-item {
+  padding-right: 64px;
+}
+.ae-menu-label {
+  font-size: 13px;
+  color: var(--ae-text);
+}
+
+/* ── File drop target ──────────────────────────────────────────────────── */
+.ae-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--ae-primary) 8%, transparent);
+  outline: 2px dashed var(--ae-primary);
+  outline-offset: -12px;
+  animation: ae-fade-in 0.12s ease;
+}
+.ae-drop__card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--ae-radius);
+  background: var(--ae-surface);
+  color: var(--ae-text);
+  box-shadow: var(--ae-shadow-lg);
+  font: 600 14px var(--ae-font);
+}
+.ae-drop__card svg {
+  color: var(--ae-primary);
+}
+
+.ae-toast {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  padding: 10px 14px;
+  border-radius: var(--ae-radius);
+  background: #1b1b1f;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: var(--ae-shadow-lg);
+  animation: ae-pop-in 0.18s var(--ae-ease);
+}
+.ae-root[data-theme="dark"] .ae-toast {
+  background: #e3e3e8;
+  color: #1b1b1f;
+}
+
+/* ── Small screens ─────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .ae-top-center {
+    position: static;
+    transform: none;
+    max-width: none;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .ae-top {
+    flex-wrap: wrap;
+  }
+  .ae-panel {
+    top: auto;
+    bottom: 72px;
+    max-height: 46%;
+  }
+  .ae-welcome__hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ae-root *,
+  .ae-root *::before,
+  .ae-root *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Inline loading spinner (library use; the app has a full boot screen) ── */
+.ae-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--ae-divider);
+  border-top-color: var(--ae-primary);
+  animation: ae-spin 0.7s linear infinite;
+}
+@keyframes ae-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ae-spinner {
+    animation-duration: 2s;
+  }
+}

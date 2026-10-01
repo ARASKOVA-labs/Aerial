@@ -3,7 +3,7 @@
 #   docker build -f araskova-labs/collab-server/Dockerfile -t aerial-collab .
 #
 # Stage 1: build
-FROM rust:1.89-slim-bookworm AS builder
+FROM rust:1.98-slim-bookworm AS builder
 WORKDIR /src
 COPY . .
 RUN cargo build --release --locked -p aerial-collab-server

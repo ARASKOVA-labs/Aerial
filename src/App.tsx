@@ -38,7 +38,6 @@ import {
   LaserIcon,
   MagicPenIcon,
   MoonIcon,
-  NoteIcon,
   PlusIcon,
   SunIcon,
   TranslateIcon,

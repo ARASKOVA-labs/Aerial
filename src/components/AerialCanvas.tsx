@@ -18,7 +18,7 @@ import { PropertiesPanel, type StyleChange } from '../ui/PropertiesPanel';
 import { Toolbar } from '../ui/Toolbar';
 import { ExportIcon, MinusIcon, PlusIcon, TrashIcon } from '../ui/icons';
 import { DEFAULT_UI_STYLE, EMPTY_SELECTION, MAIN_TOOLS, isPen, themedColor, type PenTool, type SelectionInfo, type UiStyle } from '../ui/model';
-import { MenuItem, MenuSeparator, MOD } from '../ui/primitives';
+import { MenuItem, MenuSeparator } from '../ui/primitives';
 import '../ui/theme.css';
 
 const logger = createLogger('AerialCanvas');

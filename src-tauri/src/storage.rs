@@ -19,6 +19,9 @@ const ELEMENTS: TableDefinition<(&str, u64), &[u8]> = TableDefinition::new("boar
 const BOARD_META: TableDefinition<&str, &[u8]> = TableDefinition::new("board_meta_v3");
 const VAULT_META: TableDefinition<&str, &[u8]> = TableDefinition::new("vault_meta_v1");
 const VAULT_MIGRATED: &str = "sealed_v1";
+/// Set once the database file has been rebuilt after sealing (see `rebuild_file`).
+const VAULT_REBUILT: &str = "rebuilt_v1";
+const DB_FILE: &str = "aerial_store.redb";
 
 fn element_ctx(board_id: &str, id: u64) -> String {
     format!("element:{board_id}:{id}")
@@ -72,7 +75,7 @@ pub struct Store {
 impl Store {
     pub fn open(app_data_dir: &Path, vault: Vault) -> Result<Store, String> {
         std::fs::create_dir_all(app_data_dir).map_err(db_err)?;
-        let db = Database::create(app_data_dir.join("aerial_store.redb")).map_err(db_err)?;
+        let db = Database::create(app_data_dir.join(DB_FILE)).map_err(db_err)?;
         let txn = db.begin_write().map_err(db_err)?;
         {
             txn.open_table(LEGACY_BOARDS).map_err(db_err)?;
@@ -83,6 +86,9 @@ impl Store {
         txn.commit().map_err(db_err)?;
         let mut store = Store { db, assets_dir: app_data_dir.join("assets"), vault };
         store.seal_existing_data()?;
+        if store.needs_rebuild()? {
+            store = store.rebuild_file(app_data_dir)?;
+        }
         Ok(store)
     }
 
@@ -155,14 +161,58 @@ impl Store {
             }
         }
         txn.commit().map_err(db_err)?;
-        if rows > 0 {
-            // Free pages may still hold old plaintext; compaction rewrites the file.
-            if let Err(e) = self.db.compact() {
-                tracing::warn!(error = %e, "database compaction after sealing failed");
-            }
-        }
         tracing::info!(target: "audit", rows, assets, "sealed existing data at rest");
         Ok(())
+    }
+
+    fn meta_flag(&self, key: &str) -> Result<bool, String> {
+        let txn = self.db.begin_read().map_err(db_err)?;
+        let meta = txn.open_table(VAULT_META).map_err(db_err)?;
+        Ok(meta.get(key).map_err(db_err)?.is_some())
+    }
+
+    /// Sealed, but the file has not been rebuilt since: freed pages may still
+    /// hold the plaintext rows that sealing replaced.
+    fn needs_rebuild(&self) -> Result<bool, String> {
+        Ok(self.vault.state() == VaultState::Encrypted && self.meta_flag(VAULT_MIGRATED)? && !self.meta_flag(VAULT_REBUILT)?)
+    }
+
+    /// Copies every table into a brand-new file and swaps it in. redb's own
+    /// compaction moves live pages but does not erase old ones inside the
+    /// file, so only a fresh file guarantees no plaintext survives on disk.
+    fn rebuild_file(self, app_data_dir: &Path) -> Result<Store, String> {
+        let path = app_data_dir.join(DB_FILE);
+        let tmp = app_data_dir.join(format!("{DB_FILE}.rebuild"));
+        let _ = std::fs::remove_file(&tmp);
+        {
+            let fresh = Database::create(&tmp).map_err(db_err)?;
+            let src = self.db.begin_read().map_err(db_err)?;
+            let dst = fresh.begin_write().map_err(db_err)?;
+            {
+                let from = src.open_table(ELEMENTS).map_err(db_err)?;
+                let mut to = dst.open_table(ELEMENTS).map_err(db_err)?;
+                for row in from.iter().map_err(db_err)? {
+                    let (k, v) = row.map_err(db_err)?;
+                    to.insert(k.value(), v.value()).map_err(db_err)?;
+                }
+                for def in [LEGACY_BOARDS, BOARD_META, VAULT_META] {
+                    let from = src.open_table(def).map_err(db_err)?;
+                    let mut to = dst.open_table(def).map_err(db_err)?;
+                    for row in from.iter().map_err(db_err)? {
+                        let (k, v) = row.map_err(db_err)?;
+                        to.insert(k.value(), v.value()).map_err(db_err)?;
+                    }
+                }
+                dst.open_table(VAULT_META).map_err(db_err)?.insert(VAULT_REBUILT, b"1".as_slice()).map_err(db_err)?;
+            }
+            dst.commit().map_err(db_err)?;
+        }
+        let Store { db, assets_dir, vault } = self;
+        drop(db);
+        std::fs::rename(&tmp, &path).map_err(db_err)?;
+        let db = Database::create(&path).map_err(db_err)?;
+        tracing::info!(target: "audit", "rebuilt the database file after sealing");
+        Ok(Store { db, assets_dir, vault })
     }
 
     fn write_asset_file(&self, id: &str, bytes: &[u8]) -> Result<(), String> {

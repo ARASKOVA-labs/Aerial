@@ -274,6 +274,7 @@
 .ae-menu-item {
   appearance: none;
   border: 0;
+  box-sizing: border-box;
   width: 100%;
   min-height: 34px;
   display: flex;
@@ -833,6 +834,8 @@ a.ae-cta {
   position: relative;
   display: flex;
   align-items: center;
+  box-sizing: border-box;
+  width: 100%;
 }
 .ae-menu-board__actions {
   position: absolute;

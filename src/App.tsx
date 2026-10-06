@@ -915,13 +915,7 @@ export default function App() {
       if (!(e.metaKey || e.ctrlKey)) return;
       const key = e.key.toLowerCase();
 
-      if (e.shiftKey && key === 'n') {
-        e.preventDefault();
-        setShowQuickCanvas((s) => !s);
-      } else if (key === 'j') {
-        e.preventDefault();
-        setShowQuickCanvas((s) => !s);
-      } else if (key === 'k') {
+      if (key === 'k') {
         e.preventDefault();
         setShowCommandPalette((s) => !s);
       } else if (e.shiftKey && key === 's') {
@@ -965,7 +959,6 @@ export default function App() {
       { id: 'translate', label: 'Text translator', icon: <TranslateIcon />, group: 'Generate', onSelect: () => setShowTranslatorModal(true) },
       { id: 'pdf', label: 'Insert PDF', icon: <FileIcon />, shortcut: `${MOD}⇧O`, group: 'Insert', onSelect: () => pdfInputRef.current?.click() },
       { id: 'paste', label: 'Paste screenshot', icon: <ClipboardIcon />, shortcut: `${MOD}V`, group: 'Insert', onSelect: () => void handlePasteFromClipboard() },
-      { id: 'note', label: 'Quick note', icon: <NoteIcon />, shortcut: `${MOD}J`, group: 'Insert', onSelect: () => setShowQuickCanvas(true) },
     ],
     [activeTool, selectTool, handlePasteFromClipboard],
   );
@@ -1097,7 +1090,6 @@ export default function App() {
     <>
       <MenuItem icon={<ImageIcon />} label="Open image" hint={`${MOD}O`} onSelect={() => imageInputRef.current?.click()} />
       <MenuItem icon={<DiagramIcon />} label="Diagram from text" onSelect={() => setShowDiagramModal(true)} />
-      <MenuItem icon={<NoteIcon />} label="Quick note" hint={`${MOD}J`} onSelect={() => setShowQuickCanvas(true)} />
       <MenuItem icon={<HelpIcon />} label="Help & shortcuts" hint="?" onSelect={() => setShowShortcutsModal(true)} />
     </>
   );

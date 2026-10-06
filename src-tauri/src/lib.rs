@@ -122,25 +122,11 @@ pub fn run() {
                 state.drops.grant(paths);
             }
         }
-        #[cfg(desktop)]
-        tauri::WindowEvent::CloseRequested { api, .. } => {
-            // Keep the app resident in the background (menu bar / tray).
-            let _ = window.hide();
-            api.prevent_close();
-        }
         _ => {}
     });
 
     #[cfg(desktop)]
-    let builder = builder.plugin(
-        tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(|app, _shortcut, event| {
-                if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                    show_main(app, true);
-                }
-            })
-            .build(),
-    );
+    let builder = builder;
 
     let result = builder
         .setup(|app| {
@@ -148,8 +134,8 @@ pub fn run() {
             let store = Store::open(&app_data_dir)?;
             app.manage(AppState { store: Arc::new(store), drops: DropGrants::default() });
 
-            #[cfg(desktop)]
-            setup_desktop(app);
+            // #[cfg(desktop)]
+            // setup_desktop(app); // Disabled quick note and background tray
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

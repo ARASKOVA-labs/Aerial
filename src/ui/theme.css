@@ -768,6 +768,163 @@ a.ae-cta {
   margin-top: 12px;
 }
 
+/* ── Diagram studio ────────────────────────────────────────────────────── */
+.ae-dialog.ae-studio {
+  width: min(1080px, 100%);
+  height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.ae-studio__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 12px 20px;
+}
+.ae-studio__icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--ae-radius);
+  background: var(--ae-primary-light);
+  color: var(--ae-primary);
+}
+.ae-studio__icon svg {
+  width: 20px;
+  height: 20px;
+}
+.ae-studio__title {
+  flex: 1;
+  min-width: 0;
+}
+.ae-studio__title h2 {
+  margin: 0;
+}
+.ae-studio__title p {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+.ae-studio__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 20px;
+  padding: 0 20px 14px;
+  border-bottom: 1px solid var(--ae-divider);
+}
+.ae-studio__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ae-text-muted);
+}
+.ae-studio__field .ae-select {
+  width: auto;
+  min-width: 112px;
+}
+.ae-studio__field .ae-swatches {
+  height: 32px;
+}
+.ae-studio__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+}
+.ae-studio__code {
+  margin: 0;
+  border: 0;
+  border-right: 1px solid var(--ae-divider);
+  padding: 16px 20px;
+  resize: none;
+  outline: none;
+  background: var(--ae-surface);
+  color: var(--ae-text);
+  font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  tab-size: 2;
+  user-select: text;
+}
+.ae-studio__code:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ae-primary) 35%, transparent);
+}
+.ae-studio__preview {
+  position: relative;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+  background-color: var(--ae-surface-low);
+  background-image: radial-gradient(var(--ae-divider) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.ae-studio__preview[data-style="brutalist"] {
+  background-color: #18181b;
+  background-image: radial-gradient(#2c2c31 1px, transparent 1px);
+}
+.ae-studio__preview[data-style="blueprint"] {
+  background-color: #0c1524;
+  background-image: radial-gradient(#1b2b45 1px, transparent 1px);
+}
+.ae-studio__preview img {
+  position: absolute;
+  inset: 20px;
+  width: calc(100% - 40px);
+  height: calc(100% - 40px);
+  object-fit: contain;
+  transition: opacity 0.15s ease;
+}
+.ae-studio__preview[aria-busy="true"] img {
+  opacity: 0.6;
+}
+.ae-studio__empty {
+  font-size: 13px;
+  color: var(--ae-text-muted);
+}
+.ae-studio__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px 12px 20px;
+  border-top: 1px solid var(--ae-divider);
+}
+.ae-studio__foot .ae-dialog__actions {
+  margin: 0;
+  flex: none;
+}
+.ae-studio__hint,
+.ae-studio__error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.ae-dialog .ae-studio__error {
+  max-height: 4.8em;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--ae-danger);
+  font: 11px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (max-width: 720px) {
+  .ae-studio__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+  .ae-studio__code {
+    border-right: 0;
+    border-bottom: 1px solid var(--ae-divider);
+  }
+}
+
 /* ── Help dialog ───────────────────────────────────────────────────────── */
 .ae-dialog.ae-help {
   width: min(880px, 100%);

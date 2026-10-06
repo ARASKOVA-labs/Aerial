@@ -10,7 +10,7 @@ import { loadAerialEngine } from '../lib/wasm-loader';
 import { getAraskovaMermaidConfig, applyAraskovaDiagramAesthetics } from '../lib/diagram-theme';
 import type { AerialEngine, AerialCanvasProps, AerialCanvasRef, ToolId } from '../lib/types';
 import { createLogger } from '../lib/logger';
-import { withEmbeddedFonts } from '../lib/svg-fonts';
+import { renderSvgToImage, svgDataUrl, svgSize } from '../lib/svg-image';
 import { HelpButton, MainMenu, WelcomeScreen, ZoomBar } from '../ui/Chrome';
 import { ColorPicker } from '../ui/ColorPicker';
 import { InlineTextEditor, type TextDraft } from '../ui/InlineTextEditor';
@@ -87,35 +87,6 @@ function parseElement(json: string | null | undefined): ElementJson | null {
 }
 
 /** Rasterises an SVG string (fonts embedded) into an <img> the engine can draw. */
-async function renderSvgToImage(svg: string): Promise<HTMLImageElement> {
-  const sanitized = await withEmbeddedFonts(svg.replace(/@import\s+url\([^)]+\);?/gi, ''));
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => {
-      // WebKit sometimes rejects large data URLs; fall back to a blob URL.
-      try {
-        const url = URL.createObjectURL(new Blob([sanitized], { type: 'image/svg+xml;charset=utf-8' }));
-        const fallback = new Image();
-        fallback.onload = () => {
-          URL.revokeObjectURL(url);
-          resolve(fallback);
-        };
-        fallback.onerror = (e) => {
-          URL.revokeObjectURL(url);
-          reject(e);
-        };
-        fallback.src = url;
-      } catch (e) {
-        reject(e);
-      }
-    };
-    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(sanitized)));
-  });
-}
-
-const svgDataUrl = (svg: string) => 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
-
 // ── Component ───────────────────────────────────────────────────────────────
 
 export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(function AerialCanvas(props, ref) {
@@ -1122,25 +1093,13 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(funct
       const canvas = canvasRef.current;
       if (!engine || !canvas) return;
       try {
+        // The studio hands over SVG it already themed; only style raw SVG here.
+        const themed = rawSvg.includes('araskova-theme-override');
         const style = isDark ? 'brutalist' : 'industrial_light';
-        const cleanSvg = applyAraskovaDiagramAesthetics(rawSvg, isDark, style, accentColor);
-        let svgW = 600;
-        let svgH = 400;
-        const svgEl = new DOMParser().parseFromString(cleanSvg, 'image/svg+xml').querySelector('svg');
-        if (svgEl) {
-          const vb = svgEl.getAttribute('viewBox')?.trim().split(/[\s,]+/).map(parseFloat);
-          if (vb && vb.length === 4 && vb[2] > 0 && vb[3] > 0) {
-            svgW = Math.round(vb[2]);
-            svgH = Math.round(vb[3]);
-          } else {
-            const w = parseFloat(svgEl.getAttribute('width') || '0');
-            const h = parseFloat(svgEl.getAttribute('height') || '0');
-            if (w > 0 && h > 0) {
-              svgW = Math.round(w);
-              svgH = Math.round(h);
-            }
-          }
-        }
+        const cleanSvg = themed ? rawSvg : applyAraskovaDiagramAesthetics(rawSvg, isDark, style, accentColor);
+        const size = svgSize(cleanSvg);
+        const svgW = size?.w ?? 0;
+        const svgH = size?.h ?? 0;
         const img = await renderSvgToImage(cleanSvg);
         const w = Math.round((svgW || img.naturalWidth || 600) * scale);
         const h = Math.round((svgH || img.naturalHeight || 400) * scale);

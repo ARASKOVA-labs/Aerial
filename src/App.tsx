@@ -9,6 +9,7 @@ import { buildCommands } from './app/commands';
 import { FeedbackDialog } from './app/dialogs/FeedbackDialog';
 import { ResetDialog } from './app/dialogs/ResetDialog';
 import { SaveFileDialog } from './app/dialogs/SaveFileDialog';
+import { StorageLockedDialog } from './app/dialogs/StorageLockedDialog';
 import { UnlockFileDialog } from './app/dialogs/UnlockFileDialog';
 import { exportPng, exportSvg } from './app/exports';
 import { MainMenuContent } from './app/MainMenuContent';
@@ -51,7 +52,7 @@ export function canonicalPaper(color: string | null | undefined): string {
 
 const parseGrid = (raw: string | null): GridType => (raw === 'dots' || raw === 'lines' ? raw : 'blank');
 
-type Dialog = 'reset' | 'feedback' | 'diagram' | 'translator' | 'help' | 'palette' | null;
+type Dialog = 'reset' | 'feedback' | 'diagram' | 'translator' | 'help' | 'palette' | 'locked' | null;
 
 export default function App() {
   const toast = useToast();
@@ -85,7 +86,7 @@ export default function App() {
       const engine = api.getEngine();
       if (!engine) return;
       window.__aerialBoot?.('board');
-      await boards.hydrate(api);
+      if (!(await boards.hydrate(api))) setDialog('locked');
       engine.set_grid_type(gridType);
       engine.set_dark_mode(isDarkMode);
       engine.set_background_color(canvasBg);
@@ -286,6 +287,7 @@ export default function App() {
         />
       )}
       {dialog === 'feedback' && <FeedbackDialog onClose={close} />}
+      {dialog === 'locked' && <StorageLockedDialog onClose={close} />}
       {dialog === 'palette' && <CommandPaletteModal commands={paletteCommands} onClose={close} />}
       {dialog === 'help' && <KeyboardShortcutsModal onClose={close} />}
       {dialog === 'diagram' && (

@@ -112,6 +112,6 @@ documented policy, and evidence over the audit window:
 
 ## Known technical gaps
 
-Tracked in `docs/security/threat-model.md` → "Residual risks": app-level
-encryption at rest, collab token transport in the URL, unbound CRDT, Actions
-pinned by tag instead of SHA.
+Tracked in `docs/security/threat-model.md` → "Residual risks": encryption at
+rest on platforms without a credential store, collab token transport in the
+URL, unbound CRDT, Actions pinned by tag instead of SHA.

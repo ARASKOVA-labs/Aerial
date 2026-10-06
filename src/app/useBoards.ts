@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
 import type { AerialDocument } from '../lib/aerial-file';
 import { applyAssets, persistAssets, rekeyAssets } from '../lib/board-files';
-import { BoardSaver, EMPTY_SCENE, deleteBoardData, loadBoardScene, persistenceAvailable, preloadAssets, saveBoardChanges, sceneToChangeSet } from '../lib/board-store';
+import { BoardSaver, EMPTY_SCENE, deleteBoardData, loadBoardScene, persistenceAvailable, preloadAssets, saveBoardChanges, sceneToChangeSet, storageStatus } from '../lib/board-store';
 import { createLogger } from '../lib/logger';
 import type { AerialCanvasRef } from '../lib/types';
 import { usePersistentState } from './usePersistentState';
@@ -41,8 +41,8 @@ export interface UseBoards {
   boards: BoardInfo[];
   activeBoardId: string;
   activeBoard: BoardInfo | undefined;
-  /** Loads the active board into a freshly mounted canvas. */
-  hydrate: (api: AerialCanvasRef) => Promise<void>;
+  /** Loads the active board into a freshly mounted canvas. Resolves false when storage is locked. */
+  hydrate: (api: AerialCanvasRef) => Promise<boolean>;
   switchBoard: (id: string) => Promise<void>;
   createBoard: (opts?: { name?: string }) => Promise<string>;
   renameBoard: (id: string, name: string) => void;
@@ -73,7 +73,12 @@ export function useBoards(
   const hydrate = useCallback(
     async (api: AerialCanvasRef) => {
       const engine = api.getEngine();
-      if (!engine || !persistenceAvailable()) return;
+      if (!engine || !persistenceAvailable()) return true;
+      try {
+        if ((await storageStatus()) === 'locked') return false;
+      } catch (err) {
+        logger.warn('Could not read storage status', err);
+      }
       try {
         const scene = await loadBoardScene(activeRef.current);
         if (scene) {
@@ -83,6 +88,7 @@ export function useBoards(
       } catch (err) {
         logger.error('Failed to load board:', err);
       }
+      return true;
     },
     [],
   );

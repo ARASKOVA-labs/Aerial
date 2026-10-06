@@ -25,6 +25,13 @@ export function sceneToChangeSet(sceneJson: string): string {
   return JSON.stringify({ reset: true, upserts: parsed.elements ?? [], deletes: [] });
 }
 
+/** encrypted: sealed at rest · locked: keychain refused the key · unavailable: no credential store. */
+export type StorageStatus = 'encrypted' | 'locked' | 'unavailable';
+
+export function storageStatus(): Promise<StorageStatus> {
+  return invoke<StorageStatus>('storage_status');
+}
+
 export function loadBoardScene(boardId: string): Promise<string | null> {
   return invoke<string | null>('load_board_scene', { boardId });
 }

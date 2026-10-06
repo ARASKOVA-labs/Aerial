@@ -6,6 +6,7 @@
 //! IPC surface (all inputs validated in `security`):
 //!   boards   load_board_scene · save_board_changes · delete_board
 //!   assets   save_asset · load_asset · read_dropped_image
+//!   storage  storage_status
 //!   files    save_aerial_file · open_aerial_file · take_opened_files
 //!   diagrams render_diagram · update_diagram_node · openrouter_generate
 
@@ -14,6 +15,7 @@ mod diagram;
 mod files;
 mod security;
 mod storage;
+mod vault;
 
 use std::sync::Arc;
 
@@ -60,6 +62,13 @@ async fn save_asset(state: State<'_, AppState>, id: String, base64_data: String)
 #[tauri::command]
 async fn load_asset(state: State<'_, AppState>, id: String) -> Result<String, String> {
     blocking(&state, move |s| s.load_asset(&id)).await
+}
+
+/// Whether stored boards are encrypted at rest (`encrypted`), the key is
+/// unavailable (`locked`), or the platform has no credential store.
+#[tauri::command]
+fn storage_status(state: State<'_, AppState>) -> vault::VaultState {
+    state.store.vault_state()
 }
 
 /// Reads an image the user just dropped onto the window and returns it as a
@@ -113,7 +122,7 @@ pub fn run() {
     let result = builder
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-            let store = Store::open(&app_data_dir)?;
+            let store = Store::open(&app_data_dir, vault::Vault::open())?;
             app.manage(AppState { store: Arc::new(store), drops: DropGrants::default() });
             app.manage(files::PendingOpens::default());
 
@@ -129,6 +138,7 @@ pub fn run() {
             delete_board,
             save_asset,
             load_asset,
+            storage_status,
             read_dropped_image,
             ai::openrouter_generate,
             diagram::render_diagram,

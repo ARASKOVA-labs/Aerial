@@ -54,13 +54,17 @@ Boundaries an attacker can cross:
 | T11 | Supply chain: remote code at runtime (T) | PDF.js worker loaded from unpkg CDN | Worker bundled; fonts bundled; no runtime CDN code | CSP has no third-party script origins |
 | T12 | Supply chain: vulnerable dependencies (T) | No auditing | `cargo audit`, `bun audit`, CodeQL and Dependabot in CI; unused plugins/packages removed; `Cargo.lock` enforced in the container build | `.github/workflows/ci.yml` |
 | T13 | Secrets in logs (I) | n/a | API key never logged; AI audit records model + byte count only; relay logs never include payloads or tokens | `ai.rs`, relay `lib.rs` |
+| T14 | Boards readable from disk, backups or another local account (I) | Plain JSON rows and image files in the app data directory | XChaCha20-Poly1305 with a 256-bit key held in the OS keychain; each record bound to its board/element/asset id; existing data sealed and the DB compacted on first open; a locked keychain refuses all writes | `vault.rs`, `storage.rs` tests |
+| T15 | Shared boards readable by whoever gets the file (I) | No export format | `.aerial` files can be sealed with AES-256-GCM (PBKDF2-SHA-256, 600k iterations, authenticated header); imports are validated and assets re-keyed | `aerial-file.test.ts`, `files.rs` tests |
 
 ## Residual risks / follow-ups
 
-- **Data at rest is not encrypted by the app.** The redb store relies on OS
-  full-disk encryption (FileVault, BitLocker, LUKS). App-level encryption with
-  an OS-keychain key is the next step if boards must be protected from other
-  local users or backups.
+- **Encryption at rest needs an OS credential store.** macOS, iOS and Windows
+  seal boards (T14); Linux and Android still rely on full-disk encryption
+  until a persistent secret-service backend is added. Unsigned (ad-hoc) builds
+  make macOS ask again for keychain access after each update.
+- **Password-protected files are as strong as their password.** PBKDF2 slows
+  guessing; the Save dialog requires 8+ characters.
 - **Collab tokens travel in the WebSocket URL.** Keep lifetimes short (minutes)
   and terminate TLS at a proxy that does not log query strings.
 - **The Yrs CRDT document is not yet bound to scene elements.** The relay is

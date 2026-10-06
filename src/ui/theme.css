@@ -247,6 +247,10 @@
 .ae-tip--right:hover::after {
   transform: translate(0, -50%);
 }
+/* A menu trigger's tooltip would sit on top of its own open menu. */
+.ae-tip[aria-haspopup][aria-pressed="true"]::after {
+  display: none;
+}
 
 /* ── Popovers / menus ──────────────────────────────────────────────────── */
 .ae-pop {
@@ -267,9 +271,31 @@
 }
 .ae-menu {
   min-width: 248px;
-  max-height: calc(100vh - 96px);
-  overflow: auto;
+  /* Stop above the bottom zoom/undo bar instead of running under it. */
+  max-height: calc(100vh - 150px);
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* WebKit (the macOS app) draws overlay scrollbars on top of the shortcut
+ * hints; a styled scrollbar takes real layout space instead. (No standard
+ * `scrollbar-width` here: it would switch these pseudo-elements off.) */
+.ae-menu::-webkit-scrollbar,
+.ae-panel::-webkit-scrollbar {
+  width: 6px;
+}
+.ae-menu::-webkit-scrollbar-track,
+.ae-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ae-menu::-webkit-scrollbar-thumb,
+.ae-panel::-webkit-scrollbar-thumb {
+  background: var(--ae-divider);
+  border-radius: 3px;
+}
+.ae-menu::-webkit-scrollbar-thumb:hover,
+.ae-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--ae-primary);
 }
 .ae-menu-item {
   appearance: none;
@@ -360,7 +386,6 @@
   gap: 14px;
   padding: 12px;
   animation: ae-panel-in 0.18s var(--ae-ease);
-  scrollbar-width: thin;
 }
 @keyframes ae-panel-in {
   from {

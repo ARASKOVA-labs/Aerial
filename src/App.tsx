@@ -8,7 +8,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 import './App.css';
-import { AerialMark } from './AerialLogo';
+import { AerialWordmark } from './AerialLogo';
 import { AerialCanvas } from './components/AerialCanvas';
 import { QuickCanvasModal } from './components/QuickCanvasModal';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
@@ -107,16 +107,6 @@ function PanelChoice<T extends string>({ label, value, options, onChange }: { la
         ))}
       </div>
     </fieldset>
-  );
-}
-
-/** Small "Aerial" lock-up for the welcome screen. */
-function Wordmark({ isDarkMode }: { isDarkMode: boolean }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 14 }}>
-      <AerialMark size={46} isDarkMode={isDarkMode} />
-      <span style={{ fontFamily: 'Rephen, var(--ae-font)', fontSize: 42, fontWeight: 900, letterSpacing: '0.14em', color: 'var(--ae-text)' }}>AERIAL</span>
-    </span>
   );
 }
 
@@ -1133,7 +1123,7 @@ export default function App() {
           menu={menu}
           extraTools={extraTools}
           welcomeItems={welcomeItems}
-          logo={<Wordmark isDarkMode={isDarkMode} />}
+          logo={<AerialWordmark />}
           onHelp={() => setShowShortcutsModal((s) => !s)}
           onInsertImage={() => imageInputRef.current?.click()}
           onSelectionChange={setSelection}

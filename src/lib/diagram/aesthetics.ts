@@ -27,6 +27,10 @@ export function applyAraskovaDiagramAesthetics(
     raw = decodeURIComponent(raw.replace('data:image/svg+xml;utf8,', ''));
   }
 
+  // Mermaid writes label line breaks as HTML (<br>). Parsed as XML below, an
+  // unclosed <br> cuts the label short and breaks the image, so close it first.
+  raw = raw.replace(/<br\s*>/gi, '<br/>');
+
   const isDark = style === 'industrial_light' ? false : style === 'blueprint' ? true : isDarkMode;
   const isBlueprint = style === 'blueprint';
 

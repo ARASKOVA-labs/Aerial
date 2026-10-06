@@ -331,11 +331,12 @@ export const TOOLS: Record<string, (host: AgentHost, args: Args) => Promise<Agen
     const before = new Set(sceneOf(engine).map((e) => e.id));
     await canvas.addDiagram(source, svg, Math.min(3, Math.max(0.2, num(args, 'scale', 1))), accent);
     const added = sceneOf(engine).find((e) => !before.has(e.id) && e.kind === 'Diagram');
-    if (added && args.x !== undefined && args.y !== undefined) {
+    if (!added) throw new AgentError('The diagram rendered but could not be placed on the board. Check the Mermaid source and try a simpler diagram.');
+    if (args.x !== undefined && args.y !== undefined) {
       engine.move_elements_json(JSON.stringify([added.id]), num(args, 'x') - added.x, num(args, 'y') - added.y);
       engine.render();
     }
-    return { kind: 'json', value: { id: added?.id ?? null } };
+    return { kind: 'json', value: { id: added.id } };
   },
 
   async update_elements(host, args) {

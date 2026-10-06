@@ -1,9 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Type, X, Languages, Check, Copy } from 'lucide-react';
+// ── Text translator: translate a phrase and drop it on the canvas ─────────────
+// Uses the MyMemory service, behind the one-time translation consent.
+
+import { useEffect, useState } from 'react';
 import { ensureConsent } from '../../lib/consent';
 import { externalFetch } from '../../lib/net';
+import { CloseIcon, TranslateIcon } from '../../ui/icons';
 
-const SUPPORTED_LANGUAGES = [
+const LANGUAGES = [
   { code: 'en', name: 'English' },
   { code: 'ml', name: 'Malayalam (മലയാളം)' },
   { code: 'ta', name: 'Tamil (தமிழ்)' },
@@ -18,227 +21,142 @@ const SUPPORTED_LANGUAGES = [
   { code: 'ru', name: 'Russian' },
 ];
 
-const PRESET_TRANSLATIONS: Record<string, Record<string, string>> = {
-  'architecture diagram': {
-    ml: 'വാസ്തുവിദ്യാ രേഖാചിത്രം',
-    ta: 'கட்டடக்கலை வரைபடம்',
-    hi: 'वास्तुकला आरेख',
-    es: 'diagrama de arquitectura',
-    fr: "diagramme d'architecture",
-  },
-  'deep tech': {
-    ml: 'ഡീപ് ടെക്നോളജി',
-    ta: 'ஆழமான தொழில்நுட்பம்',
-    hi: 'डीप टेक',
-    es: 'tecnología profunda',
-  },
-  'autonomous systems': {
-    ml: 'സ്വയംഭരണ സംവിധാനങ്ങൾ',
-    ta: 'தன்னாட்சி அமைப்புகள்',
-    hi: 'स्वायत्त प्रणाली',
-    es: 'sistemas autónomos',
-  },
-  'hardware acceleration': {
-    ml: 'ഹാർഡ്‌വെയർ ആക്സിലറേഷൻ',
-    ta: 'வன்பொருள் முடுக்கம்',
-    hi: 'हार्डवेयर त्वरण',
-    es: 'aceleración por hardware',
-  },
-};
+const DEBOUNCE_MS = 450;
+const MAX_CHARS = 500; // the free service's per-request limit
 
-export function TextTranslatorModal({
-  onClose,
-  onInsertText,
-}: {
-  onClose: () => void;
-  onInsertText: (text: string) => void;
-}) {
-  const [sourceText, setSourceText] = useState('Aerial Spatial Whiteboard for Engineering');
-  const [sourceLang, setSourceLang] = useState('en');
-  const [targetLang, setTargetLang] = useState('ml');
-  const [translatedText, setTranslatedText] = useState('');
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [copied, setCopied] = useState(false);
+type Result = { state: 'idle' } | { state: 'busy' } | { state: 'done'; text: string } | { state: 'error'; message: string };
 
-  const performTranslate = useCallback(async (text: string, from: string, to: string) => {
-    if (!text.trim()) {
-      setTranslatedText('');
-      return;
-    }
+async function translate(text: string, from: string, to: string, signal: AbortSignal): Promise<string> {
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${encodeURIComponent(`${from}|${to}`)}`;
+  const res = await externalFetch(url, { signal });
+  if (!res.ok) throw new Error(`The translation service answered ${res.status}.`);
+  const data = await res.json();
+  const out = data?.responseData?.translatedText;
+  if (typeof out !== 'string' || !out) throw new Error('The translation service returned nothing.');
+  return out;
+}
 
-    // Check offline dictionary match
-    const lower = text.trim().toLowerCase();
-    if (PRESET_TRANSLATIONS[lower]?.[to]) {
-      setTranslatedText(PRESET_TRANSLATIONS[lower][to]);
-      return;
-    }
-
-    if (!ensureConsent('translation')) return;
-    setIsTranslating(true);
-    try {
-      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${encodeURIComponent(`${from}|${to}`)}`;
-      const res = await externalFetch(url, { signal: AbortSignal.timeout(4000) });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.responseData?.translatedText) {
-          setTranslatedText(data.responseData.translatedText);
-          setIsTranslating(false);
-          return;
-        }
-      }
-      throw new Error('API unavailable');
-    } catch {
-      // Fallback: transliteration / formatted placeholder
-      setTranslatedText(`[${to.toUpperCase()}] ${text}`);
-    } finally {
-      setIsTranslating(false);
-    }
-  }, []);
+export function TextTranslatorModal({ onClose, onInsertText }: { onClose: () => void; onInsertText: (text: string) => void }) {
+  const [source, setSource] = useState('');
+  const [from, setFrom] = useState('en');
+  const [to, setTo] = useState('ml');
+  const [result, setResult] = useState<Result>({ state: 'idle' });
 
   useEffect(() => {
-    performTranslate(sourceText, sourceLang, targetLang);
-  }, [sourceText, sourceLang, targetLang, performTranslate]);
+    const text = source.trim();
+    if (!text || from === to) {
+      setResult(text ? { state: 'done', text } : { state: 'idle' });
+      return;
+    }
+    const ctl = new AbortController();
+    const timer = setTimeout(async () => {
+      if (!(await ensureConsent('translation'))) {
+        setResult({ state: 'error', message: 'Translation needs your permission to send this text to MyMemory.' });
+        return;
+      }
+      setResult({ state: 'busy' });
+      try {
+        const out = await translate(text, from, to, AbortSignal.any([ctl.signal, AbortSignal.timeout(6000)]));
+        setResult({ state: 'done', text: out });
+      } catch (err) {
+        if (ctl.signal.aborted) return;
+        setResult({ state: 'error', message: err instanceof Error && err.name !== 'TimeoutError' ? err.message : 'Could not reach the translation service.' });
+      }
+    }, DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [source, from, to]);
 
-  const handleCopy = async () => {
-    if (!translatedText) return;
-    await navigator.clipboard.writeText(translatedText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const output = result.state === 'done' ? result.text : '';
+  const swap = () => {
+    setFrom(to);
+    setTo(from);
+    if (output) setSource(output);
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#0a0a0a]/80 backdrop-blur-md pointer-events-auto animate-in fade-in duration-150">
-      <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-2xl w-full max-w-xl mx-4 overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] bg-[var(--secondary)]/40">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#e73f07]/10 flex items-center justify-center text-[#e73f07]">
-              <Languages className="w-5 h-5" />
-            </div>
-            <div>
-              <h2 className="text-sm font-sans font-black uppercase tracking-wider text-[var(--foreground)]">
-                Aerial Multilingual Studio
-              </h2>
-              <p className="text-[10px] font-mono text-[var(--muted-foreground)] uppercase tracking-wider">
-                Translate canvas text across Malayalam, Tamil, Telugu, Hindi & Global Languages
-              </p>
-            </div>
+    <div className="ae-dialog-backdrop" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="ae-dialog ae-translate" role="dialog" aria-modal="true" aria-labelledby="translate-title">
+        <header className="ae-studio__head">
+          <span className="ae-studio__icon" aria-hidden="true">
+            <TranslateIcon />
+          </span>
+          <div className="ae-studio__title">
+            <h2 id="translate-title">Translate text</h2>
+            <p>Translate a phrase, then place it on the canvas.</p>
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-[var(--accent)] transition-colors cursor-pointer text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-          >
-            <X className="w-4 h-4" />
+          <button type="button" className="ae-btn ae-btn--plain" aria-label="Close" onClick={onClose}>
+            <CloseIcon />
           </button>
+        </header>
+
+        <div className="ae-translate__langs">
+          <select className="ae-select" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="From">
+            {LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="ae-btn" aria-label="Swap languages" title="Swap languages" onClick={swap}>
+            ⇄
+          </button>
+          <select className="ae-select" value={to} onChange={(e) => setTo(e.target.value)} aria-label="To">
+            {LANGUAGES.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.name}
+              </option>
+            ))}
+          </select>
         </div>
 
-        {/* Language Selectors */}
-        <div className="px-6 py-3 border-b border-[var(--border)] bg-[var(--secondary)]/20 grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-1.5">
-              From Language
-            </label>
-            <select
-              value={sourceLang}
-              onChange={(e) => setSourceLang(e.target.value)}
-              className="w-full bg-[var(--secondary)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-mono font-bold uppercase tracking-wider text-[var(--foreground)] outline-none focus:border-[#e73f07]"
-            >
-              {SUPPORTED_LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-1.5">
-              To Language
-            </label>
-            <select
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              className="w-full bg-[var(--secondary)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-mono font-bold uppercase tracking-wider text-[var(--foreground)] outline-none focus:border-[#e73f07]"
-            >
-              {SUPPORTED_LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {/* Input & Output */}
-        <div className="p-6 flex flex-col gap-4 overflow-y-auto">
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold mb-1.5">
-              Source Text
-            </label>
-            <textarea
-              value={sourceText}
-              onChange={(e) => setSourceText(e.target.value)}
-              rows={3}
-              placeholder="Enter text to translate..."
-              className="w-full bg-[#0a0a0a] text-[var(--foreground)] font-sans text-sm p-3.5 rounded-2xl border border-[var(--border)] outline-none focus:border-[#e73f07] transition-all resize-none shadow-inner"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[10px] font-mono uppercase tracking-wider text-[var(--muted-foreground)] font-bold">
-                Translated Result
-              </label>
-              <div className="flex items-center gap-2">
-                {isTranslating && (
-                  <span className="text-[10px] font-mono text-[#e73f07] animate-pulse">Translating...</span>
-                )}
-                {translatedText && (
-                  <button
-                    onClick={handleCopy}
-                    className="text-[10px] font-mono font-bold uppercase tracking-wider text-[var(--muted-foreground)] hover:text-[var(--foreground)] flex items-center gap-1 cursor-pointer"
-                  >
-                    {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
-                    {copied ? 'Copied' : 'Copy'}
-                  </button>
-                )}
-              </div>
-            </div>
-            <textarea
-              value={translatedText}
-              onChange={(e) => setTranslatedText(e.target.value)}
-              rows={3}
-              placeholder="Translation will appear here..."
-              className="w-full bg-[#111111] text-[var(--foreground)] font-sans text-sm p-3.5 rounded-2xl border border-[var(--border)] outline-none focus:border-[#e73f07] transition-all resize-none"
-            />
+        <div className="ae-translate__panes">
+          <textarea
+            className="ae-input ae-translate__text"
+            autoFocus
+            value={source}
+            maxLength={MAX_CHARS}
+            onChange={(e) => setSource(e.target.value)}
+            placeholder="Type or paste text…"
+            aria-label="Text to translate"
+          />
+          <div className="ae-input ae-translate__text ae-translate__out" aria-live="polite">
+            {result.state === 'busy' && <span className="ae-translate__muted">Translating…</span>}
+            {result.state === 'error' && <span className="ae-translate__error">{result.message}</span>}
+            {result.state === 'done' && output}
+            {result.state === 'idle' && <span className="ae-translate__muted">The translation appears here.</span>}
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-[var(--border)] bg-[var(--secondary)]/30 flex items-center justify-between">
-          <p className="text-[10px] font-mono text-[var(--muted-foreground)]">
-            Ready to insert onto active canvas.
+        <footer className="ae-studio__foot">
+          <p className="ae-studio__hint">
+            {source.length}/{MAX_CHARS}
           </p>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--accent)] transition-all cursor-pointer"
-            >
-              Cancel
+          <div className="ae-dialog__actions">
+            <button type="button" className="ae-cta" disabled={!output} onClick={() => void navigator.clipboard.writeText(output)}>
+              Copy
             </button>
             <button
+              type="button"
+              className="ae-cta ae-cta--primary"
+              disabled={!output}
               onClick={() => {
-                if (translatedText.trim()) {
-                  onInsertText(translatedText.trim());
-                }
+                onInsertText(output.trim());
+                onClose();
               }}
-              disabled={!translatedText.trim() || isTranslating}
-              className="px-5 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider bg-[#e73f07] hover:bg-[#d03806] text-white disabled:opacity-40 transition-all shadow-md shadow-[#e73f07]/20 active:translate-y-px cursor-pointer flex items-center gap-2"
             >
-              <Type className="w-3.5 h-3.5" />
-              Insert as Text
+              Insert on canvas
             </button>
           </div>
-        </div>
+        </footer>
       </div>
     </div>
   );

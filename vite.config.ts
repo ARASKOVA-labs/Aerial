@@ -3,6 +3,10 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import dts from "vite-plugin-dts";
 import { resolve } from "path";
+import { readFileSync } from "fs";
+
+// Exposed to index.html (%VITE_APP_VERSION%) and the app (import.meta.env).
+process.env.VITE_APP_VERSION = JSON.parse(readFileSync(resolve(__dirname, "package.json"), "utf8")).version;
 
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => {

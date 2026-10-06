@@ -270,7 +270,7 @@ impl AerialCanvas {
             "MagicPen" => self.magic_strokes.push(stroke),
             _ => {
                 if stroke.is_freehand() && stroke.points.len() > 8 {
-                    if stroke.pressures.len() != stroke.points.len() {
+                    if !crate::freehand::has_real_pressure(&stroke.points, &stroke.pressures) {
                         let opts = crate::freehand::preset(&stroke.kind, stroke.stroke_width);
                         stroke.pressures = crate::freehand::simulated_pressures(&stroke.points, &opts);
                     }

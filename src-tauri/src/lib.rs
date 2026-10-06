@@ -1,23 +1,31 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The MCP tool catalogue (mcp.rs) is one large json! literal.
+#![recursion_limit = "512"]
 
 //! Aerial desktop shell.
 //!
 //! IPC surface (all inputs validated in `security`):
 //!   boards   load_board_scene · save_board_changes · delete_board
 //!   assets   save_asset · load_asset · read_dropped_image
+//!   storage  storage_status
+//!   agent    agent_respond (MCP bridge, see agent.rs / mcp.rs)
+//!   files    save_aerial_file · open_aerial_file · take_opened_files
 //!   diagrams render_diagram · update_diagram_node · openrouter_generate
-//!   window   hide_window
 
+mod agent;
 mod ai;
 mod diagram;
+mod files;
+mod mcp;
 mod security;
 mod storage;
+mod vault;
 
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use tauri::{Emitter, Manager, State, Window};
+use tauri::{Manager, State};
 
 use security::{image_mime_for, DropGrants, MAX_DROPPED_FILE_BYTES};
 use storage::Store;
@@ -61,6 +69,13 @@ async fn load_asset(state: State<'_, AppState>, id: String) -> Result<String, St
     blocking(&state, move |s| s.load_asset(&id)).await
 }
 
+/// Whether stored boards are encrypted at rest (`encrypted`), the key is
+/// unavailable (`locked`), or the platform has no credential store.
+#[tauri::command]
+fn storage_status(state: State<'_, AppState>) -> vault::VaultState {
+    state.store.vault_state()
+}
+
 /// Reads an image the user just dropped onto the window and returns it as a
 /// data URL. Only paths reported by the OS drop event in the last minute are
 /// readable, only image extensions are accepted, and size is capped.
@@ -83,22 +98,6 @@ async fn read_dropped_image(state: State<'_, AppState>, path: String) -> Result<
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
-#[tauri::command]
-fn hide_window(window: Window) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())
-}
-
-fn show_main(app: &tauri::AppHandle, quick_note: bool) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        if quick_note {
-            let _ = window.emit("quick-canvas:open", true);
-        }
-    }
-}
-
 fn init_tracing() {
     // Structured logs to stderr. `audit` target lines record security-relevant
     // events (rejected input, deletions, AI requests) without user content.
@@ -114,7 +113,7 @@ fn init_tracing() {
 pub fn run() {
     init_tracing();
 
-    let builder = tauri::Builder::default().plugin(tauri_plugin_http::init());
+    let builder = tauri::Builder::default().plugin(tauri_plugin_http::init()).plugin(tauri_plugin_dialog::init());
 
     let builder = builder.on_window_event(|window, event| match event {
         tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -125,17 +124,19 @@ pub fn run() {
         _ => {}
     });
 
-    #[cfg(desktop)]
-    let builder = builder;
-
     let result = builder
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-            let store = Store::open(&app_data_dir)?;
+            let store = Store::open(&app_data_dir, vault::Vault::open())?;
             app.manage(AppState { store: Arc::new(store), drops: DropGrants::default() });
+            app.manage(files::PendingOpens::default());
+            app.manage(agent::AgentBridge::default());
+            agent::start(app.handle(), &app_data_dir);
 
-            // #[cfg(desktop)]
-            // setup_desktop(app); // Disabled quick note and background tray
+            // Windows and Linux pass files opened with Aerial as arguments.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            files::handle_opened_paths(app.handle(), std::env::args_os().skip(1).map(std::path::PathBuf::from));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -144,70 +145,41 @@ pub fn run() {
             delete_board,
             save_asset,
             load_asset,
+            storage_status,
             read_dropped_image,
-            hide_window,
             ai::openrouter_generate,
             diagram::render_diagram,
-            diagram::update_diagram_node
+            diagram::update_diagram_node,
+            files::save_aerial_file,
+            files::open_aerial_file,
+            files::take_opened_files,
+            agent::agent_respond
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(e) = result {
-        tracing::error!(error = %e, "Aerial failed to start");
-        std::process::exit(1);
-    }
+    let app = match result {
+        Ok(app) => app,
+        Err(e) => {
+            tracing::error!(error = %e, "Aerial failed to start");
+            std::process::exit(1);
+        }
+    };
+    app.run(|app, event| match event {
+        // macOS / iOS deliver files opened with Aerial (Finder, Open With) here.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        tauri::RunEvent::Opened { urls } => {
+            files::handle_opened_paths(app, urls.into_iter().filter_map(|u| u.to_file_path().ok()));
+        }
+        tauri::RunEvent::Exit => {
+            if let Ok(dir) = app.path().app_data_dir() {
+                agent::stop(&dir);
+            }
+        }
+        _ => {}
+    });
 }
 
-#[cfg(desktop)]
-fn setup_desktop(app: &tauri::App) {
-    use tauri::menu::{Menu, MenuItem};
-    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-    // Global shortcuts for the instant Quick Canvas.
-    for combo in ["alt+space", "super+shift+a"] {
-        match combo.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-            Ok(shortcut) => {
-                if let Err(e) = app.global_shortcut().register(shortcut) {
-                    tracing::warn!(combo, error = %e, "global shortcut unavailable");
-                }
-            }
-            Err(e) => tracing::warn!(combo, error = %e, "invalid shortcut"),
-        }
-    }
-
-    // Menu bar tray icon.
-    let items = (
-        MenuItem::with_id(app, "quick_note", "Quick Note (⌥Space / ⌘⇧A)", true, None::<&str>),
-        MenuItem::with_id(app, "show", "Open Aerial Canvas", true, None::<&str>),
-        MenuItem::with_id(app, "quit", "Quit Aerial", true, None::<&str>),
-    );
-    let (Ok(note), Ok(show), Ok(quit)) = items else {
-        tracing::warn!("tray menu items could not be created");
-        return;
-    };
-    let Ok(menu) = Menu::with_items(app, &[&note, &show, &quit]) else {
-        tracing::warn!("tray menu could not be created");
-        return;
-    };
-    let mut tray = TrayIconBuilder::new()
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "quit" => app.exit(0),
-            "show" => show_main(app, false),
-            "quick_note" => show_main(app, true),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                show_main(tray.app_handle(), true);
-            }
-        });
-    if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
-    }
-    if let Err(e) = tray.build(app) {
-        tracing::warn!(error = %e, "tray icon could not be created");
-    }
+/// `Aerial mcp`: serve the Model Context Protocol on stdio (no window).
+pub fn run_mcp() {
+    mcp::run_stdio();
 }

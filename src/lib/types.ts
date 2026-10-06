@@ -104,6 +104,8 @@ export interface AerialEngine {
   /** Drains changes since the last call: {"reset","upserts","deletes"} JSON. O(changed). */
   take_changes: () => string;
   has_pending_changes: () => boolean;
+  /** Source of the image cached for an element (a data URL for stored assets). */
+  cached_image_src: (id: bigint) => string | undefined;
   /** [[elementId, assetId], ...] for asset-backed elements. */
   get_asset_refs: () => string;
   last_load_rejected: () => number;
@@ -145,6 +147,16 @@ export interface AerialEngine {
   zoom_in: () => number;
   zoom_out: () => number;
   reset_view: () => number;
+  /** Adds elements from a JSON array (one undo step); returns a JSON array of ids (null = rejected). */
+  add_elements_json: (json: string) => string;
+  /** Merges field patches into elements by id (one undo step); returns updated ids as JSON. */
+  update_elements_json: (json: string) => string;
+  move_elements_json: (idsJson: string, dx: number, dy: number) => number;
+  delete_elements_json: (idsJson: string) => number;
+  /** Frames the whole board; returns the new zoom. */
+  zoom_to_fit: (padding: number) => number;
+  /** [minX, minY, maxX, maxY] of all content in world units, or [] when empty. */
+  content_bounds: () => Float64Array;
   get_zoom: () => number;
 
   // Input events
@@ -305,6 +317,8 @@ export interface AerialCanvasRef {
   zoomOut: () => void;
   /** Reset the view to default zoom and position */
   resetView: () => void;
+  /** Frame everything on the board */
+  zoomToFit: () => void;
   /** Get current zoom percentage */
   getZoom: () => number;
   /** Programmatically set the active drawing tool */

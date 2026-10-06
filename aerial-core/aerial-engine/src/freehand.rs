@@ -88,30 +88,73 @@ pub fn simulated_pressures(points: &[(f64, f64)], o: &Opts) -> Vec<f32> {
     out
 }
 
+/// True when `pressures` came from a pressure-sensitive device (or were baked
+/// on commit). Mice report a constant 0.5, which is treated as "no pressure".
+pub fn has_real_pressure(points: &[(f64, f64)], pressures: &[f32]) -> bool {
+    pressures.len() == points.len()
+        && pressures.iter().all(|p| p.is_finite())
+        && pressures.iter().any(|&p| (p - pressures[0]).abs() > 0.01)
+}
+
+/// Re-spaces a polyline (and its pressures) to a fixed arc-length step.
+///
+/// Streamlining lags a fixed fraction per sample, so on raw input its effect
+/// depended on point density: the dense live stroke and the RDP-simplified
+/// committed stroke came out as different shapes. Uniform spacing makes the
+/// smoothing a function of the path alone, so what is drawn is what is kept.
+fn resample(points: &[(f64, f64)], pressures: &[f32], step: f64) -> (Vec<(f64, f64)>, Vec<f64>) {
+    let mut pts = Vec::with_capacity(points.len());
+    let mut prs = Vec::with_capacity(points.len());
+    let Some(&first) = points.first() else { return (pts, prs) };
+    pts.push(first);
+    prs.push(pressures[0] as f64);
+    let mut carry = 0.0; // distance travelled since the last emitted sample
+    for i in 1..points.len() {
+        let (a, b) = (points[i - 1], points[i]);
+        let (pa, pb) = (pressures[i - 1] as f64, pressures[i] as f64);
+        let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        if len < 1e-12 {
+            continue;
+        }
+        let mut at = step - carry;
+        while at <= len {
+            let t = at / len;
+            pts.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
+            prs.push(pa + (pb - pa) * t);
+            at += step;
+        }
+        carry = len - (at - step);
+    }
+    let last = points[points.len() - 1];
+    if pts.last().is_none_or(|q| (q.0 - last.0).abs() > 1e-9 || (q.1 - last.1).abs() > 1e-9) {
+        pts.push(last);
+        prs.push(pressures[pressures.len() - 1] as f64);
+    }
+    (pts, prs)
+}
+
 /// Streamlined, pressure-annotated centre line.
 fn samples(points: &[(f64, f64)], pressures: &[f32], o: &Opts) -> Vec<Sample> {
-    let real = pressures.len() == points.len()
-        && pressures.iter().any(|&p| (p - pressures[0]).abs() > 0.01)
-        && pressures.iter().all(|p| p.is_finite());
+    // Without device pressure, simulate it from the raw input spacing (speed)
+    // first — the same values commit bakes into the element.
+    let simulated;
+    let pressures = if has_real_pressure(points, pressures) {
+        pressures
+    } else {
+        simulated = simulated_pressures(points, o);
+        &simulated[..]
+    };
+    let (points, pressures) = resample(points, pressures, (o.size * 0.15).max(0.05));
     let t = 0.15 + (1.0 - o.streamline.clamp(0.0, 1.0)) * 0.85;
     let mut out: Vec<Sample> = Vec::with_capacity(points.len());
     let (mut sx, mut sy) = points[0];
-    let mut prev_p = if real { pressures[0] as f64 } else { 0.5 };
+    let mut prev_p = pressures[0].clamp(0.0, 1.0);
     let mut run = 0.0;
-    let min_step = (o.size * 0.08).max(0.05);
     for (i, &(x, y)) in points.iter().enumerate() {
         let last = i + 1 == points.len();
         let (nx, ny) = if i == 0 || last { (x, y) } else { (sx + (x - sx) * t, sy + (y - sy) * t) };
         let d = ((nx - sx).powi(2) + (ny - sy).powi(2)).sqrt();
-        if i > 0 && d < min_step && !last {
-            continue;
-        }
-        let p = if real {
-            let raw = (pressures[i] as f64).clamp(0.0, 1.0);
-            prev_p + (raw - prev_p) * 0.5
-        } else {
-            simulate_step(prev_p, d, o)
-        };
+        let p = prev_p + (pressures[i].clamp(0.0, 1.0) - prev_p) * 0.5;
         run += d;
         out.push(Sample { x: nx, y: ny, p, run });
         sx = nx;
@@ -283,6 +326,67 @@ mod tests {
         let r0 = ((out[0].0 - 5.0).powi(2) + (out[0].1 - 5.0).powi(2)).sqrt();
         let r8 = ((out[8].0 - 5.0).powi(2) + (out[8].1 - 5.0).powi(2)).sqrt();
         assert!((r0 - r8).abs() < 1e-9);
+    }
+
+    /// Outline of a stroke as it is committed: pressures baked, then the
+    /// point list RDP-simplified (mirrors `commit_active_stroke`).
+    fn committed_outline(live: &[(f64, f64)], o: &Opts) -> Vec<(f64, f64)> {
+        let baked = simulated_pressures(live, o);
+        let keep = crate::geom::simplify_rdp_indices(live, 0.25);
+        let pts: Vec<_> = keep.iter().map(|&i| live[i]).collect();
+        let prs: Vec<_> = keep.iter().map(|&i| baked[i]).collect();
+        let mut out = Vec::new();
+        outline(&pts, &prs, o, &mut out);
+        out
+    }
+
+    /// Largest distance from a vertex of `b` to the polygon `a`.
+    fn drift(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
+        let seg = |q: (f64, f64), p0: (f64, f64), p1: (f64, f64)| {
+            let (dx, dy) = (p1.0 - p0.0, p1.1 - p0.1);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 { (((q.0 - p0.0) * dx + (q.1 - p0.1) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            ((p0.0 + dx * t - q.0).powi(2) + (p0.1 + dy * t - q.1).powi(2)).sqrt()
+        };
+        b.iter().map(|&q| (0..a.len()).map(|i| seg(q, a[i], a[(i + 1) % a.len()])).fold(f64::MAX, f64::min)).fold(0.0, f64::max)
+    }
+
+    /// What is written is what is kept: the committed stroke must match the
+    /// live one the user saw while drawing (it used to cut corners because
+    /// streamlining ran per point and simplification removes most points).
+    #[test]
+    fn committed_stroke_matches_live_stroke() {
+        // An "M": straight runs sampled every 2px collapse to 5 points on commit.
+        let corners = [(0.0, 0.0), (10.0, -40.0), (20.0, 0.0), (30.0, -40.0), (40.0, 0.0)];
+        let mut zig: Vec<(f64, f64)> = corners
+            .windows(2)
+            .flat_map(|w| (0..20).map(move |k| {
+                let f = k as f64 / 20.0;
+                (w[0].0 + (w[1].0 - w[0].0) * f, w[0].1 + (w[1].1 - w[0].1) * f)
+            }))
+            .collect();
+        zig.push((40.0, 0.0));
+        // Cursive loops (turn radius well above the pen width) at varying
+        // speed, with a little hand jitter.
+        let mut cursive = Vec::new();
+        let mut t: f64 = 0.0;
+        while t < 18.0 {
+            let j = (t * 91.0).sin() * 0.3;
+            cursive.push((t * 10.0 + t.sin() * 30.0 + j, -t.cos() * 25.0 - j));
+            t += 0.015 + 0.03 * (t * 0.7).sin().abs();
+        }
+        for kind in ["FreeDraw", "FountainPen", "Marker", "Highlighter"] {
+            let o = preset(kind, 2.0);
+            for (name, live, tol) in [("zig", &zig, 0.1), ("cursive", &cursive, 0.15)] {
+                if name == "cursive" && kind == "FountainPen" {
+                    continue; // long tapers follow total length, which jitter inflates
+                }
+                let mut a = Vec::new();
+                outline(live, &vec![0.5; live.len()], &o, &mut a);
+                let d = drift(&a, &committed_outline(live, &o));
+                assert!(d < o.size * tol, "{kind}/{name}: committed outline drifts {d:.2} from live (size {})", o.size);
+            }
+        }
     }
 
     #[test]

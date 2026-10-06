@@ -1,6 +1,6 @@
 {
   "name": "@araskova/aerial",
-  "version": "1.2.2",
+  "version": "3.0.0",
   "description": "Ultra-high performance 120 FPS infinite canvas and ideation framework powered by Rust, WebAssembly, and Yrs CRDTs.",
   "private": false,
   "license": "MIT",
@@ -65,7 +65,8 @@
     "ios:build": "bun run build && cargo build --manifest-path src-tauri/Cargo.toml --target aarch64-apple-ios --features custom-protocol --release --lib && mkdir -p src-tauri/gen/apple/Externals/arm64/Release && cp target/aarch64-apple-ios/release/libaerial.a src-tauri/gen/apple/Externals/arm64/Release/libapp.a && xcodebuild -project src-tauri/gen/apple/aerial.xcodeproj -scheme aerial_iOS -configuration release -destination \"id=$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" build",
     "ios:install": "xcrun devicectl device install app --device \"$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" ~/Library/Developer/Xcode/DerivedData/aerial-*/Build/Products/release-iphoneos/Aerial.app",
     "ios:launch": "xcrun devicectl device process launch --device \"$(xcrun devicectl list devices | grep connected | head -n 1 | awk '{print $3}')\" com.araskova.aerial",
-    "test": "cargo test --workspace"
+    "test": "bun test src && cargo test --workspace",
+    "test:web": "bun test src"
   },
   "dependencies": {
     "dompurify": "^3.4.16",

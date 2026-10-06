@@ -247,11 +247,16 @@
 .ae-tip--right:hover::after {
   transform: translate(0, -50%);
 }
+/* A menu trigger's tooltip would sit on top of its own open menu. */
+.ae-tip[aria-haspopup][aria-pressed="true"]::after {
+  display: none;
+}
 
 /* ── Popovers / menus ──────────────────────────────────────────────────── */
 .ae-pop {
-  position: absolute;
+  position: fixed;
   z-index: 40;
+  max-width: calc(100vw - 16px);
   background: var(--ae-surface);
   border-radius: var(--ae-radius-lg);
   box-shadow: var(--ae-shadow-lg);
@@ -266,10 +271,32 @@
   }
 }
 .ae-menu {
-  min-width: 248px;
-  max-height: calc(100vh - 96px);
-  overflow: auto;
+  min-width: min(248px, calc(100vw - 32px));
+  /* Stop above the bottom zoom/undo bar, and never past the window edge. */
+  max-height: min(calc(100vh - 150px), calc(var(--ae-pop-max-h, 100vh) - 16px));
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* WebKit (the macOS app) draws overlay scrollbars on top of the shortcut
+ * hints; a styled scrollbar takes real layout space instead. (No standard
+ * `scrollbar-width` here: it would switch these pseudo-elements off.) */
+.ae-menu::-webkit-scrollbar,
+.ae-panel::-webkit-scrollbar {
+  width: 6px;
+}
+.ae-menu::-webkit-scrollbar-track,
+.ae-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ae-menu::-webkit-scrollbar-thumb,
+.ae-panel::-webkit-scrollbar-thumb {
+  background: var(--ae-divider);
+  border-radius: 3px;
+}
+.ae-menu::-webkit-scrollbar-thumb:hover,
+.ae-panel::-webkit-scrollbar-thumb:hover {
+  background: var(--ae-primary);
 }
 .ae-menu-item {
   appearance: none;
@@ -360,7 +387,6 @@
   gap: 14px;
   padding: 12px;
   animation: ae-panel-in 0.18s var(--ae-ease);
-  scrollbar-width: thin;
 }
 @keyframes ae-panel-in {
   from {
@@ -742,6 +768,363 @@ a.ae-cta {
   margin-top: 12px;
 }
 
+/* ── Diagram studio ────────────────────────────────────────────────────── */
+.ae-dialog.ae-studio {
+  width: min(1080px, 100%);
+  height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.ae-studio__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 16px 12px 20px;
+}
+.ae-studio__icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--ae-radius);
+  background: var(--ae-primary-light);
+  color: var(--ae-primary);
+}
+.ae-studio__icon svg {
+  width: 20px;
+  height: 20px;
+}
+.ae-studio__title {
+  flex: 1;
+  min-width: 0;
+}
+.ae-studio__title h2 {
+  margin: 0;
+}
+.ae-studio__title p {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+.ae-studio__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 20px;
+  padding: 0 20px 14px;
+  border-bottom: 1px solid var(--ae-divider);
+}
+.ae-studio__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ae-text-muted);
+}
+.ae-studio__field .ae-select {
+  width: auto;
+  min-width: 112px;
+}
+.ae-studio__field .ae-swatches {
+  height: 32px;
+}
+.ae-studio__body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+}
+.ae-studio__code {
+  margin: 0;
+  border: 0;
+  border-right: 1px solid var(--ae-divider);
+  padding: 16px 20px;
+  resize: none;
+  outline: none;
+  background: var(--ae-surface);
+  color: var(--ae-text);
+  font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  tab-size: 2;
+  user-select: text;
+}
+.ae-studio__code:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ae-primary) 35%, transparent);
+}
+.ae-studio__preview {
+  position: relative;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  overflow: auto;
+  background-color: var(--ae-surface-low);
+  background-image: radial-gradient(var(--ae-divider) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+.ae-studio__preview[data-style="brutalist"] {
+  background-color: #18181b;
+  background-image: radial-gradient(#2c2c31 1px, transparent 1px);
+}
+.ae-studio__preview[data-style="blueprint"] {
+  background-color: #0c1524;
+  background-image: radial-gradient(#1b2b45 1px, transparent 1px);
+}
+.ae-studio__preview img {
+  position: absolute;
+  inset: 20px;
+  width: calc(100% - 40px);
+  height: calc(100% - 40px);
+  object-fit: contain;
+  transition: opacity 0.15s ease;
+}
+.ae-studio__preview[aria-busy="true"] img {
+  opacity: 0.6;
+}
+.ae-studio__empty {
+  font-size: 13px;
+  color: var(--ae-text-muted);
+}
+.ae-studio__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px 12px 20px;
+  border-top: 1px solid var(--ae-divider);
+}
+.ae-studio__foot .ae-dialog__actions {
+  margin: 0;
+  flex: none;
+}
+.ae-studio__hint,
+.ae-studio__error {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.ae-dialog .ae-studio__error {
+  max-height: 4.8em;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: var(--ae-danger);
+  font: 11px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (max-width: 720px) {
+  .ae-studio__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+  .ae-studio__code {
+    border-right: 0;
+    border-bottom: 1px solid var(--ae-divider);
+  }
+}
+
+/* ── Command palette ───────────────────────────────────────────────────── */
+.ae-palette-backdrop {
+  place-items: start center;
+  padding-top: min(14vh, 120px);
+}
+.ae-dialog.ae-cmdk {
+  width: min(560px, 100%);
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.ae-cmdk__input {
+  flex: none;
+  height: 52px;
+  padding: 0 18px;
+  border: 0;
+  border-bottom: 1px solid var(--ae-divider);
+  outline: none;
+  background: transparent;
+  color: var(--ae-text);
+  font: 400 15px var(--ae-font);
+  caret-color: var(--ae-primary);
+}
+.ae-cmdk__input::placeholder {
+  color: var(--ae-hint);
+}
+.ae-cmdk__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 8px 8px;
+}
+.ae-cmdk__list::-webkit-scrollbar {
+  width: 6px;
+}
+.ae-cmdk__list::-webkit-scrollbar-thumb {
+  background: var(--ae-divider);
+  border-radius: 3px;
+}
+.ae-cmdk .ae-menu-item[aria-selected="true"] {
+  background: var(--ae-surface-high);
+}
+.ae-cmdk .ae-menu-item[aria-selected="true"] svg {
+  color: var(--ae-primary);
+}
+.ae-cmdk__empty {
+  padding: 18px 10px;
+  text-align: center;
+}
+.ae-cmdk__foot {
+  flex: none;
+  display: flex;
+  gap: 16px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--ae-divider);
+  font-size: 11px;
+  color: var(--ae-text-muted);
+}
+.ae-cmdk__foot kbd {
+  display: inline-block;
+  min-width: 18px;
+  margin-right: 3px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--ae-surface-low);
+  box-shadow: inset 0 -1px 0 var(--ae-divider);
+  font: 600 10px var(--ae-font);
+  text-align: center;
+  color: var(--ae-text);
+}
+
+/* ── Translator ────────────────────────────────────────────────────────── */
+.ae-dialog.ae-translate {
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+.ae-translate__langs {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 12px;
+}
+.ae-translate__panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 0 20px 16px;
+}
+.ae-input.ae-translate__text {
+  min-height: 160px;
+  resize: none;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.ae-input.ae-translate__out {
+  overflow: auto;
+  background: var(--ae-surface-low);
+  white-space: pre-wrap;
+  user-select: text;
+}
+.ae-translate__muted {
+  color: var(--ae-hint);
+}
+.ae-translate__error {
+  color: var(--ae-danger);
+}
+@media (max-width: 720px) {
+  .ae-translate__panes {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Forms in dialogs ──────────────────────────────────────────────────── */
+.ae-dialog.ae-form {
+  width: min(460px, 100%);
+}
+.ae-form > p {
+  margin-bottom: 14px;
+}
+.ae-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ae-text-muted);
+}
+.ae-field__error {
+  font-weight: 500;
+  color: var(--ae-danger);
+}
+.ae-dialog .ae-field__note {
+  margin-top: 10px;
+  font-size: 12px;
+}
+.ae-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ae-text);
+  cursor: pointer;
+}
+.ae-check input {
+  margin: 2px 0 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ae-primary);
+}
+.ae-check small {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  color: var(--ae-text-muted);
+}
+
+/* ── AI agents dialog ──────────────────────────────────────────────────── */
+.ae-dialog.ae-agents {
+  width: min(560px, 100%);
+}
+.ae-snippet {
+  margin-top: 14px;
+  border: 1px solid var(--ae-divider);
+  border-radius: var(--ae-radius);
+  overflow: hidden;
+}
+.ae-snippet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 6px 12px;
+  background: var(--ae-surface-low);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ae-text-muted);
+}
+.ae-snippet pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--ae-text);
+  user-select: text;
+  white-space: pre;
+}
+.ae-cta.ae-cta--small {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 /* ── Help dialog ───────────────────────────────────────────────────────── */
 .ae-dialog.ae-help {
   width: min(880px, 100%);
@@ -952,4 +1335,9 @@ a.ae-cta {
   .ae-spinner {
     animation-duration: 2s;
   }
+}
+
+.ae-cta--disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }

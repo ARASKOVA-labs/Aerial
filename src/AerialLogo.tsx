@@ -1,175 +1,58 @@
-/**
- * Aerial brand components using Rephen font.
- * Rephen is loaded via @font-face in index.css from /fonts/rephen.ttf.
- */
+// ── Aerial brand ─────────────────────────────────────────────────────────────
+// The mark: an "A" drawn in one pen stroke, its crossbar a contrail ending in
+// the Araskova spark. Sources of truth live in brand/*.svg; these components
+// draw the same geometry inline so it themes and scales crisply.
+
+import { useId } from 'react';
 
 export interface AerialMarkProps {
   size?: number;
   className?: string;
+  /** Draw the dark plate behind the mark (app-icon style). Default true. */
+  plate?: boolean;
+  /** Ink colour of the A when there is no plate. Defaults to currentColor. */
+  ink?: string;
+  /** Kept for API compatibility; the plated mark looks the same in both themes. */
   isDarkMode?: boolean;
 }
 
-/**
- * Iconic 'A' Monogram
- * A bold 'A' in Rephen font on an Araskova Orange squircle background.
- * - Dark Mode: Black monogram (#0a0a0a)
- * - Light Mode: White monogram (#ffffff)
- */
-function MonogramA({ isDarkMode }: { isDarkMode?: boolean }) {
-  const monogramFill = isDarkMode === true ? '#0a0a0a' : isDarkMode === false ? '#ffffff' : undefined;
-
+/** The Aerial mark (64-unit grid, same geometry as brand/aerial-favicon.svg). */
+export function AerialMark({ size = 32, className, plate = true, ink }: AerialMarkProps) {
+  const id = useId().replace(/:/g, '');
+  const trail = `aerial-trail-${id}`;
   return (
-    <>
+    <svg viewBox="0 0 64 64" width={size} height={size} className={className} role="img" aria-label="Aerial">
       <defs>
-        <style>{`
-          @font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }
-          .aerial-monogram-text { fill: #ffffff; }
-          :root.dark .aerial-monogram-text, html.dark .aerial-monogram-text, body.dark .aerial-monogram-text, .dark .aerial-monogram-text { fill: #0a0a0a; }
-          :root:not(.dark) .aerial-monogram-text, html:not(.dark) .aerial-monogram-text, body:not(.dark) .aerial-monogram-text { fill: #ffffff; }
-        `}</style>
+        <linearGradient id={trail} x1="10" y1="0" x2="52" y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#e73f07" stopOpacity="0" />
+          <stop offset="0.4" stopColor="#e73f07" />
+          <stop offset="1" stopColor="#ff8a3d" />
+        </linearGradient>
       </defs>
-      
-      {/* Araskova Orange Squircle Background */}
-      <rect width="44" height="44" rx="11" fill="#e73f07" />
-      
-      {/* 'A' Monogram in Rephen (Black in darkmode, White in lightmode) */}
-      <text
-        x="22"
-        y="23"
-        fontFamily="Rephen, -apple-system, sans-serif"
-        fontSize="27"
-        fontWeight="900"
-        fill={monogramFill}
-        className="aerial-monogram-text"
-        textAnchor="middle"
-        dominantBaseline="central"
-        style={{ fontFamily: 'Rephen, -apple-system, sans-serif', fontWeight: 900 }}
-      >A</text>
-    </>
-  );
-}
-
-/**
- * The Aerial icon mark
- */
-export function AerialMark({ size = 32, className = '', isDarkMode }: AerialMarkProps) {
-  return (
-    <svg
-      viewBox="0 0 44 44"
-      width={size}
-      height={size}
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={className}
-      aria-label="Aerial"
-    >
-      <MonogramA isDarkMode={isDarkMode} />
-    </svg>
-  );
-}
-
-interface AerialWordmarkProps {
-  className?: string;
-  showMark?: boolean;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
-  isDarkMode?: boolean;
-}
-
-const sizeMap = {
-  sm:  { fontSize: 13, markSize: 20, gap: 6,  dot: 4,  tracking: 3.5 },
-  md:  { fontSize: 16, markSize: 24, gap: 8,  dot: 5,  tracking: 4   },
-  lg:  { fontSize: 24, markSize: 32, gap: 10, dot: 7,  tracking: 6   },
-  xl:  { fontSize: 36, markSize: 48, gap: 14, dot: 10, tracking: 9   },
-};
-
-/**
- * Full wordmark: optional mark + "AERIAL" in Rephen + orange dot.
- */
-export function AerialWordmark({ className = '', showMark = false, size = 'md', isDarkMode }: AerialWordmarkProps) {
-  const s = sizeMap[size];
-  const textW = s.fontSize * 16.5; // approx width of "AERIAL PREMIUM" + letter-spacing
-  const totalW = (showMark ? s.markSize + s.gap : 0) + textW + s.dot + 4;
-  const h = s.fontSize * 1.4;
-
-  return (
-    <svg
-      viewBox={`0 0 ${totalW} ${h}`}
-      height={h}
-      width={totalW}
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={className}
-      aria-label="Aerial"
-    >
-      {showMark && (
-        <svg x="0" y={(h - s.markSize) / 2} width={s.markSize} height={s.markSize} viewBox="0 0 44 44">
-          <MonogramA isDarkMode={isDarkMode} />
-        </svg>
-      )}
-
-      {/* AERIAL wordmark */}
-      <text
-        x={showMark ? s.markSize + s.gap : 0}
-        y={h * 0.85}
-        fontFamily="Rephen, serif"
-        fontSize={s.fontSize}
-        letterSpacing={s.tracking}
-        fill="currentColor"
-        style={{ fontFamily: 'Rephen, serif' }}
-      >AERIAL PREMIUM</text>
-
-      {/* Accent dot */}
-      <circle
-        cx={totalW - 2}
-        cy={h * 0.3}
-        r={s.dot / 3.5}
-        fill="#e73f07"
+      {plate && <rect x="0.5" y="0.5" width="63" height="63" rx="14.5" fill="#111113" stroke="#eee9df" strokeOpacity="0.12" />}
+      <path
+        d="M16 51 L29.4 18 Q32 12.5 34.6 18 L48 51"
+        fill="none"
+        stroke={plate ? '#eee9df' : (ink ?? 'currentColor')}
+        strokeWidth="6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
+      <path d="M8 43.5 C20 42.5 34 38.5 51 31 A3 3 0 0 1 52.5 36.6 C36 42 21 44.5 8 43.5 Z" fill={`url(#${trail})`} />
+      <circle cx="52" cy="33.6" r="4.6" fill="#ff8a3d" />
+      <circle cx="52" cy="33.6" r="2" fill="#fff6ea" />
     </svg>
   );
 }
 
-/**
- * Loading screen stack: large monogram mark + AERIAL wordmark below + horizon line.
- */
-export function AerialLogoStack({ className = '', isDarkMode }: { className?: string; isDarkMode?: boolean }) {
+/** Mark + "AERIAL" wordmark in Rephen (the Araskova wordmark face). */
+export function AerialWordmark({ markSize = 46, fontSize = 42, className }: { markSize?: number; fontSize?: number; className?: string }) {
   return (
-    <div className={`flex flex-col items-center gap-3 ${className}`}>
-      {/* Large Monogram */}
-      <svg
-        viewBox="0 0 44 44"
-        width={80}
-        height={80}
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <MonogramA isDarkMode={isDarkMode} />
-      </svg>
-
-      {/* AERIAL wordmark below */}
-      <svg
-        viewBox="0 0 400 28"
-        width={400}
-        height={28}
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-      >
-        <defs>
-          <style>{`@font-face { font-family: 'Rephen'; src: url('/fonts/rephen.ttf') format('truetype'); }`}</style>
-        </defs>
-        <text
-          x="0"
-          y="22"
-          fontFamily="Rephen, serif"
-          fontSize="22"
-          letterSpacing="10"
-          fill="currentColor"
-          style={{ fontFamily: 'Rephen, serif' }}
-        >AERIAL PREMIUM</text>
-      </svg>
-
-      {/* Thin horizon accent */}
-      <div className="w-20 h-px bg-foreground/12 mt-1" />
-    </div>
+    <span className={className} style={{ display: 'inline-flex', alignItems: 'center', gap: Math.round(markSize * 0.3) }}>
+      <AerialMark size={markSize} />
+      <span style={{ fontFamily: 'Rephen, var(--ae-font)', fontSize, fontWeight: 900, letterSpacing: '0.14em', color: 'var(--ae-text)', lineHeight: 1 }}>
+        AERIAL
+      </span>
+    </span>
   );
 }

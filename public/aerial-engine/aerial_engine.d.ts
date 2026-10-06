@@ -5,6 +5,12 @@ export class AerialCanvas {
     free(): void;
     [Symbol.dispose](): void;
     add_diagram(img: HTMLImageElement, x: number, y: number, w: number, h: number, code: string, svg: string, hit_map_str: string): void;
+    /**
+     * Adds elements (a JSON array of partial elements; omitted fields take
+     * defaults, ids are assigned). Returns a JSON array with the new id of
+     * each element, or null where it was rejected by validation.
+     */
+    add_elements_json(json: string): string;
     add_image(img: HTMLImageElement, x: number, y: number, w: number, h: number, asset_id: string): void;
     add_text(text: string, x: number, y: number, size: number, font_family?: string | null, color?: string | null): void;
     apply_remote_delta(bytes: Uint8Array): void;
@@ -13,6 +19,11 @@ export class AerialCanvas {
      * them to every selected element (one undo step).
      */
     apply_style(json: string): void;
+    /**
+     * Source (a data URL for stored assets) of the image cached for an element,
+     * so a board can be exported with its images even where there is no store.
+     */
+    cached_image_src(id: bigint): string | undefined;
     can_redo(): boolean;
     can_undo(): boolean;
     /**
@@ -23,6 +34,15 @@ export class AerialCanvas {
     clear_board(): void;
     clear_laser_strokes(): void;
     clear_magic_strokes(): void;
+    /**
+     * Bounds of everything on the board, `[min_x, min_y, max_x, max_y]` in
+     * world units, or an empty array for an empty board.
+     */
+    content_bounds(): Float64Array;
+    /**
+     * Deletes elements by id (a JSON array), as one undo step. Returns how many were removed.
+     */
+    delete_elements_json(ids_json: string): number;
     delete_selected(): void;
     deselect(): void;
     /**
@@ -79,6 +99,10 @@ export class AerialCanvas {
      * invalid elements are dropped (see `last_load_rejected`).
      */
     load_scene_json(json: string): void;
+    /**
+     * Moves elements by (dx, dy) world units, as one undo step.
+     */
+    move_elements_json(ids_json: string, dx: number, dy: number): number;
     constructor(canvas_id: string);
     /**
      * Moves the selection by (dx, dy) world units as one undo step.
@@ -200,12 +224,22 @@ export class AerialCanvas {
      */
     tick_animations(): boolean;
     undo(): boolean;
+    /**
+     * Merges field patches into existing elements (`[{ "id": 7, "x": 10, ... }]`).
+     * Returns the ids that were updated and are still valid.
+     */
+    update_elements_json(json: string): string;
     update_selected_text(text: string): void;
     update_text_element(id: bigint, text: string, x: number, y: number, size: number, font_family?: string | null, color?: string | null): void;
     world_to_screen_x(wx: number): number;
     world_to_screen_y(wy: number): number;
     zoom_in(): number;
     zoom_out(): number;
+    /**
+     * Frames the whole board with `padding` CSS px on every side, never
+     * zooming in past 100%. Returns the new zoom (unchanged on an empty board).
+     */
+    zoom_to_fit(padding: number): number;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -214,16 +248,20 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_aerialcanvas_free: (a: number, b: number) => void;
     readonly aerialcanvas_add_diagram: (a: number, b: any, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number) => void;
+    readonly aerialcanvas_add_elements_json: (a: number, b: number, c: number) => [number, number];
     readonly aerialcanvas_add_image: (a: number, b: any, c: number, d: number, e: number, f: number, g: number, h: number) => void;
     readonly aerialcanvas_add_text: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly aerialcanvas_apply_remote_delta: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_apply_style: (a: number, b: number, c: number) => void;
+    readonly aerialcanvas_cached_image_src: (a: number, b: bigint) => [number, number];
     readonly aerialcanvas_can_redo: (a: number) => number;
     readonly aerialcanvas_can_undo: (a: number) => number;
     readonly aerialcanvas_check_and_clear_dirty: (a: number) => number;
     readonly aerialcanvas_clear_board: (a: number) => void;
     readonly aerialcanvas_clear_laser_strokes: (a: number) => void;
     readonly aerialcanvas_clear_magic_strokes: (a: number) => void;
+    readonly aerialcanvas_content_bounds: (a: number) => [number, number];
+    readonly aerialcanvas_delete_elements_json: (a: number, b: number, c: number) => number;
     readonly aerialcanvas_delete_selected: (a: number) => void;
     readonly aerialcanvas_deselect: (a: number) => void;
     readonly aerialcanvas_duplicate_selected: (a: number) => void;
@@ -250,6 +288,7 @@ export interface InitOutput {
     readonly aerialcanvas_import_full_state: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_last_load_rejected: (a: number) => number;
     readonly aerialcanvas_load_scene_json: (a: number, b: number, c: number) => void;
+    readonly aerialcanvas_move_elements_json: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly aerialcanvas_new: (a: number, b: number) => [number, number, number];
     readonly aerialcanvas_nudge_selected: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_on_double_click: (a: number, b: number, c: number) => [number, number];
@@ -311,12 +350,14 @@ export interface InitOutput {
     readonly aerialcanvas_take_tool_switch: (a: number) => [number, number];
     readonly aerialcanvas_tick_animations: (a: number) => number;
     readonly aerialcanvas_undo: (a: number) => number;
+    readonly aerialcanvas_update_elements_json: (a: number, b: number, c: number) => [number, number];
     readonly aerialcanvas_update_selected_text: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_update_text_element: (a: number, b: bigint, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly aerialcanvas_world_to_screen_x: (a: number, b: number) => number;
     readonly aerialcanvas_world_to_screen_y: (a: number, b: number) => number;
     readonly aerialcanvas_zoom_in: (a: number) => number;
     readonly aerialcanvas_zoom_out: (a: number) => number;
+    readonly aerialcanvas_zoom_to_fit: (a: number, b: number) => number;
     readonly aerialcanvas_pointer_up: (a: number, b: number, c: number) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;

@@ -42,6 +42,7 @@ const EDITOR: Row[] = [
 const VIEW: Row[] = [
   ['Zoom in / out', [[mod, '+'], [mod, '−']]],
   ['Reset zoom', [[mod, '0']]],
+  ['Zoom to fit', [['⇧', '1']]],
   ['Zoom at cursor', [[mod, 'wheel'], ['pinch']]],
   ['Scroll horizontally', [['⇧', 'wheel']]],
   ['Toggle fullscreen', [['Ctrl', mod === 'Ctrl' ? 'F' : '⌘F']]],
@@ -49,8 +50,9 @@ const VIEW: Row[] = [
 
 const APP: Row[] = [
   ['Command palette', [[mod, 'K']]],
-  ['Quick note', [[mod, 'J'], [mod, '⇧', 'N']]],
   ['New board', [[mod, 'N']]],
+  ['Save as .aerial file', [[mod, 'E']]],
+  ['Open .aerial file', [[mod, '⇧', 'E']]],
   ['Switch to board 1–9', [[mod, '1…9']]],
   ['Open image / PDF', [[mod, 'O'], [mod, '⇧', 'O']]],
   ['Paste screenshot', [[mod, 'V']]],

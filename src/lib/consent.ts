@@ -25,14 +25,22 @@ export function hasConsent(service: ExternalService): boolean {
 // while typing) never re-prompt on every keystroke.
 const declinedThisSession = new Set<ExternalService>();
 
+type Prompter = (service: ExternalService, message: string) => Promise<boolean>;
+let prompter: Prompter | null = null;
+
+/** The app registers its dialog here. Native window.confirm is not reliable in desktop webviews. */
+export function setConsentPrompter(fn: Prompter | null): void {
+  prompter = fn;
+}
+
 /**
- * Returns true if the user has agreed, asking if they have not yet. After a
+ * Resolves true if the user has agreed, asking if they have not yet. After a
  * decline, only an explicit user action (`{ reask: true }`) asks again.
  */
-export function ensureConsent(service: ExternalService, opts: { reask?: boolean } = {}): boolean {
+export async function ensureConsent(service: ExternalService, opts: { reask?: boolean } = {}): Promise<boolean> {
   if (hasConsent(service)) return true;
   if (declinedThisSession.has(service) && !opts.reask) return false;
-  const ok = window.confirm(PROMPTS[service]);
+  const ok = prompter ? await prompter(service, PROMPTS[service]) : false;
   if (!ok) declinedThisSession.add(service);
   if (ok) {
     try {

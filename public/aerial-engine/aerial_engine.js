@@ -31,6 +31,27 @@ export class AerialCanvas {
         wasm.aerialcanvas_add_diagram(this.__wbg_ptr, img, x, y, w, h, ptr0, len0, ptr1, len1, ptr2, len2);
     }
     /**
+     * Adds elements (a JSON array of partial elements; omitted fields take
+     * defaults, ids are assigned). Returns a JSON array with the new id of
+     * each element, or null where it was rejected by validation.
+     * @param {string} json
+     * @returns {string}
+     */
+    add_elements_json(json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.aerialcanvas_add_elements_json(this.__wbg_ptr, ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * @param {HTMLImageElement} img
      * @param {number} x
      * @param {number} y
@@ -79,6 +100,21 @@ export class AerialCanvas {
         wasm.aerialcanvas_apply_style(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Source (a data URL for stored assets) of the image cached for an element,
+     * so a board can be exported with its images even where there is no store.
+     * @param {bigint} id
+     * @returns {string | undefined}
+     */
+    cached_image_src(id) {
+        const ret = wasm.aerialcanvas_cached_image_src(this.__wbg_ptr, id);
+        let v1;
+        if (ret[0] !== 0) {
+            v1 = getStringFromWasm0(ret[0], ret[1]);
+            wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        }
+        return v1;
+    }
+    /**
      * @returns {boolean}
      */
     can_redo() {
@@ -109,6 +145,28 @@ export class AerialCanvas {
     }
     clear_magic_strokes() {
         wasm.aerialcanvas_clear_magic_strokes(this.__wbg_ptr);
+    }
+    /**
+     * Bounds of everything on the board, `[min_x, min_y, max_x, max_y]` in
+     * world units, or an empty array for an empty board.
+     * @returns {Float64Array}
+     */
+    content_bounds() {
+        const ret = wasm.aerialcanvas_content_bounds(this.__wbg_ptr);
+        var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
+        return v1;
+    }
+    /**
+     * Deletes elements by id (a JSON array), as one undo step. Returns how many were removed.
+     * @param {string} ids_json
+     * @returns {number}
+     */
+    delete_elements_json(ids_json) {
+        const ptr0 = passStringToWasm0(ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.aerialcanvas_delete_elements_json(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
     }
     delete_selected() {
         wasm.aerialcanvas_delete_selected(this.__wbg_ptr);
@@ -400,6 +458,19 @@ export class AerialCanvas {
         const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.aerialcanvas_load_scene_json(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Moves elements by (dx, dy) world units, as one undo step.
+     * @param {string} ids_json
+     * @param {number} dx
+     * @param {number} dy
+     * @returns {number}
+     */
+    move_elements_json(ids_json, dx, dy) {
+        const ptr0 = passStringToWasm0(ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.aerialcanvas_move_elements_json(this.__wbg_ptr, ptr0, len0, dx, dy);
+        return ret >>> 0;
     }
     /**
      * @param {string} canvas_id
@@ -829,6 +900,26 @@ export class AerialCanvas {
         return ret !== 0;
     }
     /**
+     * Merges field patches into existing elements (`[{ "id": 7, "x": 10, ... }]`).
+     * Returns the ids that were updated and are still valid.
+     * @param {string} json
+     * @returns {string}
+     */
+    update_elements_json(json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.aerialcanvas_update_elements_json(this.__wbg_ptr, ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * @param {string} text
      */
     update_selected_text(text) {
@@ -882,6 +973,16 @@ export class AerialCanvas {
      */
     zoom_out() {
         const ret = wasm.aerialcanvas_zoom_out(this.__wbg_ptr);
+        return ret;
+    }
+    /**
+     * Frames the whole board with `padding` CSS px on every side, never
+     * zooming in past 100%. Returns the new zoom (unchanged on an empty board).
+     * @param {number} padding
+     * @returns {number}
+     */
+    zoom_to_fit(padding) {
+        const ret = wasm.aerialcanvas_zoom_to_fit(this.__wbg_ptr, padding);
         return ret;
     }
 }
@@ -1125,6 +1226,13 @@ function __wbg_get_imports() {
         __wbg_set_width_36ef6630b22fc519: function(arg0, arg1) {
             arg0.width = arg1 >>> 0;
         },
+        __wbg_src_5b2dcaf993180c74: function(arg0, arg1) {
+            const ret = arg1.src;
+            const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg_static_accessor_GLOBAL_THIS_466428f93b4eaa76: function() {
             const ret = typeof globalThis === 'undefined' ? null : globalThis;
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
@@ -1198,6 +1306,11 @@ function addToExternrefTable0(obj) {
     return idx;
 }
 
+function getArrayF64FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getFloat64ArrayMemory0().subarray(ptr / 8, ptr / 8 + len);
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -1206,6 +1319,22 @@ function getArrayU8FromWasm0(ptr, len) {
 function getClampedArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ClampedArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+}
+
+let cachedDataViewMemory0 = null;
+function getDataViewMemory0() {
+    if (cachedDataViewMemory0 === null || cachedDataViewMemory0.buffer.detached === true || (cachedDataViewMemory0.buffer.detached === undefined && cachedDataViewMemory0.buffer !== wasm.memory.buffer)) {
+        cachedDataViewMemory0 = new DataView(wasm.memory.buffer);
+    }
+    return cachedDataViewMemory0;
+}
+
+let cachedFloat64ArrayMemory0 = null;
+function getFloat64ArrayMemory0() {
+    if (cachedFloat64ArrayMemory0 === null || cachedFloat64ArrayMemory0.byteLength === 0) {
+        cachedFloat64ArrayMemory0 = new Float64Array(wasm.memory.buffer);
+    }
+    return cachedFloat64ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -1325,6 +1454,8 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedDataViewMemory0 = null;
+    cachedFloat64ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     cachedUint8ClampedArrayMemory0 = null;
     wasm.__wbindgen_start();

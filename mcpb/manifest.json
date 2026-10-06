@@ -1,0 +1,45 @@
+{
+  "manifest_version": "0.3",
+  "name": "aerial",
+  "display_name": "Aerial",
+  "version": "3.0.0",
+  "description": "Read, draw and write on your Aerial whiteboard from Claude.",
+  "long_description": "Connects Claude to the Aerial desktop whiteboard on your Mac. Claude can read the open board, draw shapes and arrows, add Mermaid diagrams and typed text, write notes with real pen strokes, and take a snapshot to check its work. Everything runs on your machine through a private local socket; nothing is sent to a server. Requires the Aerial app (macOS).",
+  "author": { "name": "Araskova Labs", "email": "dev@araskova.com", "url": "https://github.com/ARASKOVA-labs" },
+  "homepage": "https://github.com/ARASKOVA-labs/Aerial",
+  "documentation": "https://github.com/ARASKOVA-labs/Aerial/blob/main/docs/mcp.md",
+  "support": "https://github.com/ARASKOVA-labs/Aerial/issues",
+  "repository": { "type": "git", "url": "https://github.com/ARASKOVA-labs/Aerial.git" },
+  "icon": "icon.png",
+  "license": "MIT",
+  "keywords": ["whiteboard", "canvas", "diagram", "mermaid", "drawing", "excalidraw-alternative"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"]
+    }
+  },
+  "tools": [
+    { "name": "get_board", "description": "Read the open board's elements, bounds, zoom and theme" },
+    { "name": "get_snapshot", "description": "Get a PNG image of the board" },
+    { "name": "list_boards", "description": "List boards and which one is open" },
+    { "name": "open_board", "description": "Open a board by id or name" },
+    { "name": "create_board", "description": "Create and open a new board" },
+    { "name": "draw_shapes", "description": "Draw rectangles, ellipses and diamonds with labels" },
+    { "name": "draw_connectors", "description": "Draw arrows and lines between elements" },
+    { "name": "draw_freehand", "description": "Draw pen, brush, marker or highlighter strokes" },
+    { "name": "write_handwriting", "description": "Write notes as real pen strokes" },
+    { "name": "add_text", "description": "Add editable typed text" },
+    { "name": "add_diagram", "description": "Insert Mermaid flowchart, sequence, state, class and ER diagrams" },
+    { "name": "update_elements", "description": "Edit elements by id" },
+    { "name": "move_elements", "description": "Move elements by id" },
+    { "name": "delete_elements", "description": "Delete elements by id" },
+    { "name": "clear_board", "description": "Clear the board (requires confirm)" },
+    { "name": "history", "description": "Undo or redo" },
+    { "name": "zoom_to_fit", "description": "Frame all content in the user's view" }
+  ],
+  "compatibility": { "platforms": ["darwin"], "runtimes": { "node": ">=18.0.0" } },
+  "privacy_policies": ["https://github.com/ARASKOVA-labs/Aerial/blob/main/docs/privacy.md"]
+}

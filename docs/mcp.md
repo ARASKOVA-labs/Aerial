@@ -30,6 +30,10 @@ claude mcp add aerial -- /Applications/Aerial.app/Contents/MacOS/Aerial mcp
 }
 ```
 
+**Claude Desktop extension.** `scripts/pack-mcpb.sh` builds `aerial.mcpb`, a
+one-click install that finds Aerial.app and connects to it. See
+`docs/mcp-directory.md` for publishing it.
+
 If Aerial is not running when a tool is called, it is started in the
 background.
 

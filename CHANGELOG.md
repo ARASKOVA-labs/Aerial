@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- macOS no longer asks for the login password on every launch of a new build:
+  releases are signed with a stable certificate (`scripts/build-mac.sh`), so
+  the Keychain keeps trusting Aerial. See the ADR on stable signing.
+
+### New
+- Claude Desktop extension bundle (`scripts/pack-mcpb.sh`) and a guide to
+  submitting it to the directory (`docs/mcp-directory.md`).
+
 ## 3.0.0 — 2026-10-06
 
 ### New

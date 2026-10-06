@@ -66,6 +66,22 @@ export function applyAraskovaDiagramAesthetics(
       svgEl.insertBefore(defsEl, svgEl.firstChild);
     }
 
+    // 2b. A card behind the diagram in its own style, so its text and lines
+    // stay legible on any canvas paper (a light diagram on a dark board).
+    const vbParts = (svgEl.getAttribute('viewBox') ?? '').trim().split(/[\s,]+/).map(parseFloat);
+    if (vbParts.length === 4 && vbParts.every(Number.isFinite)) {
+      svgEl.querySelector('#araskova-paper')?.remove();
+      const paper = doc.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      paper.setAttribute('id', 'araskova-paper');
+      paper.setAttribute('x', String(vbParts[0]));
+      paper.setAttribute('y', String(vbParts[1]));
+      paper.setAttribute('width', String(vbParts[2]));
+      paper.setAttribute('height', String(vbParts[3]));
+      paper.setAttribute('rx', '12');
+      paper.setAttribute('fill', isBlueprint ? '#0c1524' : isDark ? '#151517' : '#fcfcfb');
+      svgEl.insertBefore(paper, svgEl.firstChild); // painted first: behind everything
+    }
+
     // 3. Inject our theme CSS into SVG <style id="araskova-theme-override">
     const { themeCSS } = getAraskovaMermaidConfig(isDarkMode, style, brandAccent);
     let themeStyleEl = svgEl.querySelector('#araskova-theme-override');

@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from 'react';
 import { createLogger } from '../../lib/logger';
+import { externalFetch } from '../../lib/net';
 import type { AerialCanvasProps } from '../../lib/types';
 import type { CanvasCore } from './useCanvasCore';
 
@@ -31,7 +32,7 @@ export function useMagicPen(core: CanvasCore, { magicLanguage = 'en', magicFont 
       };
       if (!Array.isArray(ink) || ink.length === 0) return null;
       setConverting(true);
-      const resp = await fetch(`https://inputtools.google.com/request?itc=${encodeURIComponent(magicLanguage)}-t-i0-handwrit&app=translate`, {
+      const resp = await externalFetch(`https://inputtools.google.com/request?itc=${encodeURIComponent(magicLanguage)}-t-i0-handwrit&app=translate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

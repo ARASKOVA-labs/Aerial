@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Least-privilege permissions for the main window. File access goes through validated Rust commands (no fs plugin); webview HTTP is limited to the two translation endpoints, used only after user consent.",
+  "description": "Least-privilege permissions for the main window. File access goes through validated Rust commands (no fs plugin); webview HTTP is limited to the translation and handwriting endpoints, used only after user consent.",
   "windows": [
     "main"
   ],
@@ -16,6 +16,9 @@
         },
         {
           "url": "https://api.mymemory.translated.net/get*"
+        },
+        {
+          "url": "https://inputtools.google.com/request*"
         }
       ]
     }

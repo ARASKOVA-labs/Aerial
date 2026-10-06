@@ -1,7 +1,7 @@
 // ── Aerial desktop app shell ─────────────────────────────────────────────────
 // Composes the canvas with the app's features; each feature lives in src/app/.
 
-import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import mermaid from 'mermaid';
 import './App.css';
 import { AerialWordmark } from './AerialLogo';
@@ -31,7 +31,8 @@ import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { DiagramStudioModal } from './components/desktop/DiagramStudioModal';
 import { KeyboardShortcutsModal } from './components/desktop/KeyboardShortcutsModal';
 import { TextTranslatorModal } from './components/desktop/TextTranslatorModal';
-import { ensureConsent } from './lib/consent';
+import { ensureConsent, setConsentPrompter } from './lib/consent';
+import { ConsentDialog } from './app/dialogs/ConsentDialog';
 import { getAraskovaMermaidConfig } from './lib/diagram-theme';
 import type { AerialCanvasRef, DesktopToolId, ToolId } from './lib/types';
 import type { ExtraTool } from './ui/Toolbar';
@@ -62,6 +63,11 @@ export default function App() {
   const [selection, setSelection] = useState<SelectionInfo>(EMPTY_SELECTION);
   const [magicLanguage, setMagicLanguage] = useState<MagicLanguage>('en');
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [consent, setConsent] = useState<{ message: string; resolve: (ok: boolean) => void } | null>(null);
+  useEffect(() => {
+    setConsentPrompter((_service, message) => new Promise<boolean>((resolve) => setConsent({ message, resolve })));
+    return () => setConsentPrompter(null);
+  }, []);
   const { isDarkMode, setIsDarkMode, toggleFullscreen } = useTheme();
   const [gridType, setGridType] = usePersistentState<GridType>('aerial_grid', parseGrid);
   const [palmRejection, setPalmRejection] = usePersistentState('aerial_palm_rejection', (raw) => raw !== 'false');
@@ -302,6 +308,15 @@ export default function App() {
         />
       )}
       {dialog === 'feedback' && <FeedbackDialog onClose={close} />}
+      {consent && (
+        <ConsentDialog
+          message={consent.message}
+          onAnswer={(ok) => {
+            consent.resolve(ok);
+            setConsent(null);
+          }}
+        />
+      )}
       {dialog === 'locked' && <StorageLockedDialog onClose={close} />}
       {dialog === 'agents' && <AgentAccessDialog enabled={agents.enabled} onToggle={agents.setEnabled} onClose={close} />}
       {dialog === 'palette' && <CommandPaletteModal commands={paletteCommands} onClose={close} />}

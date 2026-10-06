@@ -50,7 +50,7 @@ export function TextTranslatorModal({ onClose, onInsertText }: { onClose: () => 
     }
     const ctl = new AbortController();
     const timer = setTimeout(async () => {
-      if (!ensureConsent('translation')) {
+      if (!(await ensureConsent('translation'))) {
         setResult({ state: 'error', message: 'Translation needs your permission to send this text to MyMemory.' });
         return;
       }

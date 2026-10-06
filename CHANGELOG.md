@@ -1,19 +1,19 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 — 2026-10-06
 
 ### Fixed
+- Magic pen (handwriting to text) did nothing in the desktop app: its consent
+  prompt used the browser's `confirm()`, which desktop webviews do not show.
+  Consent is now an in-app dialog, and recognition goes through the
+  allow-listed HTTP client like translation.
 - macOS no longer asks for the login password on every launch of a new build:
   releases are signed with a stable certificate (`scripts/build-mac.sh`), so
   the Keychain keeps trusting Aerial. See the ADR on stable signing.
 
 ### New
-- Claude Desktop extension bundle (`scripts/pack-mcpb.sh`) and a guide to
+- **Claude Desktop extension** (`scripts/pack-mcpb.sh`) and a guide to
   submitting it to the directory (`docs/mcp-directory.md`).
-
-## 3.0.0 — 2026-10-06
-
-### New
 - **.aerial files.** Save a board with its images as one portable file (⌘E)
   and open it anywhere Aerial runs (⌘⇧E, Finder double-click, Open With).
   Optional password protection with AES-256-GCM.

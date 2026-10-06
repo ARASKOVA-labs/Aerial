@@ -19,7 +19,7 @@ export function useTranslateSelection(canvasRef: RefObject<AerialCanvasRef | nul
         return;
       }
       // Selected text leaves the device for a third party: ask once, explicitly.
-      if (!ensureConsent('translation', { reask: true })) return;
+      if (!(await ensureConsent('translation', { reask: true }))) return;
       try {
         const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(text)}`;
         const data = (await (await externalFetch(url)).json()) as unknown;

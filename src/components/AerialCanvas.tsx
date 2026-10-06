@@ -882,6 +882,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(funct
   const zoomIn = useCallback(() => engineRef.current && updateZoom(engineRef.current.zoom_in()), [updateZoom]);
   const zoomOut = useCallback(() => engineRef.current && updateZoom(engineRef.current.zoom_out()), [updateZoom]);
   const resetView = useCallback(() => engineRef.current && updateZoom(engineRef.current.reset_view()), [updateZoom]);
+  const zoomToFit = useCallback(() => engineRef.current && updateZoom(engineRef.current.zoom_to_fit(64)), [updateZoom]);
   const toggleLock = useCallback(() => {
     setToolLocked((l) => {
       engineRef.current?.set_tool_locked(!l);
@@ -1130,6 +1131,7 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(funct
     zoomIn,
     zoomOut,
     resetView,
+    zoomToFit,
     getZoom: () => (engineRef.current ? Math.round(engineRef.current.get_zoom() * 100) : zoomLevel),
     setTool: (tool) => applyTool(tool, false),
     setStrokeColor: (color) => applyStyleChange({ strokeColor: color }),

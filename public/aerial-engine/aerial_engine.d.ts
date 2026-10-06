@@ -13,6 +13,11 @@ export class AerialCanvas {
      * them to every selected element (one undo step).
      */
     apply_style(json: string): void;
+    /**
+     * Source (a data URL for stored assets) of the image cached for an element,
+     * so a board can be exported with its images even where there is no store.
+     */
+    cached_image_src(id: bigint): string | undefined;
     can_redo(): boolean;
     can_undo(): boolean;
     /**
@@ -23,6 +28,11 @@ export class AerialCanvas {
     clear_board(): void;
     clear_laser_strokes(): void;
     clear_magic_strokes(): void;
+    /**
+     * Bounds of everything on the board, `[min_x, min_y, max_x, max_y]` in
+     * world units, or an empty array for an empty board.
+     */
+    content_bounds(): Float64Array;
     delete_selected(): void;
     deselect(): void;
     /**
@@ -206,6 +216,11 @@ export class AerialCanvas {
     world_to_screen_y(wy: number): number;
     zoom_in(): number;
     zoom_out(): number;
+    /**
+     * Frames the whole board with `padding` CSS px on every side, never
+     * zooming in past 100%. Returns the new zoom (unchanged on an empty board).
+     */
+    zoom_to_fit(padding: number): number;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -218,12 +233,14 @@ export interface InitOutput {
     readonly aerialcanvas_add_text: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
     readonly aerialcanvas_apply_remote_delta: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_apply_style: (a: number, b: number, c: number) => void;
+    readonly aerialcanvas_cached_image_src: (a: number, b: bigint) => [number, number];
     readonly aerialcanvas_can_redo: (a: number) => number;
     readonly aerialcanvas_can_undo: (a: number) => number;
     readonly aerialcanvas_check_and_clear_dirty: (a: number) => number;
     readonly aerialcanvas_clear_board: (a: number) => void;
     readonly aerialcanvas_clear_laser_strokes: (a: number) => void;
     readonly aerialcanvas_clear_magic_strokes: (a: number) => void;
+    readonly aerialcanvas_content_bounds: (a: number) => [number, number];
     readonly aerialcanvas_delete_selected: (a: number) => void;
     readonly aerialcanvas_deselect: (a: number) => void;
     readonly aerialcanvas_duplicate_selected: (a: number) => void;
@@ -317,6 +334,7 @@ export interface InitOutput {
     readonly aerialcanvas_world_to_screen_y: (a: number, b: number) => number;
     readonly aerialcanvas_zoom_in: (a: number) => number;
     readonly aerialcanvas_zoom_out: (a: number) => number;
+    readonly aerialcanvas_zoom_to_fit: (a: number, b: number) => number;
     readonly aerialcanvas_pointer_up: (a: number, b: number, c: number) => void;
     readonly __wbindgen_exn_store: (a: number) => void;
     readonly __externref_table_alloc: () => number;

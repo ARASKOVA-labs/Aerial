@@ -1043,6 +1043,53 @@ a.ae-cta {
   }
 }
 
+/* ── Forms in dialogs ──────────────────────────────────────────────────── */
+.ae-dialog.ae-form {
+  width: min(460px, 100%);
+}
+.ae-form > p {
+  margin-bottom: 14px;
+}
+.ae-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ae-text-muted);
+}
+.ae-field__error {
+  font-weight: 500;
+  color: var(--ae-danger);
+}
+.ae-dialog .ae-field__note {
+  margin-top: 10px;
+  font-size: 12px;
+}
+.ae-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ae-text);
+  cursor: pointer;
+}
+.ae-check input {
+  margin: 2px 0 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ae-primary);
+}
+.ae-check small {
+  display: block;
+  margin-top: 2px;
+  font-weight: 400;
+  color: var(--ae-text-muted);
+}
+
 /* ── Help dialog ───────────────────────────────────────────────────────── */
 .ae-dialog.ae-help {
   width: min(880px, 100%);
@@ -1253,4 +1300,9 @@ a.ae-cta {
   .ae-spinner {
     animation-duration: 2s;
   }
+}
+
+.ae-cta--disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }

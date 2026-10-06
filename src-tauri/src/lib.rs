@@ -6,18 +6,19 @@
 //! IPC surface (all inputs validated in `security`):
 //!   boards   load_board_scene · save_board_changes · delete_board
 //!   assets   save_asset · load_asset · read_dropped_image
+//!   files    save_aerial_file · open_aerial_file · take_opened_files
 //!   diagrams render_diagram · update_diagram_node · openrouter_generate
-//!   window   hide_window
 
 mod ai;
 mod diagram;
+mod files;
 mod security;
 mod storage;
 
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use tauri::{Emitter, Manager, State, Window};
+use tauri::{Manager, State};
 
 use security::{image_mime_for, DropGrants, MAX_DROPPED_FILE_BYTES};
 use storage::Store;
@@ -83,22 +84,6 @@ async fn read_dropped_image(state: State<'_, AppState>, path: String) -> Result<
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
-#[tauri::command]
-fn hide_window(window: Window) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())
-}
-
-fn show_main(app: &tauri::AppHandle, quick_note: bool) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        if quick_note {
-            let _ = window.emit("quick-canvas:open", true);
-        }
-    }
-}
-
 fn init_tracing() {
     // Structured logs to stderr. `audit` target lines record security-relevant
     // events (rejected input, deletions, AI requests) without user content.
@@ -114,7 +99,7 @@ fn init_tracing() {
 pub fn run() {
     init_tracing();
 
-    let builder = tauri::Builder::default().plugin(tauri_plugin_http::init());
+    let builder = tauri::Builder::default().plugin(tauri_plugin_http::init()).plugin(tauri_plugin_dialog::init());
 
     let builder = builder.on_window_event(|window, event| match event {
         tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -125,17 +110,17 @@ pub fn run() {
         _ => {}
     });
 
-    #[cfg(desktop)]
-    let builder = builder;
-
     let result = builder
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
             let store = Store::open(&app_data_dir)?;
             app.manage(AppState { store: Arc::new(store), drops: DropGrants::default() });
+            app.manage(files::PendingOpens::default());
 
-            // #[cfg(desktop)]
-            // setup_desktop(app); // Disabled quick note and background tray
+            // Windows and Linux pass files opened with Aerial as arguments.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            files::handle_opened_paths(app.handle(), std::env::args_os().skip(1).map(std::path::PathBuf::from));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -145,69 +130,27 @@ pub fn run() {
             save_asset,
             load_asset,
             read_dropped_image,
-            hide_window,
             ai::openrouter_generate,
             diagram::render_diagram,
-            diagram::update_diagram_node
+            diagram::update_diagram_node,
+            files::save_aerial_file,
+            files::open_aerial_file,
+            files::take_opened_files
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(e) = result {
-        tracing::error!(error = %e, "Aerial failed to start");
-        std::process::exit(1);
-    }
-}
-
-#[cfg(desktop)]
-fn setup_desktop(app: &tauri::App) {
-    use tauri::menu::{Menu, MenuItem};
-    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-
-    // Global shortcuts for the instant Quick Canvas.
-    for combo in ["alt+space", "super+shift+a"] {
-        match combo.parse::<tauri_plugin_global_shortcut::Shortcut>() {
-            Ok(shortcut) => {
-                if let Err(e) = app.global_shortcut().register(shortcut) {
-                    tracing::warn!(combo, error = %e, "global shortcut unavailable");
-                }
-            }
-            Err(e) => tracing::warn!(combo, error = %e, "invalid shortcut"),
+    let app = match result {
+        Ok(app) => app,
+        Err(e) => {
+            tracing::error!(error = %e, "Aerial failed to start");
+            std::process::exit(1);
         }
-    }
-
-    // Menu bar tray icon.
-    let items = (
-        MenuItem::with_id(app, "quick_note", "Quick Note (⌥Space / ⌘⇧A)", true, None::<&str>),
-        MenuItem::with_id(app, "show", "Open Aerial Canvas", true, None::<&str>),
-        MenuItem::with_id(app, "quit", "Quit Aerial", true, None::<&str>),
-    );
-    let (Ok(note), Ok(show), Ok(quit)) = items else {
-        tracing::warn!("tray menu items could not be created");
-        return;
     };
-    let Ok(menu) = Menu::with_items(app, &[&note, &show, &quit]) else {
-        tracing::warn!("tray menu could not be created");
-        return;
-    };
-    let mut tray = TrayIconBuilder::new()
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "quit" => app.exit(0),
-            "show" => show_main(app, false),
-            "quick_note" => show_main(app, true),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                show_main(tray.app_handle(), true);
-            }
-        });
-    if let Some(icon) = app.default_window_icon() {
-        tray = tray.icon(icon.clone());
-    }
-    if let Err(e) = tray.build(app) {
-        tracing::warn!(error = %e, "tray icon could not be created");
-    }
+    app.run(|_app, _event| {
+        // macOS / iOS deliver files opened with Aerial (Finder, Open With) here.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let tauri::RunEvent::Opened { urls } = _event {
+            files::handle_opened_paths(_app, urls.into_iter().filter_map(|u| u.to_file_path().ok()));
+        }
+    });
 }

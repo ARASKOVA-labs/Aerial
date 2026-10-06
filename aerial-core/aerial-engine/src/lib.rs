@@ -709,6 +709,12 @@ impl AerialCanvas {
         self.needs_render = true;
     }
 
+    /// Source (a data URL for stored assets) of the image cached for an element,
+    /// so a board can be exported with its images even where there is no store.
+    pub fn cached_image_src(&self, id: u64) -> Option<String> {
+        self.image_cache.get(&id).map(|img| img.src())
+    }
+
     /// `[[element_id, asset_id], ...]` for elements backed by stored assets, so
     /// the host can preload images without parsing the whole scene JSON.
     pub fn get_asset_refs(&self) -> String {
@@ -876,6 +882,29 @@ impl AerialCanvas {
         self.zoom = 1.0;
         self.offset_x = 0.0;
         self.offset_y = 0.0;
+        self.needs_render = true;
+        self.zoom
+    }
+
+    /// Bounds of everything on the board, `[min_x, min_y, max_x, max_y]` in
+    /// world units, or an empty array for an empty board.
+    pub fn content_bounds(&self) -> Vec<f64> {
+        match self.content_rect() {
+            Some(r) => vec![r.min_x, r.min_y, r.max_x, r.max_y],
+            None => Vec::new(),
+        }
+    }
+
+    /// Frames the whole board with `padding` CSS px on every side, never
+    /// zooming in past 100%. Returns the new zoom (unchanged on an empty board).
+    pub fn zoom_to_fit(&mut self, padding: f64) -> f64 {
+        let Some(r) = self.content_rect() else { return self.zoom };
+        let (vw, vh) = (self.canvas.width() as f64 / self.dpr, self.canvas.height() as f64 / self.dpr);
+        let pad = padding.clamp(0.0, vw.min(vh) / 3.0);
+        let fit = ((vw - 2.0 * pad) / r.width().max(1.0)).min((vh - 2.0 * pad) / r.height().max(1.0));
+        self.zoom = fit.clamp(MIN_ZOOM, 1.0);
+        self.offset_x = vw / 2.0 - (r.min_x + r.width() / 2.0) * self.zoom;
+        self.offset_y = vh / 2.0 - (r.min_y + r.height() / 2.0) * self.zoom;
         self.needs_render = true;
         self.zoom
     }
@@ -1086,6 +1115,10 @@ impl AerialCanvas {
             w: self.canvas.width() as f64,
             h: self.canvas.height() as f64,
         }
+    }
+
+    fn content_rect(&self) -> Option<Rect> {
+        self.scene.iter_ordered().map(|e| e.visual_bounds()).filter(Rect::is_finite).reduce(|a, b| a.union(&b))
     }
 
     fn zoom_about(&mut self, factor: f64, sx: f64, sy: f64) -> f64 {

@@ -45,6 +45,7 @@ export interface CommandHandlers {
   toggleTheme: () => void;
   resetCanvas: () => void;
   showHelp: () => void;
+  zoomToFit: () => void;
 }
 
 const PENS: Array<[DesktopToolId, string]> = [
@@ -96,6 +97,7 @@ export function buildCommands(h: CommandHandlers): PaletteCommand[] {
     { id: 'file-svg', label: 'Export SVG', group: 'File', icon: <ExportIcon />, shortcut: `${MOD}⇧S`, keywords: 'vector', onSelect: h.exportSvg },
 
     { id: 'view-theme', label: h.isDarkMode ? 'Switch to light theme' : 'Switch to dark theme', group: 'View', icon: h.isDarkMode ? <SunIcon /> : <MoonIcon />, keywords: 'dark light mode', onSelect: h.toggleTheme },
+    { id: 'view-fit', label: 'Zoom to fit', group: 'View', icon: <FullscreenIcon />, shortcut: '⇧1', keywords: 'frame all content', onSelect: h.zoomToFit },
     { id: 'view-full', label: 'Toggle fullscreen', group: 'View', icon: <FullscreenIcon />, onSelect: h.toggleFullscreen },
     { id: 'help', label: 'Keyboard shortcuts', group: 'View', icon: <HelpIcon />, shortcut: '?', keywords: 'help keys', onSelect: h.showHelp },
     { id: 'reset', label: 'Reset the canvas', group: 'View', icon: <TrashIcon />, keywords: 'clear delete all', onSelect: h.resetCanvas },

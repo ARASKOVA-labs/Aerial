@@ -12,6 +12,7 @@ import { AerialMark } from './AerialLogo';
 import { AerialCanvas } from './components/AerialCanvas';
 import { QuickCanvasModal } from './components/QuickCanvasModal';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
+import { buildCommands } from './app/commands';
 import { KeyboardShortcutsModal } from './components/desktop/KeyboardShortcutsModal';
 import { DiagramStudioModal } from './components/desktop/DiagramStudioModal';
 import { TextTranslatorModal } from './components/desktop/TextTranslatorModal';
@@ -962,6 +963,30 @@ export default function App() {
     [activeTool, selectTool, handlePasteFromClipboard],
   );
 
+  const paletteCommands = useMemo(
+    () =>
+      buildCommands({
+        boards,
+        activeBoardId,
+        isDarkMode,
+        selectTool,
+        newBoard: () => void createNewBoard(),
+        switchBoard: (id) => void switchBoard(id),
+        openDiagram: () => setShowDiagramModal(true),
+        openTranslator: () => setShowTranslatorModal(true),
+        openImage: () => imageInputRef.current?.click(),
+        openPdf: () => pdfInputRef.current?.click(),
+        pasteScreenshot: () => void handlePasteFromClipboard(),
+        exportPng: () => void handleExportImage(),
+        exportSvg: () => void handleExportSvg(),
+        toggleFullscreen,
+        toggleTheme: () => handleThemeChange(!isDarkMode),
+        resetCanvas: () => setShowClearConfirm(true),
+        showHelp: () => setShowShortcutsModal(true),
+      }),
+    [boards, activeBoardId, isDarkMode, selectTool, createNewBoard, switchBoard, handlePasteFromClipboard, handleExportImage, handleExportSvg, toggleFullscreen, handleThemeChange],
+  );
+
   const panelExtra = useCallback(
     (tool: ToolId): ReactNode => {
       if (tool === 'magic_pen') {
@@ -1222,24 +1247,7 @@ export default function App() {
       )}
 
       {showCommandPalette && (
-        <CommandPaletteModal
-          isDarkMode={isDarkMode}
-          onClose={() => setShowCommandPalette(false)}
-          onSelectTool={selectTool}
-          onOpenQuickCanvas={() => setShowQuickCanvas(true)}
-          onNewBoard={createNewBoard}
-          boards={boards}
-          onSwitchBoard={switchBoard}
-          onOpenDiagramModal={() => setShowDiagramModal(true)}
-          onOpenTranslatorModal={() => setShowTranslatorModal(true)}
-          onExportPng={handleExportImage}
-          onExportSvg={handleExportSvg}
-          onToggleFullscreen={toggleFullscreen}
-          onToggleTheme={() => setIsDarkMode((d) => !d)}
-          onClearBoard={() => setShowClearConfirm(true)}
-          onOpenShortcuts={() => setShowShortcutsModal(true)}
-          onPasteScreenshot={() => handlePasteFromClipboard()}
-        />
+        <CommandPaletteModal commands={paletteCommands} onClose={() => setShowCommandPalette(false)} />
       )}
 
       {showShortcutsModal && <KeyboardShortcutsModal onClose={() => setShowShortcutsModal(false)} />}

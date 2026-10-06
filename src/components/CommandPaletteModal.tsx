@@ -1,294 +1,124 @@
-// ── Aerial Canvas — Spotlight Command Palette (⌘K) ─────────────────────────
-// High-efficiency launcher for tools, board switching, actions, and diagram insertion.
-// Strictly adheres to Araskova brutalist design standards (Roboto, Space Mono, zero Orbitron).
+// ── Command palette (⌘K) ─────────────────────────────────────────────────────
+// A filterable list of commands the app hands in; it owns no actions itself.
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import {
-  Search,
-  Pen,
-  Highlighter,
-  Wand2,
-  Zap,
-  MousePointer2,
-  Hand,
-  Square,
-  Circle,
-  Minus,
-  ArrowUpRight,
-  Type,
-  Eraser,
-  Code,
-  Languages,
-  Download,
-  FileCode,
-  Layout,
-  Plus,
-  Maximize2,
-  Sun,
-  Moon,
-  Trash2,
-  Keyboard,
-  Sparkles,
-  X,
-  Image as ImageIcon,
-} from 'lucide-react';
-import type { DesktopToolId } from '../lib/types';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
-export interface CommandItem {
+export interface PaletteCommand {
   id: string;
-  title: string;
-  category: 'Quick Note' | 'Tools' | 'Boards' | 'Actions';
+  label: string;
+  group: string;
+  icon?: ReactNode;
   shortcut?: string;
-  icon: React.ComponentType<{ className?: string }>;
+  /** Extra words to match (e.g. "export png image"). */
+  keywords?: string;
   onSelect: () => void;
 }
 
-export interface CommandPaletteModalProps {
-  isDarkMode: boolean;
-  onClose: () => void;
-  onSelectTool: (tool: DesktopToolId) => void;
-  onOpenQuickCanvas: () => void;
-  onNewBoard: () => void;
-  boards: Array<{ id: string; name: string }>;
-  onSwitchBoard: (id: string) => void;
-  onOpenDiagramModal: () => void;
-  onOpenTranslatorModal: () => void;
-  onExportPng: () => void;
-  onExportSvg: () => void;
-  onToggleFullscreen: () => void;
-  onToggleTheme: () => void;
-  onClearBoard: () => void;
-  onOpenShortcuts: () => void;
-  onPasteScreenshot: () => void;
+/** Ranks a command for `q`: 0 = no match, higher = better. */
+function score(c: PaletteCommand, q: string): number {
+  const label = c.label.toLowerCase();
+  if (label.startsWith(q)) return 3;
+  if (label.split(/\s+/).some((w) => w.startsWith(q))) return 2;
+  if (`${label} ${c.group} ${c.keywords ?? ''}`.toLowerCase().includes(q)) return 1;
+  return 0;
 }
 
-export function CommandPaletteModal({
-  isDarkMode,
-  onClose,
-  onSelectTool,
-  onOpenQuickCanvas,
-  onNewBoard,
-  boards,
-  onSwitchBoard,
-  onOpenDiagramModal,
-  onOpenTranslatorModal,
-  onExportPng,
-  onExportSvg,
-  onToggleFullscreen,
-  onToggleTheme,
-  onClearBoard,
-  onOpenShortcuts,
-  onPasteScreenshot,
-}: CommandPaletteModalProps) {
+export function CommandPaletteModal({ commands, onClose }: { commands: PaletteCommand[]; onClose: () => void }) {
   const [query, setQuery] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return commands;
+    return commands
+      .map((c, i) => ({ c, s: score(c, q), i }))
+      .filter((r) => r.s > 0)
+      .sort((a, b) => b.s - a.s || a.i - b.i)
+      .map((r) => r.c);
+  }, [commands, query]);
+
+  useEffect(() => setActive(0), [query]);
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
 
-  const allItems: CommandItem[] = useMemo(() => {
-    const list: CommandItem[] = [
-      {
-        id: 'quick-canvas',
-        title: 'Open Quick Canvas (Instant Note)',
-        category: 'Quick Note',
-        shortcut: '⌘⇧N',
-        icon: Sparkles,
-        onSelect: () => { onClose(); onOpenQuickCanvas(); },
-      },
-      {
-        id: 'new-board',
-        title: 'Create New Canvas Board',
-        category: 'Boards',
-        shortcut: '⌘N',
-        icon: Plus,
-        onSelect: () => { onClose(); onNewBoard(); },
-      },
-      // Boards
-      ...boards.map((b) => ({
-        id: `board-${b.id}`,
-        title: `Switch to: ${b.name}`,
-        category: 'Boards' as const,
-        icon: Layout,
-        onSelect: () => { onClose(); onSwitchBoard(b.id); },
-      })),
-      // Tools
-      { id: 'tool-select', title: 'Selection', category: 'Tools', shortcut: 'V', icon: MousePointer2, onSelect: () => { onClose(); onSelectTool('select'); } },
-      { id: 'tool-hand', title: 'Hand / Pan Canvas', category: 'Tools', shortcut: 'H', icon: Hand, onSelect: () => { onClose(); onSelectTool('hand'); } },
-      { id: 'tool-freedraw', title: 'Pen', category: 'Tools', shortcut: 'P', icon: Pen, onSelect: () => { onClose(); onSelectTool('freedraw'); } },
-      { id: 'tool-fountain', title: 'Brush (tapered pen)', category: 'Tools', shortcut: '', icon: Pen, onSelect: () => { onClose(); onSelectTool('fountain'); } },
-      { id: 'tool-highlighter', title: 'Highlighter', category: 'Tools', shortcut: '', icon: Highlighter, onSelect: () => { onClose(); onSelectTool('highlighter'); } },
-      { id: 'tool-magic_pen', title: 'Magic Pen (AI Handwriting to Text)', category: 'Tools', shortcut: 'W', icon: Wand2, onSelect: () => { onClose(); onSelectTool('magic_pen'); } },
-      { id: 'tool-laser_pen', title: 'Laser pointer', category: 'Tools', shortcut: 'K', icon: Zap, onSelect: () => { onClose(); onSelectTool('laser_pen'); } },
-      { id: 'tool-marker', title: 'Marker', category: 'Tools', shortcut: '', icon: Pen, onSelect: () => { onClose(); onSelectTool('marker'); } },
-      { id: 'tool-diamond', title: 'Diamond Shape', category: 'Tools', shortcut: 'D', icon: Square, onSelect: () => { onClose(); onSelectTool('diamond'); } },
-      { id: 'tool-text', title: 'Text Box', category: 'Tools', shortcut: 'T', icon: Type, onSelect: () => { onClose(); onSelectTool('text'); } },
-      { id: 'tool-eraser', title: 'Eraser', category: 'Tools', shortcut: 'E', icon: Eraser, onSelect: () => { onClose(); onSelectTool('eraser'); } },
-      { id: 'tool-rect', title: 'Rectangle Shape', category: 'Tools', shortcut: 'R', icon: Square, onSelect: () => { onClose(); onSelectTool('rectangle'); } },
-      { id: 'tool-ellipse', title: 'Ellipse / Circle Shape', category: 'Tools', shortcut: 'O', icon: Circle, onSelect: () => { onClose(); onSelectTool('ellipse'); } },
-      { id: 'tool-line', title: 'Line Shape', category: 'Tools', shortcut: 'L', icon: Minus, onSelect: () => { onClose(); onSelectTool('line'); } },
-      { id: 'tool-arrow', title: 'Arrow Shape', category: 'Tools', shortcut: 'A', icon: ArrowUpRight, onSelect: () => { onClose(); onSelectTool('arrow'); } },
-      // Actions
-      { id: 'action-paste-screenshot', title: 'Paste Screenshot from Clipboard', category: 'Actions', shortcut: '⌘V', icon: ImageIcon, onSelect: () => { onClose(); onPasteScreenshot(); } },
-      { id: 'action-diagram', title: 'Insert Mermaid Architecture Diagram', category: 'Actions', icon: Code, onSelect: () => { onClose(); onOpenDiagramModal(); } },
-      { id: 'action-translate', title: 'Translate Text (AI Indian Languages)', category: 'Actions', icon: Languages, onSelect: () => { onClose(); onOpenTranslatorModal(); } },
-      { id: 'action-export-png', title: 'Export Canvas as PNG Image', category: 'Actions', shortcut: '⌘S', icon: Download, onSelect: () => { onClose(); onExportPng(); } },
-      { id: 'action-export-svg', title: 'Export Canvas as Vector SVG', category: 'Actions', shortcut: '⌘⇧S', icon: FileCode, onSelect: () => { onClose(); onExportSvg(); } },
-      { id: 'action-fullscreen', title: 'Toggle Fullscreen Mode', category: 'Actions', shortcut: '⌃⌘F', icon: Maximize2, onSelect: () => { onClose(); onToggleFullscreen(); } },
-      { id: 'action-theme', title: `Toggle ${isDarkMode ? 'Light' : 'Dark'} Theme`, category: 'Actions', icon: isDarkMode ? Sun : Moon, onSelect: () => { onClose(); onToggleTheme(); } },
-      { id: 'action-clear', title: 'Clear Entire Canvas Board', category: 'Actions', shortcut: '⌘⇧⌫', icon: Trash2, onSelect: () => { onClose(); onClearBoard(); } },
-      { id: 'action-shortcuts', title: 'Show Keyboard Shortcuts Cheat Sheet', category: 'Actions', shortcut: '?', icon: Keyboard, onSelect: () => { onClose(); onOpenShortcuts(); } },
-    ];
-    return list;
-  }, [boards, isDarkMode, onClose, onOpenQuickCanvas, onNewBoard, onSwitchBoard, onSelectTool, onPasteScreenshot, onOpenDiagramModal, onOpenTranslatorModal, onExportPng, onExportSvg, onToggleFullscreen, onToggleTheme, onClearBoard, onOpenShortcuts]);
+  const run = (c: PaletteCommand | undefined) => {
+    if (!c) return;
+    onClose();
+    c.onSelect();
+  };
 
-  const filteredItems = useMemo(() => {
-    if (!query.trim()) return allItems;
-    const q = query.toLowerCase().trim();
-    return allItems.filter(
-      (item) => item.title.toLowerCase().includes(q) || item.category.toLowerCase().includes(q)
-    );
-  }, [allItems, query]);
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActive((i) => (results.length ? (i + 1) % results.length : 0));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((i) => (results.length ? (i - 1 + results.length) % results.length : 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      run(results[active]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+    }
+  };
 
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [query]);
-
-  // Handle arrow navigation and enter
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1 < filteredItems.length ? prev + 1 : 0));
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev - 1 >= 0 ? prev - 1 : filteredItems.length - 1));
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        if (filteredItems[selectedIndex]) {
-          filteredItems[selectedIndex].onSelect();
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [filteredItems, selectedIndex, onClose]);
-
+  // Group headings follow the order commands arrive in.
+  let lastGroup = '';
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-24 bg-[#0a0a0a]/75 backdrop-blur-md pointer-events-auto p-4 animate-in fade-in duration-100">
-      <div
-        className={`w-full max-w-xl rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${
-          isDarkMode
-            ? 'bg-[#111111] border-[#2a2a2a] text-[#f3f3f2]'
-            : 'bg-[#ffffff] border-[#e5e5e5] text-[#0a0a0a]'
-        }`}
-      >
-        {/* Search Input Bar */}
-        <div
-          className={`flex items-center gap-3 px-4 py-3.5 border-b ${
-            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]/80' : 'border-[#e5e5e5] bg-[#f8f9fa]'
-          }`}
-        >
-          <Search className="w-4 h-4 text-[#e73f07] shrink-0" />
-          <input
-            ref={inputRef}
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Type a command, tool, or board name..."
-            className="flex-1 bg-transparent outline-none font-mono text-sm placeholder:text-[var(--muted-foreground)]"
-          />
-          <kbd className="hidden sm:inline-block px-1.5 py-0.5 rounded text-[10px] font-mono tracking-wider bg-[var(--secondary)] border border-[var(--border)] text-[var(--muted-foreground)]">
-            ESC
-          </kbd>
-          <button
-            onClick={onClose}
-            className="w-6 h-6 rounded-md flex items-center justify-center hover:bg-[var(--accent)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors cursor-pointer"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {/* Results List */}
-        <div className="max-h-[380px] overflow-y-auto p-2 flex flex-col gap-1">
-          {filteredItems.length === 0 ? (
-            <div className="py-8 text-center text-xs font-mono text-[var(--muted-foreground)]">
-              No matching commands or boards found.
-            </div>
-          ) : (
-            filteredItems.map((item, idx) => {
-              const Icon = item.icon;
-              const isSelected = idx === selectedIndex;
-              return (
+    <div className="ae-dialog-backdrop ae-palette-backdrop" onPointerDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="ae-dialog ae-cmdk" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
+        <input
+          className="ae-cmdk__input"
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Type a command or board name…"
+          aria-label="Search commands"
+          aria-controls="ae-cmdk-list"
+          aria-activedescendant={results[active] ? `cmd-${results[active].id}` : undefined}
+          role="combobox"
+          aria-expanded="true"
+        />
+        <div className="ae-cmdk__list" id="ae-cmdk-list" role="listbox" ref={listRef}>
+          {results.length === 0 && <p className="ae-cmdk__empty">No matching commands</p>}
+          {results.map((c, i) => {
+            const heading = !query.trim() && c.group !== lastGroup ? c.group : null;
+            lastGroup = c.group;
+            return (
+              <div key={c.id}>
+                {heading && <div className="ae-menu-title">{heading}</div>}
                 <button
-                  key={item.id}
-                  onClick={item.onSelect}
-                  onMouseEnter={() => setSelectedIndex(idx)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left text-xs font-mono transition-colors cursor-pointer ${
-                    isSelected
-                      ? 'bg-[#e73f07] text-white shadow-xs'
-                      : 'hover:bg-[var(--accent)] text-[var(--foreground)]'
-                  }`}
+                  type="button"
+                  id={`cmd-${c.id}`}
+                  role="option"
+                  aria-selected={i === active}
+                  className="ae-menu-item"
+                  onPointerMove={() => setActive(i)}
+                  onClick={() => run(c)}
                 >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div
-                      className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${
-                        isSelected
-                          ? 'bg-white/20 text-white'
-                          : 'bg-[var(--secondary)] text-[var(--foreground)] border border-[var(--border)]'
-                      }`}
-                    >
-                      <Icon className="w-3.5 h-3.5" />
-                    </div>
-                    <span className="font-sans font-medium text-xs tracking-tight truncate">
-                      {item.title}
-                    </span>
-                    <span
-                      className={`text-[9px] uppercase font-mono tracking-wider px-1.5 py-0.5 rounded ${
-                        isSelected
-                          ? 'bg-black/20 text-white/90'
-                          : 'bg-[var(--secondary)] text-[var(--muted-foreground)]'
-                      }`}
-                    >
-                      {item.category}
-                    </span>
-                  </div>
-
-                  {item.shortcut && (
-                    <kbd
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono tracking-wider ml-2 shrink-0 ${
-                        isSelected
-                          ? 'bg-black/25 text-white'
-                          : 'bg-[var(--secondary)] text-[var(--muted-foreground)] border border-[var(--border)]'
-                      }`}
-                    >
-                      {item.shortcut}
-                    </kbd>
-                  )}
+                  {c.icon}
+                  <span className="ae-menu-item__label">{c.label}</span>
+                  {c.shortcut && <span className="ae-menu-item__hint">{c.shortcut}</span>}
                 </button>
-              );
-            })
-          )}
+              </div>
+            );
+          })}
         </div>
-
-        {/* Footer Navigation Hints */}
-        <div
-          className={`flex items-center justify-between px-4 py-2 border-t text-[10px] font-mono text-[var(--muted-foreground)] ${
-            isDarkMode ? 'border-[#2a2a2a] bg-[#0a0a0a]' : 'border-[#e5e5e5] bg-[#f8f9fa]'
-          }`}
-        >
-          <div className="flex items-center gap-3">
-            <span>↑↓ Navigate</span>
-            <span>↵ Select</span>
-            <span>Esc Dismiss</span>
-          </div>
-          <span>ARASKOVA SPOTLIGHT</span>
-        </div>
+        <footer className="ae-cmdk__foot">
+          <span>
+            <kbd>↑</kbd>
+            <kbd>↓</kbd> to move
+          </span>
+          <span>
+            <kbd>↵</kbd> to run
+          </span>
+          <span>
+            <kbd>esc</kbd> to close
+          </span>
+        </footer>
       </div>
     </div>
   );

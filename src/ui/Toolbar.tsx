@@ -35,14 +35,14 @@ export interface ExtraTool {
   onSelect: () => void;
 }
 
-const PEN_ICON: Record<PenTool, ReactNode> = {
+export const PEN_ICON: Record<PenTool, ReactNode> = {
   freedraw: <PenIcon />,
   fountain: <BrushIcon />,
   marker: <MarkerIcon />,
   highlighter: <HighlighterIcon />,
 };
 
-const ICONS: Record<string, ReactNode> = {
+export const TOOL_ICONS: Record<string, ReactNode> = {
   hand: <HandIcon />,
   select: <SelectIcon />,
   rectangle: <RectangleIcon />,
@@ -84,7 +84,7 @@ export function Toolbar({ activeTool, lastPen, locked, onToggleLock, onSelectToo
       {MAIN_TOOLS.map((t) => {
         const isDraw = t.id === 'freedraw';
         const active = isDraw ? isPen(activeTool) : activeTool === t.id;
-        const icon = isDraw ? PEN_ICON[isPen(activeTool) ? activeTool : lastPen] : ICONS[t.id];
+        const icon = isDraw ? PEN_ICON[isPen(activeTool) ? activeTool : lastPen] : TOOL_ICONS[t.id];
         const keyHint = [t.key, t.num].filter(Boolean).join(' or ');
         return (
           <button

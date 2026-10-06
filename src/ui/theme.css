@@ -254,8 +254,9 @@
 
 /* ── Popovers / menus ──────────────────────────────────────────────────── */
 .ae-pop {
-  position: absolute;
+  position: fixed;
   z-index: 40;
+  max-width: calc(100vw - 16px);
   background: var(--ae-surface);
   border-radius: var(--ae-radius-lg);
   box-shadow: var(--ae-shadow-lg);
@@ -270,9 +271,9 @@
   }
 }
 .ae-menu {
-  min-width: 248px;
-  /* Stop above the bottom zoom/undo bar instead of running under it. */
-  max-height: calc(100vh - 150px);
+  min-width: min(248px, calc(100vw - 32px));
+  /* Stop above the bottom zoom/undo bar, and never past the window edge. */
+  max-height: min(calc(100vh - 150px), calc(var(--ae-pop-max-h, 100vh) - 16px));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;

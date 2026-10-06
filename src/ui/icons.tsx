@@ -126,6 +126,13 @@ export const MagicPenIcon = (p: P) => (
     <path d="M15.5 2.75v2.5M14.25 4h2.5M4.5 4.5v1.5M3.75 5.25h1.5" />
   </Svg>
 );
+/** AI agents: a four-point spark. */
+export const SparkIcon = (p: P) => (
+  <Svg {...p}>
+    <path d="M10 2.75c.55 3.6 1.65 4.7 5.25 5.25-3.6.55-4.7 1.65-5.25 5.25-.55-3.6-1.65-4.7-5.25-5.25 3.6-.55 4.7-1.65 5.25-5.25z" />
+    <path d="M15.25 13.5v3.25M13.6 15.1h3.3" />
+  </Svg>
+);
 export const BrushIcon = (p: P) => (
   <Svg {...p}>
     <path d="M16.25 3.75c-2.5.6-6.1 3.7-7.8 6.4l1.4 1.4c2.7-1.7 5.8-5.3 6.4-7.8z" />

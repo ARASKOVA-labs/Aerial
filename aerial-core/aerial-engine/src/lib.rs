@@ -13,6 +13,7 @@
 //! (full redraw on each pointer move, full-board undo snapshots, O(n²) stroke
 //! bounds) now scales with what is visible or what changed.
 
+mod api_agent;
 mod api_scene;
 mod api_selection;
 mod api_view;

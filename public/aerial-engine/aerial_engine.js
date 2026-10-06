@@ -31,6 +31,27 @@ export class AerialCanvas {
         wasm.aerialcanvas_add_diagram(this.__wbg_ptr, img, x, y, w, h, ptr0, len0, ptr1, len1, ptr2, len2);
     }
     /**
+     * Adds elements (a JSON array of partial elements; omitted fields take
+     * defaults, ids are assigned). Returns a JSON array with the new id of
+     * each element, or null where it was rejected by validation.
+     * @param {string} json
+     * @returns {string}
+     */
+    add_elements_json(json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.aerialcanvas_add_elements_json(this.__wbg_ptr, ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * @param {HTMLImageElement} img
      * @param {number} x
      * @param {number} y
@@ -135,6 +156,17 @@ export class AerialCanvas {
         var v1 = getArrayF64FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
         return v1;
+    }
+    /**
+     * Deletes elements by id (a JSON array), as one undo step. Returns how many were removed.
+     * @param {string} ids_json
+     * @returns {number}
+     */
+    delete_elements_json(ids_json) {
+        const ptr0 = passStringToWasm0(ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.aerialcanvas_delete_elements_json(this.__wbg_ptr, ptr0, len0);
+        return ret >>> 0;
     }
     delete_selected() {
         wasm.aerialcanvas_delete_selected(this.__wbg_ptr);
@@ -426,6 +458,19 @@ export class AerialCanvas {
         const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.aerialcanvas_load_scene_json(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * Moves elements by (dx, dy) world units, as one undo step.
+     * @param {string} ids_json
+     * @param {number} dx
+     * @param {number} dy
+     * @returns {number}
+     */
+    move_elements_json(ids_json, dx, dy) {
+        const ptr0 = passStringToWasm0(ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.aerialcanvas_move_elements_json(this.__wbg_ptr, ptr0, len0, dx, dy);
+        return ret >>> 0;
     }
     /**
      * @param {string} canvas_id
@@ -853,6 +898,26 @@ export class AerialCanvas {
     undo() {
         const ret = wasm.aerialcanvas_undo(this.__wbg_ptr);
         return ret !== 0;
+    }
+    /**
+     * Merges field patches into existing elements (`[{ "id": 7, "x": 10, ... }]`).
+     * Returns the ids that were updated and are still valid.
+     * @param {string} json
+     * @returns {string}
+     */
+    update_elements_json(json) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.aerialcanvas_update_elements_json(this.__wbg_ptr, ptr0, len0);
+            deferred2_0 = ret[0];
+            deferred2_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
     }
     /**
      * @param {string} text

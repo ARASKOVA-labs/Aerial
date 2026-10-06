@@ -1,5 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// The MCP tool catalogue (mcp.rs) is one large json! literal.
+#![recursion_limit = "512"]
 
 //! Aerial desktop shell.
 //!
@@ -7,12 +9,15 @@
 //!   boards   load_board_scene · save_board_changes · delete_board
 //!   assets   save_asset · load_asset · read_dropped_image
 //!   storage  storage_status
+//!   agent    agent_respond (MCP bridge, see agent.rs / mcp.rs)
 //!   files    save_aerial_file · open_aerial_file · take_opened_files
 //!   diagrams render_diagram · update_diagram_node · openrouter_generate
 
+mod agent;
 mod ai;
 mod diagram;
 mod files;
+mod mcp;
 mod security;
 mod storage;
 mod vault;
@@ -125,6 +130,8 @@ pub fn run() {
             let store = Store::open(&app_data_dir, vault::Vault::open())?;
             app.manage(AppState { store: Arc::new(store), drops: DropGrants::default() });
             app.manage(files::PendingOpens::default());
+            app.manage(agent::AgentBridge::default());
+            agent::start(app.handle(), &app_data_dir);
 
             // Windows and Linux pass files opened with Aerial as arguments.
             #[cfg(any(target_os = "windows", target_os = "linux"))]
@@ -145,7 +152,8 @@ pub fn run() {
             diagram::update_diagram_node,
             files::save_aerial_file,
             files::open_aerial_file,
-            files::take_opened_files
+            files::take_opened_files,
+            agent::agent_respond
         ])
         .build(tauri::generate_context!());
 
@@ -156,11 +164,22 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    app.run(|_app, _event| {
+    app.run(|app, event| match event {
         // macOS / iOS deliver files opened with Aerial (Finder, Open With) here.
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let tauri::RunEvent::Opened { urls } = _event {
-            files::handle_opened_paths(_app, urls.into_iter().filter_map(|u| u.to_file_path().ok()));
+        tauri::RunEvent::Opened { urls } => {
+            files::handle_opened_paths(app, urls.into_iter().filter_map(|u| u.to_file_path().ok()));
         }
+        tauri::RunEvent::Exit => {
+            if let Ok(dir) = app.path().app_data_dir() {
+                agent::stop(&dir);
+            }
+        }
+        _ => {}
     });
+}
+
+/// `Aerial mcp`: serve the Model Context Protocol on stdio (no window).
+pub fn run_mcp() {
+    mcp::run_stdio();
 }

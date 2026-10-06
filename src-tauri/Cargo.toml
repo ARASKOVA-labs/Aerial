@@ -1,6 +1,6 @@
 [package]
 name = "aerial"
-version = "1.2.2"
+version = "3.0.0"
 description = "High-performance open-source digital whiteboard and canvas"
 authors = ["Araskova Labs <dev@araskova.com>"]
 edition = "2021"
@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "io-util", "sync", "time"] }
 redb = "2.1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

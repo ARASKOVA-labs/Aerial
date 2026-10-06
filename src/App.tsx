@@ -6,6 +6,7 @@ import mermaid from 'mermaid';
 import './App.css';
 import { AerialWordmark } from './AerialLogo';
 import { buildCommands } from './app/commands';
+import { AgentAccessDialog } from './app/dialogs/AgentAccessDialog';
 import { FeedbackDialog } from './app/dialogs/FeedbackDialog';
 import { ResetDialog } from './app/dialogs/ResetDialog';
 import { SaveFileDialog } from './app/dialogs/SaveFileDialog';
@@ -15,6 +16,7 @@ import { exportPng, exportSvg } from './app/exports';
 import { MainMenuContent } from './app/MainMenuContent';
 import { MAGIC_LANGS, PanelChoice, TRANSLATE_LANGS, type MagicLanguage } from './app/PanelExtras';
 import { useAerialFiles } from './app/useAerialFiles';
+import { useAgentBridge } from './app/useAgentBridge';
 import { useAppShortcuts } from './app/useAppShortcuts';
 import { useBoards, type GridType } from './app/useBoards';
 import { useCanvasHandle } from './app/useCanvasHandle';
@@ -52,7 +54,7 @@ export function canonicalPaper(color: string | null | undefined): string {
 
 const parseGrid = (raw: string | null): GridType => (raw === 'dots' || raw === 'lines' ? raw : 'blank');
 
-type Dialog = 'reset' | 'feedback' | 'diagram' | 'translator' | 'help' | 'palette' | 'locked' | null;
+type Dialog = 'reset' | 'feedback' | 'diagram' | 'translator' | 'help' | 'palette' | 'locked' | 'agents' | null;
 
 export default function App() {
   const toast = useToast();
@@ -79,6 +81,17 @@ export default function App() {
   const images = useImageImport(canvasRef, toast.show, dialog === 'diagram' || dialog === 'translator');
   const translateSelection = useTranslateSelection(canvasRef, toast.show);
   const onNodeDoubleClick = useDiagramEditing(canvasRef, isDarkMode);
+  const agents = useAgentBridge(
+    {
+      canvas: () => canvasRef.current,
+      boards: () => boards.boards.map(({ id, name }) => ({ id, name })),
+      activeBoard: () => (boards.activeBoard ? { id: boards.activeBoard.id, name: boards.activeBoard.name } : undefined),
+      openBoard: boards.switchBoard,
+      createBoard: (name) => boards.createBoard({ name }),
+      isDarkMode: () => isDarkMode,
+    },
+    canvasReady,
+  );
 
   // ── Canvas lifecycle ───────────────────────────────────────────────────────
   const onCanvasReady = useCallback(
@@ -226,7 +239,9 @@ export default function App() {
         showHelp: () => setDialog('help'),
         resetCanvas: () => setDialog('reset'),
         sendFeedback: () => setDialog('feedback'),
+        agents: () => setDialog('agents'),
       }}
+      agentsEnabled={agents.enabled}
       isDarkMode={isDarkMode}
       onThemeChange={setIsDarkMode}
       canvasBg={canvasBg}
@@ -288,6 +303,7 @@ export default function App() {
       )}
       {dialog === 'feedback' && <FeedbackDialog onClose={close} />}
       {dialog === 'locked' && <StorageLockedDialog onClose={close} />}
+      {dialog === 'agents' && <AgentAccessDialog enabled={agents.enabled} onToggle={agents.setEnabled} onClose={close} />}
       {dialog === 'palette' && <CommandPaletteModal commands={paletteCommands} onClose={close} />}
       {dialog === 'help' && <KeyboardShortcutsModal onClose={close} />}
       {dialog === 'diagram' && (

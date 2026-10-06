@@ -1090,6 +1090,41 @@ a.ae-cta {
   color: var(--ae-text-muted);
 }
 
+/* ── AI agents dialog ──────────────────────────────────────────────────── */
+.ae-dialog.ae-agents {
+  width: min(560px, 100%);
+}
+.ae-snippet {
+  margin-top: 14px;
+  border: 1px solid var(--ae-divider);
+  border-radius: var(--ae-radius);
+  overflow: hidden;
+}
+.ae-snippet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 6px 12px;
+  background: var(--ae-surface-low);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ae-text-muted);
+}
+.ae-snippet pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color: var(--ae-text);
+  user-select: text;
+  white-space: pre;
+}
+.ae-cta.ae-cta--small {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 /* ── Help dialog ───────────────────────────────────────────────────────── */
 .ae-dialog.ae-help {
   width: min(880px, 100%);

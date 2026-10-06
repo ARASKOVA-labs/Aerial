@@ -147,6 +147,12 @@ export interface AerialEngine {
   zoom_in: () => number;
   zoom_out: () => number;
   reset_view: () => number;
+  /** Adds elements from a JSON array (one undo step); returns a JSON array of ids (null = rejected). */
+  add_elements_json: (json: string) => string;
+  /** Merges field patches into elements by id (one undo step); returns updated ids as JSON. */
+  update_elements_json: (json: string) => string;
+  move_elements_json: (idsJson: string, dx: number, dy: number) => number;
+  delete_elements_json: (idsJson: string) => number;
   /** Frames the whole board; returns the new zoom. */
   zoom_to_fit: (padding: number) => number;
   /** [minX, minY, maxX, maxY] of all content in world units, or [] when empty. */

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Bakes the boot screen's handwritten wordmark: lays out a word in the
-// single-stroke EMS Allure font (SIL OFL, scripts/assets/EMSAllure.svg),
+// single-stroke EMS Allure font (SIL OFL, public/fonts/stroke/EMSAllure.svg),
 // smooths each polyline and writes public/boot-wordmark.js. Pre-baking keeps
 // the boot screen free of font parsing on the critical path.
 //
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const word = process.argv[2] ?? 'Aerial';
-const svg = readFileSync(join(root, 'scripts/assets/EMSAllure.svg'), 'utf8');
+const svg = readFileSync(join(root, 'public/fonts/stroke/EMSAllure.svg'), 'utf8');
 
 const unitsPerEm = parseFloat(/units-per-em="([\d.]+)"/.exec(svg)[1]);
 const defaultAdv = parseFloat(/<font[^>]*horiz-adv-x="([\d.]+)"/.exec(svg)[1]);

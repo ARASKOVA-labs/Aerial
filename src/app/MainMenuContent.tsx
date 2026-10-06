@@ -17,6 +17,7 @@ import {
   ImageIcon,
   MoonIcon,
   PlusIcon,
+  SparkIcon,
   SunIcon,
   TrashIcon,
 } from '../ui/icons';
@@ -35,6 +36,7 @@ export interface MainMenuActions {
   showHelp: () => void;
   resetCanvas: () => void;
   sendFeedback: () => void;
+  agents: () => void;
 }
 
 const GRID_LABEL: Record<GridType, string> = { blank: 'Off', dots: 'Dots', lines: 'Lines' };
@@ -118,6 +120,7 @@ export function MainMenuContent({
   onGridType,
   palmRejection,
   onPalmRejection,
+  agentsEnabled,
 }: {
   close: () => void;
   boards: UseBoards;
@@ -130,6 +133,7 @@ export function MainMenuContent({
   onGridType: (g: GridType) => void;
   palmRejection: boolean;
   onPalmRejection: (on: boolean) => void;
+  agentsEnabled: boolean;
 }) {
   const run = (fn: () => void) => () => {
     close();
@@ -159,6 +163,7 @@ export function MainMenuContent({
       <MenuItem icon={<HelpIcon />} label="Help" hint="?" onSelect={run(actions.showHelp)} />
       <MenuItem icon={<TrashIcon />} label="Reset the canvas" danger onSelect={run(actions.resetCanvas)} />
       <MenuSeparator />
+      <MenuItem icon={<SparkIcon />} label="AI agents (MCP)…" hint={agentsEnabled ? 'On' : 'Off'} onSelect={run(actions.agents)} />
       <MenuItem icon={<ChatIcon />} label="Send feedback" onSelect={run(actions.sendFeedback)} />
       <MenuSeparator />
       <div className="ae-menu-row" style={{ justifyContent: 'space-between' }}>

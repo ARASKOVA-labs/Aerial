@@ -21,6 +21,7 @@ mod element;
 mod freehand;
 mod geom;
 mod history;
+mod ink;
 mod interact;
 mod overlay;
 mod path;
@@ -45,14 +46,19 @@ use yrs::{updates::decoder::Decode, updates::encoder::Encode, Doc, ReadTxn, Stat
 
 use geom::FxHashSet;
 use history::History;
-use render::{paint_element, LayerCache, PaintEnv, Scratch, Theme, View};
+use render::{paint_element, LayerCache, PaintEnv, PathCache, Scratch, Theme, View};
 
 pub const MIN_ZOOM: f64 = 0.0005;
 pub const MAX_ZOOM: f64 = 64.0;
 /// Freehand strokes are simplified on commit to this many CSS px of error.
 const COMMIT_SIMPLIFY_PX: f64 = 0.25;
-/// Frames of no view change before a sub-pixel pan residual is repainted crisp.
+/// Frames of no view change before a shifted (mid-pan) or scaled (mid-zoom)
+/// static layer is repainted crisp.
 const IDLE_REFINE_FRAMES: u32 = 6;
+/// Frames with no gesture in progress before promoted strokes are repainted
+/// from their stored geometry: long enough that it lands in a pause between
+/// strokes, not in the gap before the next one while writing.
+const SETTLE_QUIET_FRAMES: u32 = 20;
 /// Canonical (light-theme) paper colour; dark mode shows it as #121212.
 const DEFAULT_PAPER: &str = "#ffffff";
 
@@ -170,6 +176,14 @@ pub struct AerialCanvas {
     history: History,
     cache: LayerCache,
     scratch: Scratch,
+    paths: PathCache,
+    ink: ink::LiveInk,
+    /// A just-committed long stroke whose live ink can stand in for a rebuild.
+    promote: Option<u64>,
+    /// Promoted strokes awaiting a repaint from their stored geometry.
+    settle: Vec<u64>,
+    /// Frames since the last pointer gesture ended (saturating).
+    quiet_frames: u32,
     active_stroke: Option<Element>,
     shape_anchor: (f64, f64),
     laser_strokes: Vec<Element>,
@@ -240,6 +254,11 @@ impl AerialCanvas {
             history: History::default(),
             cache: LayerCache::new()?,
             scratch: Scratch::default(),
+            paths: PathCache::default(),
+            ink: ink::LiveInk::default(),
+            promote: None,
+            settle: Vec::new(),
+            quiet_frames: 0,
             active_stroke: None,
             shape_anchor: (0.0, 0.0),
             laser_strokes: Vec::new(),
@@ -359,6 +378,38 @@ impl AerialCanvas {
         self.handle_up(raw_x, raw_y);
     }
 
+    /// Abandons the gesture in progress as if it never started (a touch that
+    /// became a pinch, a pointer the system cancelled): unfinished ink is
+    /// discarded and a drag, resize or partial erase is rolled back.
+    pub fn pointer_cancel(&mut self) {
+        self.cancel_gesture();
+    }
+
+    /// Finishes the gesture in progress where it stands, as a pointer-up at
+    /// the last known position would. For when the real pointer-up was lost
+    /// (the window lost focus mid-stroke, pointer capture was taken away).
+    pub fn pointer_finish(&mut self) {
+        self.finish_gesture();
+    }
+
+    /// Starts panning from a screen point whatever the active tool (middle
+    /// mouse button), leaving the tool and the selection untouched. Continue
+    /// with `pointer_move` and end with `pointer_up`.
+    pub fn pan_begin(&mut self, raw_x: f64, raw_y: f64) {
+        if !(raw_x.is_finite() && raw_y.is_finite()) {
+            return;
+        }
+        self.finish_gesture();
+        self.last_mouse_x = raw_x;
+        self.last_mouse_y = raw_y;
+        self.is_panning = true;
+    }
+
+    /// Whether a pointer gesture (stroke, drag, erase, pan) is in progress.
+    pub fn is_gesture_active(&self) -> bool {
+        self.is_drawing || self.is_panning || self.active_stroke.is_some()
+    }
+
     pub fn on_mouse_down(&mut self, raw_x: f64, raw_y: f64) {
         self.handle_down(raw_x, raw_y, -1.0);
     }
@@ -423,16 +474,27 @@ impl AerialCanvas {
         let view = (self.offset_x, self.offset_y, self.zoom);
         if view == self.last_view {
             self.idle_frames = self.idle_frames.saturating_add(1);
-            if self.idle_frames == IDLE_REFINE_FRAMES {
-                let (rx, ry) = self.cache.residual(&self.current_view());
-                if rx.abs() > 1e-3 || ry.abs() > 1e-3 {
-                    self.cache.invalidate();
-                    self.needs_render = true;
-                }
+            if self.idle_frames == IDLE_REFINE_FRAMES && self.cache.is_stale(&self.current_view()) {
+                self.cache.invalidate();
+                self.needs_render = true;
             }
         } else {
             self.idle_frames = 0;
             self.last_view = view;
+        }
+
+        // In a pause between strokes, repaint promoted ink from its stored
+        // geometry (identical to within a fraction of a pixel) so the layer
+        // and the outline cache hold the canonical rendering.
+        if self.is_drawing || self.is_panning || self.active_stroke.is_some() {
+            self.quiet_frames = 0;
+        } else {
+            self.quiet_frames = self.quiet_frames.saturating_add(1);
+            if self.quiet_frames >= SETTLE_QUIET_FRAMES && self.promote.is_none() && !self.settle.is_empty() {
+                for id in std::mem::take(&mut self.settle) {
+                    self.scene.touch_visual(id);
+                }
+            }
         }
 
         if self.needs_render || self.scene.has_pending_dirty() {
@@ -473,20 +535,28 @@ impl AerialCanvas {
         exclude.extend(self.eraser.pending.iter().copied());
         exclude.extend(self.hidden.iter().copied());
 
-        let env = PaintEnv { images: &self.image_cache, is_dark, zoom: self.zoom, scratch: &self.scratch, alpha: 1.0 };
-        self.cache.update(&mut self.scene, view, &theme, &exclude, &env);
-        let (rx, ry) = self.cache.residual(&view);
+        let env = PaintEnv { images: &self.image_cache, is_dark, zoom: self.zoom, scratch: &self.scratch, paths: Some(&self.paths), alpha: 1.0 };
+        // Ink that is not in the scene (the stroke being drawn, laser, magic
+        // pen) changes every frame and must never be cached.
+        let transient = PaintEnv { paths: None, ..env };
+        let promote = self.promote.take();
+        if self.cache.update(&mut self.scene, view, &theme, &exclude, &env, promote.map(|id| (&mut self.ink, id))) {
+            self.settle.extend(promote);
+        }
+        self.cache.stats.cached_paths = self.paths.len();
+        let (scale, dx, dy) = self.cache.placement(&view);
         let static_layer = self.cache.canvas();
 
         let ctx = &self.ctx;
         ctx.save();
         let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
         ctx.clear_rect(0.0, 0.0, view.w, view.h);
-        if paper != "transparent" && (rx != 0.0 || ry != 0.0) {
+        if paper != "transparent" && (scale != 1.0 || dx != 0.0 || dy != 0.0) {
             ctx.set_fill_style_str(&paper);
             ctx.fill_rect(0.0, 0.0, view.w, view.h);
         }
-        let _ = ctx.draw_image_with_html_canvas_element(static_layer, rx, ry);
+        let _ = ctx.set_transform(scale, 0.0, 0.0, scale, dx, dy);
+        let _ = ctx.draw_image_with_html_canvas_element(static_layer, 0.0, 0.0);
         view.apply(ctx);
 
         self.paint_magic_guidelines(is_dark, view.w / view.dpr, view.h / view.dpr);
@@ -504,10 +574,16 @@ impl AerialCanvas {
             }
         }
         if let Some(stroke) = &self.active_stroke {
-            paint_element(ctx, stroke, &env, false);
+            // Freehand ink is painted incrementally (constant cost per frame);
+            // shapes being dragged out are cheap and drawn whole.
+            if stroke.is_freehand() && self.ink.advance(stroke, &view, is_dark, &self.scratch) {
+                self.ink.paint(ctx, stroke, &view, is_dark, self.cache.scratch_layer(), &self.scratch);
+            } else {
+                paint_element(ctx, stroke, &transient, false);
+            }
         }
         for stroke in self.laser_strokes.iter().chain(self.magic_strokes.iter()) {
-            paint_element(ctx, stroke, &env, false);
+            paint_element(ctx, stroke, &transient, false);
         }
         self.paint_eraser_trail(is_dark);
         if self.tool == Tool::Select {
@@ -569,6 +645,10 @@ impl AerialCanvas {
     }
 
     fn switch_tool(&mut self, tool: Tool, keep_selection: bool) {
+        // Switching tools mid-stroke (a shortcut pressed while the pen is
+        // down) keeps the ink instead of silently dropping it.
+        self.finish_gesture();
+        self.pending_tool_switch = None;
         self.reset_interaction_state();
         if !keep_selection {
             self.set_selection(Vec::new());

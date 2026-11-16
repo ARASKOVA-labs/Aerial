@@ -37,12 +37,22 @@ pub fn preset(kind: &str, stroke_width: f64) -> Opts {
     }
 }
 
-struct Sample {
-    x: f64,
-    y: f64,
-    p: f64,
-    run: f64,
+/// One point of the streamlined centre line.
+#[derive(Clone, Copy, Debug)]
+pub struct Sample {
+    pub x: f64,
+    pub y: f64,
+    /// Smoothed pressure, 0..1.
+    pub p: f64,
+    /// Arc length from the start of the stroke.
+    pub run: f64,
 }
+
+/// Upper bound on centre-line samples per stroke. A stroke longer than
+/// `MAX_SAMPLES × step` is sampled more coarsely instead of allocating without
+/// limit — a two-point "stroke" spanning the whole world would otherwise ask
+/// for billions of samples (a crafted file could exhaust memory that way).
+pub const MAX_SAMPLES: usize = 60_000;
 
 fn ease_out_quad(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
@@ -54,12 +64,60 @@ fn ease_out_cubic(t: f64) -> f64 {
     t * t * t + 1.0
 }
 
-/// Speed → pressure: slow strokes are heavier, fast strokes lighter.
-/// Floored so a quick flick thins to ~40% instead of a hairline.
-fn simulate_step(prev_p: f64, d: f64, o: &Opts) -> f64 {
-    let speed = (d / (o.size.max(0.5) * 1.6)).min(1.0);
-    let target = 1.0 - speed * 0.7;
-    prev_p + (target - prev_p) * (speed * 0.275).max(0.02)
+/// Finest sample spacing (world units): what a stroke gets at 100% zoom and above.
+pub fn base_step(o: &Opts) -> f64 {
+    (o.size * 0.15).max(0.05)
+}
+
+/// Sample spacing for painting at `zoom`: never finer than about one screen
+/// pixel. Quantised to powers of two of `base_step` so a cached outline stays
+/// valid across a range of zoom levels.
+pub fn step_for(o: &Opts, zoom: f64) -> f64 {
+    let base = base_step(o);
+    if zoom.is_nan() {
+        return base;
+    }
+    let px = 1.0 / zoom.max(1e-9);
+    if px <= base {
+        return base;
+    }
+    base * 2f64.powi(((px / base).log2().floor() as i32).clamp(0, 60))
+}
+
+/// Speed → pressure for devices without pressure: slow strokes are heavier,
+/// fast strokes lighter. Causal (each value depends only on earlier input),
+/// so a stroke's simulated weight never changes as it grows.
+#[derive(Clone, Copy, Debug)]
+struct SpeedPressure {
+    sx: f64,
+    sy: f64,
+    p: f64,
+    started: bool,
+}
+
+impl SpeedPressure {
+    fn new() -> Self {
+        SpeedPressure { sx: 0.0, sy: 0.0, p: 0.5, started: false }
+    }
+
+    fn next(&mut self, (x, y): (f64, f64), o: &Opts) -> f64 {
+        if !self.started {
+            self.started = true;
+            (self.sx, self.sy) = (x, y);
+            return self.p;
+        }
+        let t = 0.15 + (1.0 - o.streamline.clamp(0.0, 1.0)) * 0.85;
+        let (nx, ny) = (self.sx + (x - self.sx) * t, self.sy + (y - self.sy) * t);
+        let d = ((nx - self.sx).powi(2) + (ny - self.sy).powi(2)).sqrt();
+        if d.is_finite() && d >= (o.size * 0.08).max(0.05) {
+            // Floored so a quick flick thins to ~40% instead of a hairline.
+            let speed = (d / (o.size.max(0.5) * 1.6)).min(1.0);
+            let target = 1.0 - speed * 0.7;
+            self.p += (target - self.p) * (speed * 0.275).max(0.02);
+            (self.sx, self.sy) = (nx, ny);
+        }
+        self.p
+    }
 }
 
 /// The pressure the renderer simulates at every input point of a stroke
@@ -67,25 +125,8 @@ fn simulate_step(prev_p: f64, d: f64, o: &Opts) -> f64 {
 /// the point list is simplified, so the committed stroke keeps exactly the
 /// weight it had while being drawn (simulation depends on point spacing).
 pub fn simulated_pressures(points: &[(f64, f64)], o: &Opts) -> Vec<f32> {
-    let t = 0.15 + (1.0 - o.streamline.clamp(0.0, 1.0)) * 0.85;
-    let min_step = (o.size * 0.08).max(0.05);
-    let mut out = Vec::with_capacity(points.len());
-    let Some(&(mut sx, mut sy)) = points.first() else { return out };
-    let mut p = 0.5;
-    for (i, &(x, y)) in points.iter().enumerate() {
-        let last = i + 1 == points.len();
-        let (nx, ny) = if i == 0 || last { (x, y) } else { (sx + (x - sx) * t, sy + (y - sy) * t) };
-        let d = ((nx - sx).powi(2) + (ny - sy).powi(2)).sqrt();
-        if i == 0 || (d < min_step && !last) {
-            out.push(p as f32);
-            continue;
-        }
-        p = simulate_step(p, d, o);
-        out.push(p as f32);
-        sx = nx;
-        sy = ny;
-    }
-    out
+    let mut sim = SpeedPressure::new();
+    points.iter().map(|&pt| sim.next(pt, o) as f32).collect()
 }
 
 /// True when `pressures` came from a pressure-sensitive device (or were baked
@@ -93,117 +134,197 @@ pub fn simulated_pressures(points: &[(f64, f64)], o: &Opts) -> Vec<f32> {
 pub fn has_real_pressure(points: &[(f64, f64)], pressures: &[f32]) -> bool {
     pressures.len() == points.len()
         && pressures.iter().all(|p| p.is_finite())
-        && pressures.iter().any(|&p| (p - pressures[0]).abs() > 0.01)
+        && pressures.iter().any(|&p| varies(p, pressures[0]))
 }
 
-/// Re-spaces a polyline (and its pressures) to a fixed arc-length step.
+/// Whether a pressure reading differs enough from the first to count as real.
+pub fn varies(p: f32, first: f32) -> bool {
+    (p - first).abs() > 0.01
+}
+
+/// Incremental centre-line generator.
 ///
-/// Streamlining lags a fixed fraction per sample, so on raw input its effect
-/// depended on point density: the dense live stroke and the RDP-simplified
-/// committed stroke came out as different shapes. Uniform spacing makes the
-/// smoothing a function of the path alone, so what is drawn is what is kept.
-fn resample(points: &[(f64, f64)], pressures: &[f32], step: f64) -> (Vec<(f64, f64)>, Vec<f64>) {
-    let mut pts = Vec::with_capacity(points.len());
-    let mut prs = Vec::with_capacity(points.len());
-    let Some(&first) = points.first() else { return (pts, prs) };
-    pts.push(first);
-    prs.push(pressures[0] as f64);
-    let mut carry = 0.0; // distance travelled since the last emitted sample
-    for i in 1..points.len() {
-        let (a, b) = (points[i - 1], points[i]);
-        let (pa, pb) = (pressures[i - 1] as f64, pressures[i] as f64);
-        let len = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
-        if len < 1e-12 {
-            continue;
-        }
-        let mut at = step - carry;
-        while at <= len {
-            let t = at / len;
-            pts.push((a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t));
-            prs.push(pa + (pb - pa) * t);
-            at += step;
-        }
-        carry = len - (at - step);
-    }
-    let last = points[points.len() - 1];
-    if pts.last().is_none_or(|q| (q.0 - last.0).abs() > 1e-9 || (q.1 - last.1).abs() > 1e-9) {
-        pts.push(last);
-        prs.push(pressures[pressures.len() - 1] as f64);
-    }
-    (pts, prs)
+/// Input points are re-spaced to a fixed arc-length `step` and streamlined
+/// (an exponential lag that removes hand jitter). Everything is causal: a
+/// sample, once emitted, never changes when more input arrives. That is what
+/// lets the live stroke be painted incrementally — settled ink is baked once
+/// and only the tip is redrawn — and it guarantees the live stroke and the
+/// committed one are generated by the same code.
+///
+/// Smoothing is defined per unit of arc length, not per sample, so the same
+/// path gives the same shape at any `step` (coarser steps are used when
+/// zoomed out) and any input point density.
+pub struct Sampler {
+    o: Opts,
+    step: f64,
+    lag: f64,
+    pressure_gain: f64,
+    simulate: Option<SpeedPressure>,
+    /// Input points offered, including any ignored as non-finite.
+    seen: usize,
+    count: usize,
+    last: (f64, f64),
+    last_p: f64,
+    carry: f64,
+    sx: f64,
+    sy: f64,
+    prev_p: f64,
+    run: f64,
+    samples: Vec<Sample>,
 }
 
-/// Streamlined, pressure-annotated centre line.
-fn samples(points: &[(f64, f64)], pressures: &[f32], o: &Opts) -> Vec<Sample> {
-    // Without device pressure, simulate it from the raw input spacing (speed)
-    // first — the same values commit bakes into the element.
-    let simulated;
-    let pressures = if has_real_pressure(points, pressures) {
-        pressures
-    } else {
-        simulated = simulated_pressures(points, o);
-        &simulated[..]
-    };
-    let (points, pressures) = resample(points, pressures, (o.size * 0.15).max(0.05));
-    let t = 0.15 + (1.0 - o.streamline.clamp(0.0, 1.0)) * 0.85;
-    let mut out: Vec<Sample> = Vec::with_capacity(points.len());
-    let (mut sx, mut sy) = points[0];
-    let mut prev_p = pressures[0].clamp(0.0, 1.0);
-    let mut run = 0.0;
-    for (i, &(x, y)) in points.iter().enumerate() {
-        let last = i + 1 == points.len();
-        let (nx, ny) = if i == 0 || last { (x, y) } else { (sx + (x - sx) * t, sy + (y - sy) * t) };
-        let d = ((nx - sx).powi(2) + (ny - sy).powi(2)).sqrt();
-        let p = prev_p + (pressures[i].clamp(0.0, 1.0) - prev_p) * 0.5;
-        run += d;
-        out.push(Sample { x: nx, y: ny, p, run });
-        sx = nx;
-        sy = ny;
-        prev_p = p;
+impl Sampler {
+    /// `simulate`: derive pressure from speed (no pressure-sensitive device).
+    pub fn new(o: Opts, step: f64, simulate: bool) -> Self {
+        let base = base_step(&o);
+        let step = if step.is_finite() { step.max(base) } else { base };
+        let per_base = 0.15 + (1.0 - o.streamline.clamp(0.0, 1.0)) * 0.85;
+        let ratio = step / base;
+        Sampler {
+            o,
+            step,
+            lag: 1.0 - (1.0 - per_base).powf(ratio),
+            pressure_gain: 1.0 - 0.5f64.powf(ratio),
+            simulate: simulate.then(SpeedPressure::new),
+            seen: 0,
+            count: 0,
+            last: (0.0, 0.0),
+            last_p: 0.5,
+            carry: 0.0,
+            sx: 0.0,
+            sy: 0.0,
+            prev_p: 0.5,
+            run: 0.0,
+            samples: Vec::new(),
+        }
     }
+
+    pub fn step(&self) -> f64 {
+        self.step
+    }
+
+    /// Settled samples. Does not include the tip (see `tip`).
+    pub fn samples(&self) -> &[Sample] {
+        &self.samples
+    }
+
+    /// Number of input points consumed so far.
+    pub fn consumed(&self) -> usize {
+        self.seen
+    }
+
+    pub fn push(&mut self, pt: (f64, f64), pressure: f32) {
+        self.seen += 1;
+        if !(pt.0.is_finite() && pt.1.is_finite()) {
+            return;
+        }
+        let p = match self.simulate.as_mut() {
+            Some(sim) => sim.next(pt, &self.o),
+            None if pressure.is_finite() => (pressure as f64).clamp(0.0, 1.0),
+            None => self.last_p,
+        };
+        if self.count == 0 {
+            self.count = 1;
+            (self.last, self.last_p) = (pt, p);
+            (self.sx, self.sy, self.prev_p) = (pt.0, pt.1, p);
+            self.samples.push(Sample { x: pt.0, y: pt.1, p, run: 0.0 });
+            return;
+        }
+        self.count += 1;
+        let (a, pa) = (self.last, self.last_p);
+        let len = ((pt.0 - a.0).powi(2) + (pt.1 - a.1).powi(2)).sqrt();
+        if len.is_finite() && len >= 1e-12 {
+            let mut at = self.step - self.carry;
+            while at <= len {
+                let t = at / len;
+                self.emit(a.0 + (pt.0 - a.0) * t, a.1 + (pt.1 - a.1) * t, pa + (p - pa) * t);
+                at += self.step;
+            }
+            self.carry = len - (at - self.step);
+        }
+        (self.last, self.last_p) = (pt, p);
+    }
+
+    fn emit(&mut self, x: f64, y: f64, p: f64) {
+        let (nx, ny) = (self.sx + (x - self.sx) * self.lag, self.sy + (y - self.sy) * self.lag);
+        self.run += ((nx - self.sx).powi(2) + (ny - self.sy).powi(2)).sqrt();
+        self.prev_p += (p - self.prev_p) * self.pressure_gain;
+        (self.sx, self.sy) = (nx, ny);
+        self.samples.push(Sample { x: nx, y: ny, p: self.prev_p, run: self.run });
+    }
+
+    /// The stroke's current end: the latest input point itself (the pen tip is
+    /// never lagged). Unlike settled samples it moves as input arrives.
+    pub fn tip(&self) -> Option<Sample> {
+        if self.count < 2 {
+            return None;
+        }
+        let d = ((self.last.0 - self.sx).powi(2) + (self.last.1 - self.sy).powi(2)).sqrt();
+        if d.is_nan() || d < 1e-9 {
+            return None;
+        }
+        let p = self.prev_p + (self.last_p - self.prev_p) * self.pressure_gain;
+        Some(Sample { x: self.last.0, y: self.last.1, p, run: self.run + d })
+    }
+}
+
+/// Whole centre line of a finished stroke at sample spacing `step`.
+pub fn collect(points: &[(f64, f64)], pressures: &[f32], o: &Opts, step: f64) -> Vec<Sample> {
+    let real = has_real_pressure(points, pressures);
+    let length: f64 = points.windows(2).map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt()).sum();
+    let step = if length.is_finite() { step.max(length / MAX_SAMPLES as f64) } else { step };
+    let mut sampler = Sampler::new(*o, step, !real);
+    for (i, &pt) in points.iter().enumerate() {
+        sampler.push(pt, if real { pressures[i] } else { 0.5 });
+    }
+    let tip = sampler.tip();
+    let mut out = sampler.samples;
+    out.extend(tip);
     out
 }
 
-/// Computes the outline polygon of a stroke into `out` (cleared first).
-pub fn outline(points: &[(f64, f64)], pressures: &[f32], o: &Opts, out: &mut Vec<(f64, f64)>) {
-    out.clear();
-    if points.is_empty() || o.size.is_nan() || o.size <= 0.0 {
-        return;
+fn radius_at(smp: &Sample, total: f64, o: &Opts) -> f64 {
+    let mut r = if o.thinning > 0.0 { o.size * (0.5 - o.thinning * (0.5 - smp.p)) } else { o.size * 0.5 };
+    if o.taper_start > 0.0 && smp.run < o.taper_start {
+        r *= ease_out_quad(smp.run / o.taper_start);
     }
-    let s = samples(points, pressures, o);
-    let total = s.last().map(|p| p.run).unwrap_or(0.0);
-    let radius_at = |smp: &Sample| -> f64 {
-        let mut r = if o.thinning > 0.0 { o.size * (0.5 - o.thinning * (0.5 - smp.p)) } else { o.size * 0.5 };
-        if o.taper_start > 0.0 && smp.run < o.taper_start {
-            r *= ease_out_quad(smp.run / o.taper_start);
-        }
-        if o.taper_end > 0.0 && total - smp.run < o.taper_end {
-            r *= ease_out_cubic((total - smp.run) / o.taper_end);
-        }
-        r.max(0.01 * o.size).max(0.05)
-    };
-
-    // A dot: a circle.
-    if s.len() == 1 || total < o.size * 0.25 {
-        let (cx, cy) = (s[0].x, s[0].y);
-        let r = (o.size * 0.5 * (0.6 + 0.4 * s[0].p)).max(0.3);
-        for k in 0..16 {
-            let a = k as f64 / 16.0 * std::f64::consts::TAU;
-            out.push((cx + r * a.cos(), cy + r * a.sin()));
-        }
-        return;
+    if o.taper_end > 0.0 && total - smp.run < o.taper_end {
+        r *= ease_out_cubic((total - smp.run) / o.taper_end);
     }
+    r.max(0.01 * o.size).max(0.05)
+}
 
+/// Largest half-width the outline can reach (full pressure, no taper).
+pub fn max_radius(o: &Opts) -> f64 {
+    (o.size * (0.5 + 0.5 * o.thinning.max(0.0))).max(0.05)
+}
+
+/// Outline polygon of samples `a..=b` of `s`, appended to `out`.
+///
+/// `s` may hold neighbours outside the span; they are used only for
+/// directions, so adjoining spans meet without a kink. `total` is the stroke
+/// length used for the end taper (`f64::INFINITY` for a span that is not at
+/// the end). An end is closed with a round cap (or its taper) when the
+/// matching `cap_*` flag is set, and cut square otherwise.
+#[allow(clippy::too_many_arguments)]
+pub fn outline_span(s: &[Sample], a: usize, b: usize, total: f64, o: &Opts, cap_start: bool, cap_end: bool, out: &mut Vec<(f64, f64)>) {
     let n = s.len();
+    if n == 0 || a > b || b >= n {
+        return;
+    }
+    if n == 1 {
+        dot(&s[0], o, out);
+        return;
+    }
     let dir = |i: usize| -> (f64, f64) {
-        let (a, b) = if i == 0 { (0, 1) } else { (i - 1, i) };
-        let (dx, dy) = (s[b].x - s[a].x, s[b].y - s[a].y);
+        let (p, q) = if i == 0 { (0, 1) } else { (i - 1, i) };
+        let (dx, dy) = (s[q].x - s[p].x, s[q].y - s[p].y);
         let len = (dx * dx + dy * dy).sqrt();
         if len > 1e-9 { (dx / len, dy / len) } else { (1.0, 0.0) }
     };
     let min_gap = (o.size * o.smoothing).powi(2) * 0.25;
-    let mut left: Vec<(f64, f64)> = Vec::with_capacity(n);
-    let mut right: Vec<(f64, f64)> = Vec::with_capacity(n);
+    let mut left: Vec<(f64, f64)> = Vec::with_capacity(b - a + 1);
+    let mut right: Vec<(f64, f64)> = Vec::with_capacity(b - a + 1);
     let push_far = |v: &mut Vec<(f64, f64)>, p: (f64, f64), force: bool| {
         if force || v.last().is_none_or(|q| (q.0 - p.0).powi(2) + (q.1 - p.1).powi(2) > min_gap) {
             v.push(p);
@@ -211,8 +332,8 @@ pub fn outline(points: &[(f64, f64)], pressures: &[f32], o: &Opts, out: &mut Vec
     };
 
     #[allow(clippy::needless_range_loop)] // neighbours of i are needed
-    for i in 0..n {
-        let r = radius_at(&s[i]);
+    for i in a..=b {
+        let r = radius_at(&s[i], total, o);
         let d0 = dir(i);
         let d1 = if i + 1 < n { dir(i + 1) } else { d0 };
         let dot = d0.0 * d1.0 + d0.1 * d1.1;
@@ -224,10 +345,10 @@ pub fn outline(points: &[(f64, f64)], pressures: &[f32], o: &Opts, out: &mut Vec
             // right side around the back (a0-90° → a0-270°), so neither crosses.
             for k in 0..=8 {
                 let t = std::f64::consts::PI * k as f64 / 8.0;
-                let a = a0 + std::f64::consts::FRAC_PI_2 - t;
-                push_far(&mut left, (px + r * a.cos(), py + r * a.sin()), true);
-                let b = a0 - std::f64::consts::FRAC_PI_2 - t;
-                push_far(&mut right, (px + r * b.cos(), py + r * b.sin()), true);
+                let la = a0 + std::f64::consts::FRAC_PI_2 - t;
+                push_far(&mut left, (px + r * la.cos(), py + r * la.sin()), true);
+                let ra = a0 - std::f64::consts::FRAC_PI_2 - t;
+                push_far(&mut right, (px + r * ra.cos(), py + r * ra.sin()), true);
             }
             continue;
         }
@@ -241,36 +362,66 @@ pub fn outline(points: &[(f64, f64)], pressures: &[f32], o: &Opts, out: &mut Vec
             ty /= tl;
         }
         let (nx, ny) = (-ty, tx);
-        let last = i + 1 == n;
-        push_far(&mut left, (px + nx * r, py + ny * r), i == 0 || last);
-        push_far(&mut right, (px - nx * r, py - ny * r), i == 0 || last);
+        let edge = i == a || i == b;
+        push_far(&mut left, (px + nx * r, py + ny * r), edge);
+        push_far(&mut right, (px - nx * r, py - ny * r), edge);
     }
 
     // Caps: round unless the end is tapered to a point.
-    let cap = |out: &mut Vec<(f64, f64)>, c: &Sample, d: (f64, f64), from_left: bool, r: f64| {
+    let cap = |out: &mut Vec<(f64, f64)>, c: &Sample, d: (f64, f64), r: f64| {
         let base = d.1.atan2(d.0);
         for k in 1..8 {
             let t = std::f64::consts::PI * k as f64 / 8.0;
-            let a = if from_left { base + std::f64::consts::FRAC_PI_2 - t } else { base - std::f64::consts::FRAC_PI_2 + t };
-            out.push((c.x + r * a.cos(), c.y + r * a.sin()));
+            let ang = base + std::f64::consts::FRAC_PI_2 - t;
+            out.push((c.x + r * ang.cos(), c.y + r * ang.sin()));
         }
     };
 
     out.extend(left.iter().copied());
-    if o.taper_end <= 0.0 {
-        cap(out, &s[n - 1], dir(n - 1), true, radius_at(&s[n - 1]));
+    if cap_end && o.taper_end <= 0.0 {
+        cap(out, &s[b], dir(b), radius_at(&s[b], total, o));
     }
     out.extend(right.iter().rev().copied());
-    if o.taper_start <= 0.0 {
-        let d = dir(1);
-        cap(out, &s[0], (-d.0, -d.1), true, radius_at(&s[0]));
+    if cap_start && o.taper_start <= 0.0 {
+        let d = dir(a.max(1));
+        cap(out, &s[a], (-d.0, -d.1), radius_at(&s[a], total, o));
     }
 }
 
-/// Outline as smooth path segments.
-pub fn outline_segs(points: &[(f64, f64)], pressures: &[f32], o: &Opts, scratch: &mut Vec<(f64, f64)>, out: &mut Vec<Seg>) {
+/// A tap: a circle sized by pressure.
+fn dot(c: &Sample, o: &Opts, out: &mut Vec<(f64, f64)>) {
+    let r = (o.size * 0.5 * (0.6 + 0.4 * c.p)).max(0.3);
+    for k in 0..16 {
+        let a = k as f64 / 16.0 * std::f64::consts::TAU;
+        out.push((c.x + r * a.cos(), c.y + r * a.sin()));
+    }
+}
+
+/// Outline polygon of a whole centre line (cleared first).
+pub fn outline_samples(s: &[Sample], o: &Opts, out: &mut Vec<(f64, f64)>) {
     out.clear();
-    outline(points, pressures, o, scratch);
+    let Some(last) = s.last() else { return };
+    if s.len() == 1 || last.run < o.size * 0.25 {
+        dot(&s[0], o, out);
+        return;
+    }
+    outline_span(s, 0, s.len() - 1, last.run, o, true, true, out);
+}
+
+/// Computes the outline polygon of a stroke into `out` (cleared first), with
+/// the centre line sampled every `step` world units (see `step_for`).
+pub fn outline(points: &[(f64, f64)], pressures: &[f32], o: &Opts, step: f64, out: &mut Vec<(f64, f64)>) {
+    out.clear();
+    if points.is_empty() || o.size.is_nan() || o.size <= 0.0 {
+        return;
+    }
+    outline_samples(&collect(points, pressures, o, step), o, out);
+}
+
+/// Outline as smooth path segments.
+pub fn outline_segs(points: &[(f64, f64)], pressures: &[f32], o: &Opts, step: f64, scratch: &mut Vec<(f64, f64)>, out: &mut Vec<Seg>) {
+    out.clear();
+    outline(points, pressures, o, step, scratch);
     smooth_closed(scratch, out);
 }
 
@@ -297,7 +448,8 @@ mod tests {
     fn outline_is_finite_and_closed_shape() {
         let mut out = Vec::new();
         for kind in ["FreeDraw", "FountainPen", "Marker", "Highlighter", "LaserPen"] {
-            outline(&line(80), &[], &preset(kind, 2.5), &mut out);
+            let o = preset(kind, 2.5);
+            outline(&line(80), &[], &o, base_step(&o), &mut out);
             assert!(out.len() > 20, "{kind}");
             assert!(out.iter().all(|p| p.0.is_finite() && p.1.is_finite()), "{kind}");
         }
@@ -311,7 +463,7 @@ mod tests {
         let heavy: Vec<f32> = (0..60).map(|i| if i % 2 == 0 { 0.95 } else { 0.97 }).collect();
         let span = |pr: &[f32]| {
             let mut out = Vec::new();
-            outline(&pts, pr, &o, &mut out);
+            outline(&pts, pr, &o, base_step(&o), &mut out);
             let (lo, hi) = out.iter().fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.1), b.max(p.1)));
             hi - lo
         };
@@ -321,7 +473,8 @@ mod tests {
     #[test]
     fn marker_is_uniform_and_dots_are_round() {
         let mut out = Vec::new();
-        outline(&[(5.0, 5.0)], &[], &preset("Marker", 3.0), &mut out);
+        let o = preset("Marker", 3.0);
+        outline(&[(5.0, 5.0)], &[], &o, base_step(&o), &mut out);
         assert_eq!(out.len(), 16);
         let r0 = ((out[0].0 - 5.0).powi(2) + (out[0].1 - 5.0).powi(2)).sqrt();
         let r8 = ((out[8].0 - 5.0).powi(2) + (out[8].1 - 5.0).powi(2)).sqrt();
@@ -336,7 +489,7 @@ mod tests {
         let pts: Vec<_> = keep.iter().map(|&i| live[i]).collect();
         let prs: Vec<_> = keep.iter().map(|&i| baked[i]).collect();
         let mut out = Vec::new();
-        outline(&pts, &prs, o, &mut out);
+        outline(&pts, &prs, o, base_step(o), &mut out);
         out
     }
 
@@ -382,7 +535,7 @@ mod tests {
                     continue; // long tapers follow total length, which jitter inflates
                 }
                 let mut a = Vec::new();
-                outline(live, &vec![0.5; live.len()], &o, &mut a);
+                outline(live, &vec![0.5; live.len()], &o, base_step(&o), &mut a);
                 let d = drift(&a, &committed_outline(live, &o));
                 assert!(d < o.size * tol, "{kind}/{name}: committed outline drifts {d:.2} from live (size {})", o.size);
             }
@@ -393,7 +546,120 @@ mod tests {
     fn handles_reversals_and_duplicates() {
         let pts = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 0.0), (0.0, 0.1), (-10.0, 0.0)];
         let mut out = Vec::new();
-        outline(&pts, &[], &preset("FreeDraw", 2.0), &mut out);
+        let o = preset("FreeDraw", 2.0);
+        outline(&pts, &[], &o, base_step(&o), &mut out);
         assert!(out.iter().all(|p| p.0.is_finite()));
+    }
+
+    fn cursive(n: usize) -> Vec<(f64, f64)> {
+        (0..n).map(|i| {
+            let t = i as f64 * 0.02;
+            (t * 10.0 + t.sin() * 30.0, -t.cos() * 25.0 + (t * 3.1).sin() * 4.0)
+        }).collect()
+    }
+
+    /// Settled samples never change as the stroke grows — the property the
+    /// incremental live renderer relies on to bake ink once.
+    #[test]
+    fn sampler_is_causal() {
+        let pts = cursive(600);
+        for (kind, simulate) in [("FreeDraw", true), ("FountainPen", false), ("Highlighter", true)] {
+            let o = preset(kind, 2.0);
+            let mut full = Sampler::new(o, base_step(&o), simulate);
+            let mut snapshots = Vec::new();
+            for (i, &pt) in pts.iter().enumerate() {
+                full.push(pt, 0.3 + 0.4 * ((i as f32) * 0.05).sin().abs());
+                if i == 150 || i == 400 {
+                    snapshots.push(full.samples().to_vec());
+                }
+            }
+            for snap in snapshots {
+                assert!(snap.len() > 10, "{kind}");
+                for (a, b) in snap.iter().zip(full.samples()) {
+                    assert!(a.x == b.x && a.y == b.y && a.p == b.p && a.run == b.run, "{kind}: settled sample changed");
+                }
+            }
+        }
+    }
+
+    /// A coarser step (used when zoomed out) must trace the same shape: the
+    /// outline may differ only by a fraction of the step.
+    #[test]
+    fn shape_is_independent_of_step() {
+        let pts = cursive(700);
+        for kind in ["FreeDraw", "Marker", "Highlighter"] {
+            let o = preset(kind, 2.0);
+            let (mut fine, mut coarse) = (Vec::new(), Vec::new());
+            outline(&pts, &[], &o, base_step(&o), &mut fine);
+            for mult in [2.0, 4.0, 8.0] {
+                let step = base_step(&o) * mult;
+                outline(&pts, &[], &o, step, &mut coarse);
+                let d = drift(&fine, &coarse);
+                assert!(d < step * 0.8 + o.size * 0.1, "{kind} ×{mult}: drift {d:.3} (step {step:.2})");
+            }
+        }
+    }
+
+    #[test]
+    fn step_follows_zoom_in_powers_of_two() {
+        let o = preset("FreeDraw", 2.0);
+        let base = base_step(&o);
+        assert_eq!(step_for(&o, 1.0), base);
+        assert_eq!(step_for(&o, 64.0), base);
+        for zoom in [0.5, 0.1, 0.01, 0.0005] {
+            let step = step_for(&o, zoom);
+            assert!(step * zoom <= 1.0 + 1e-9 && step * zoom > 0.5 - 1e-9, "zoom {zoom}: {} px", step * zoom);
+            let k = (step / base).log2();
+            assert!((k - k.round()).abs() < 1e-9);
+        }
+        assert_eq!(step_for(&o, f64::NAN), base);
+        assert!(step_for(&o, 0.0).is_finite());
+    }
+
+    /// A two-point stroke spanning the whole world must not allocate a sample
+    /// every 0.1 units (that was ~20 billion samples: instant out-of-memory).
+    #[test]
+    fn sample_count_is_bounded() {
+        let o = preset("FreeDraw", 0.0);
+        let s = collect(&[(-1.0e9, 0.0), (1.0e9, 5.0)], &[], &o, base_step(&o));
+        assert!(s.len() <= MAX_SAMPLES + 2, "{} samples", s.len());
+        let mut out = Vec::new();
+        outline(&[(-1.0e9, 0.0), (1.0e9, 5.0)], &[], &o, base_step(&o), &mut out);
+        assert!(out.iter().all(|p| p.0.is_finite() && p.1.is_finite()));
+        // Non-finite input is ignored rather than looping or poisoning output.
+        let weird = collect(&[(0.0, 0.0), (f64::INFINITY, 1.0), (f64::NAN, 2.0), (10.0, 0.0)], &[], &o, base_step(&o));
+        assert!(weird.iter().all(|p| p.x.is_finite() && p.y.is_finite() && p.p.is_finite()));
+    }
+
+    /// Spans drawn separately (as the live renderer does) must cover what the
+    /// single full outline covers: every vertex of the full outline lies on or
+    /// inside some span polygon, within a small tolerance.
+    #[test]
+    fn overlapping_spans_cover_the_full_outline() {
+        let pts = cursive(900);
+        for kind in ["FreeDraw", "Marker", "FountainPen"] {
+            let o = preset(kind, 2.0);
+            let s = collect(&pts, &[], &o, base_step(&o));
+            let total = s[s.len() - 1].run;
+            let mut full = Vec::new();
+            outline_samples(&s, &o, &mut full);
+            let (chunk, overlap) = (64usize, 6usize);
+            let mut polys: Vec<Vec<(f64, f64)>> = Vec::new();
+            let mut start = 0;
+            while start < s.len() - 1 {
+                let end = (start + chunk).min(s.len() - 1);
+                let a = start.saturating_sub(overlap);
+                let mut poly = Vec::new();
+                outline_span(&s, a, end, total, &o, a == 0, end == s.len() - 1, &mut poly);
+                polys.push(poly);
+                start = end;
+            }
+            assert!(polys.len() > 3, "{kind}");
+            let tol = o.size * 0.02 + 1e-6;
+            for &v in &full {
+                let covered = polys.iter().any(|poly| crate::geom::point_in_polygon(v, poly) || drift(poly, &[v]) < tol);
+                assert!(covered, "{kind}: outline vertex {v:?} not covered by any span");
+            }
+        }
     }
 }

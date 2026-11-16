@@ -91,6 +91,10 @@ export class AerialCanvas {
     hide_element(id: bigint): void;
     import_full_state(bytes: Uint8Array): void;
     /**
+     * Whether a pointer gesture (stroke, drag, erase, pan) is in progress.
+     */
+    is_gesture_active(): boolean;
+    /**
      * Number of elements dropped by validation in the last `load_scene_json`.
      */
     last_load_rejected(): number;
@@ -114,10 +118,28 @@ export class AerialCanvas {
     on_mouse_up(raw_x: number, raw_y: number): void;
     on_wheel(dx: number, dy: number, ctrl: boolean, sx: number, sy: number): number;
     /**
+     * Starts panning from a screen point whatever the active tool (middle
+     * mouse button), leaving the tool and the selection untouched. Continue
+     * with `pointer_move` and end with `pointer_up`.
+     */
+    pan_begin(raw_x: number, raw_y: number): void;
+    /**
+     * Abandons the gesture in progress as if it never started (a touch that
+     * became a pinch, a pointer the system cancelled): unfinished ink is
+     * discarded and a drag, resize or partial erase is rolled back.
+     */
+    pointer_cancel(): void;
+    /**
      * Pointer down with pen pressure (0..1), or a negative value when the
      * device reports none (mouse) — pressure is then simulated from speed.
      */
     pointer_down(raw_x: number, raw_y: number, pressure: number): void;
+    /**
+     * Finishes the gesture in progress where it stands, as a pointer-up at
+     * the last known position would. For when the real pointer-up was lost
+     * (the window lost focus mid-stroke, pointer capture was taken away).
+     */
+    pointer_finish(): void;
     pointer_move(raw_x: number, raw_y: number, pressure: number): void;
     pointer_up(raw_x: number, raw_y: number): void;
     process_incoming_packet(packet: Uint8Array): Uint8Array | undefined;
@@ -286,6 +308,7 @@ export interface InitOutput {
     readonly aerialcanvas_has_pending_changes: (a: number) => number;
     readonly aerialcanvas_hide_element: (a: number, b: bigint) => void;
     readonly aerialcanvas_import_full_state: (a: number, b: number, c: number) => void;
+    readonly aerialcanvas_is_gesture_active: (a: number) => number;
     readonly aerialcanvas_last_load_rejected: (a: number) => number;
     readonly aerialcanvas_load_scene_json: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_move_elements_json: (a: number, b: number, c: number, d: number, e: number) => number;
@@ -296,7 +319,10 @@ export interface InitOutput {
     readonly aerialcanvas_on_mouse_move: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_on_mouse_up: (a: number, b: number, c: number) => void;
     readonly aerialcanvas_on_wheel: (a: number, b: number, c: number, d: number, e: number, f: number) => number;
+    readonly aerialcanvas_pan_begin: (a: number, b: number, c: number) => void;
+    readonly aerialcanvas_pointer_cancel: (a: number) => void;
     readonly aerialcanvas_pointer_down: (a: number, b: number, c: number, d: number) => void;
+    readonly aerialcanvas_pointer_finish: (a: number) => void;
     readonly aerialcanvas_pointer_move: (a: number, b: number, c: number, d: number) => void;
     readonly aerialcanvas_process_incoming_packet: (a: number, b: number, c: number) => [number, number];
     readonly aerialcanvas_redo: (a: number) => number;

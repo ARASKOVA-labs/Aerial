@@ -442,6 +442,14 @@ export class AerialCanvas {
         wasm.aerialcanvas_import_full_state(this.__wbg_ptr, ptr0, len0);
     }
     /**
+     * Whether a pointer gesture (stroke, drag, erase, pan) is in progress.
+     * @returns {boolean}
+     */
+    is_gesture_active() {
+        const ret = wasm.aerialcanvas_is_gesture_active(this.__wbg_ptr);
+        return ret !== 0;
+    }
+    /**
      * Number of elements dropped by validation in the last `load_scene_json`.
      * @returns {number}
      */
@@ -542,6 +550,24 @@ export class AerialCanvas {
         return ret;
     }
     /**
+     * Starts panning from a screen point whatever the active tool (middle
+     * mouse button), leaving the tool and the selection untouched. Continue
+     * with `pointer_move` and end with `pointer_up`.
+     * @param {number} raw_x
+     * @param {number} raw_y
+     */
+    pan_begin(raw_x, raw_y) {
+        wasm.aerialcanvas_pan_begin(this.__wbg_ptr, raw_x, raw_y);
+    }
+    /**
+     * Abandons the gesture in progress as if it never started (a touch that
+     * became a pinch, a pointer the system cancelled): unfinished ink is
+     * discarded and a drag, resize or partial erase is rolled back.
+     */
+    pointer_cancel() {
+        wasm.aerialcanvas_pointer_cancel(this.__wbg_ptr);
+    }
+    /**
      * Pointer down with pen pressure (0..1), or a negative value when the
      * device reports none (mouse) — pressure is then simulated from speed.
      * @param {number} raw_x
@@ -550,6 +576,14 @@ export class AerialCanvas {
      */
     pointer_down(raw_x, raw_y, pressure) {
         wasm.aerialcanvas_pointer_down(this.__wbg_ptr, raw_x, raw_y, pressure);
+    }
+    /**
+     * Finishes the gesture in progress where it stands, as a pointer-up at
+     * the last known position would. For when the real pointer-up was lost
+     * (the window lost focus mid-stroke, pointer capture was taken away).
+     */
+    pointer_finish() {
+        wasm.aerialcanvas_pointer_finish(this.__wbg_ptr);
     }
     /**
      * @param {number} raw_x

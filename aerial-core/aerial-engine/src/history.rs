@@ -82,6 +82,19 @@ impl History {
         self.redo.clear();
     }
 
+    /// Abandons the open transaction, restoring every element it touched to
+    /// its state at `touch` time. Leaves the undo and redo stacks alone.
+    pub fn rollback(&mut self, scene: &mut Scene) {
+        let Some(mut p) = self.pending.take() else { return };
+        for id in p.order.into_iter().rev() {
+            if let Some(before) = p.before.remove(&id) {
+                if before.as_ref() != scene.get(id) {
+                    Self::apply(scene, id, &before);
+                }
+            }
+        }
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -189,6 +202,37 @@ mod tests {
         assert_eq!(s.get(id).unwrap().x, 30.0);
         h.undo(&mut s);
         assert_eq!(s.get(id).unwrap().x, 0.0);
+    }
+
+    /// A cancelled gesture (drag, partial erase that split a stroke) leaves
+    /// the scene and the undo stack exactly as they were.
+    #[test]
+    fn rollback_restores_everything_and_records_nothing() {
+        let mut s = Scene::new();
+        let moved = s.upsert(stroke(0.0)).unwrap();
+        let erased = s.upsert(stroke(10.0)).unwrap();
+        let before: Vec<Element> = s.iter_ordered().cloned().collect();
+        let mut h = History::default();
+        h.begin();
+        h.touch(&s, moved);
+        s.modify(moved, |el| {
+            el.points.iter_mut().for_each(|p| p.0 += 40.0);
+            el.refresh_bounds();
+        });
+        h.touch(&s, erased);
+        s.remove(erased);
+        let created = s.alloc_id();
+        h.touch(&s, created);
+        s.upsert(Element { id: created, ..stroke(50.0) });
+        h.rollback(&mut s);
+        assert_eq!(s.iter_ordered().cloned().collect::<Vec<_>>(), before);
+        assert_eq!((h.undo_depth(), h.redo_depth()), (0, 0));
+        // And the next transaction starts clean.
+        h.begin();
+        h.touch(&s, moved);
+        s.remove(moved);
+        h.commit(&s);
+        assert_eq!(h.undo_depth(), 1);
     }
 
     #[test]

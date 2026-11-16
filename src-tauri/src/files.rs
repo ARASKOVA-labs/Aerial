@@ -43,11 +43,8 @@ fn read_aerial(path: &Path) -> Result<OpenedFile, String> {
     if !has_aerial_extension(path) {
         return Err("not an .aerial file".to_string());
     }
-    let meta = std::fs::metadata(path).map_err(|_| "file not readable".to_string())?;
-    if !meta.is_file() || meta.len() > MAX_AERIAL_FILE_BYTES as u64 {
-        return Err("file is too large or not a regular file".to_string());
-    }
-    let contents = std::fs::read_to_string(path).map_err(|_| "file is not a readable .aerial file".to_string())?;
+    let bytes = crate::security::read_capped(path, MAX_AERIAL_FILE_BYTES as u64)?;
+    let contents = String::from_utf8(bytes).map_err(|_| "file is not a readable .aerial file".to_string())?;
     let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Board").chars().take(80).collect();
     tracing::info!(target: "audit", bytes = contents.len(), "opened .aerial file");
     Ok(OpenedFile { name, contents })
@@ -67,16 +64,31 @@ fn safe_file_name(suggested: &str) -> String {
 
 /// Writes via a temporary sibling and a rename, so a crash never leaves a
 /// half-written file in place of a good one.
+///
+/// The temporary file is created exclusively (`O_EXCL`): the save location is
+/// wherever the user chose, possibly a shared folder, and a predictable name
+/// opened with plain `create` would follow a symlink someone planted there
+/// and overwrite whatever it points at.
 fn write_atomic(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!("{EXTENSION}.tmp-{}", std::process::id()));
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(contents)?;
-        f.sync_all()?;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+    let mut last_err = std::io::Error::other("could not create a temporary file");
+    for attempt in 0..8u32 {
+        let tmp = path.with_extension(format!("{EXTENSION}.tmp-{}-{:08x}", std::process::id(), nanos.wrapping_add(attempt.wrapping_mul(0x9e37_79b9))));
+        let mut f = match std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_err = e;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        let written = f.write_all(contents).and_then(|_| f.sync_all());
+        drop(f);
+        return written.and_then(|_| std::fs::rename(&tmp, path)).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        });
     }
-    std::fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+    Err(last_err)
 }
 
 /// Shows the Save dialog and writes `contents`. Returns the saved file name,
@@ -178,6 +190,23 @@ mod tests {
         assert!(read_aerial(&dir).is_err());
         // No temporary files are left behind.
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Saving must never write through a symlink planted at a temp-file name.
+    #[cfg(unix)]
+    #[test]
+    fn temp_file_never_follows_a_planted_symlink() {
+        let dir = std::env::temp_dir().join(format!("aerial-symlink-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+        // Plant symlinks over every name the old scheme (and a few of the new) could pick.
+        std::os::unix::fs::symlink(&victim, dir.join(format!("Plan.aerial.tmp-{}", std::process::id()))).unwrap();
+        let target = dir.join("Plan.aerial");
+        write_atomic(&target, b"board").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "board");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

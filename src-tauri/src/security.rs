@@ -70,6 +70,41 @@ pub fn validate_image_data_url(data: &str) -> Result<(), String> {
     }
 }
 
+/// Reads a regular file of at most `max` bytes.
+///
+/// The limit is enforced on the bytes actually read, not on a size checked
+/// beforehand: a file can grow (or be swapped) between the check and the
+/// read, and the whole thing would otherwise be pulled into memory.
+pub fn read_capped(path: &Path, max: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| "file not readable".to_string())?;
+    let meta = file.metadata().map_err(|_| "file not readable".to_string())?;
+    if !meta.is_file() || meta.len() > max {
+        return Err("file is too large or not a regular file".to_string());
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(max + 1).read_to_end(&mut bytes).map_err(|_| "file not readable".to_string())?;
+    if bytes.len() as u64 > max {
+        tracing::warn!(target: "audit", "rejected a file that grew past the size limit while being read");
+        return Err("file is too large".to_string());
+    }
+    Ok(bytes)
+}
+
+/// Restricts a directory to its owner (0700). Boards are plaintext on disk
+/// where the platform has no credential store, and the MCP socket lives here
+/// too; other local accounts have no business reading either.
+#[cfg(unix)]
+pub fn make_private_dir(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Err(e) = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)) {
+        tracing::warn!(error = %e, "could not restrict the data directory to its owner");
+    }
+}
+
+#[cfg(not(unix))]
+pub fn make_private_dir(_dir: &Path) {}
+
 pub fn image_mime_for(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();
     IMAGE_EXTENSIONS.iter().find(|(e, _)| *e == ext).map(|(_, m)| *m)
@@ -92,12 +127,18 @@ impl DropGrants {
         }
     }
 
+    #[cfg(test)]
     pub fn is_granted(&self, path: &Path) -> bool {
-        let Ok(canonical) = path.canonicalize() else { return false };
-        match self.inner.lock() {
-            Ok(g) => g.1.is_some_and(|t| t.elapsed() < DROP_GRANT_TTL) && g.0.contains(&canonical),
-            Err(_) => false,
-        }
+        self.resolve(path).is_some()
+    }
+
+    /// The canonical path of a granted file. Read *this* path, not the one
+    /// that was asked for: resolving again later would let a symlink be
+    /// re-pointed between the check and the read.
+    pub fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        let canonical = path.canonicalize().ok()?;
+        let g = self.inner.lock().ok()?;
+        (g.1.is_some_and(|t| t.elapsed() < DROP_GRANT_TTL) && g.0.contains(&canonical)).then_some(canonical)
     }
 }
 
@@ -120,6 +161,30 @@ mod tests {
         assert!(validate_image_data_url("data:image/png;base64,AAAA").is_ok());
         assert!(validate_image_data_url("data:text/html;base64,AAAA").is_err());
         assert!(validate_image_data_url("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn capped_read_enforces_the_limit_on_what_is_read() {
+        let dir = std::env::temp_dir().join(format!("aerial-read-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.bin");
+        std::fs::write(&file, vec![7u8; 1000]).unwrap();
+        assert_eq!(read_capped(&file, 1000).unwrap().len(), 1000);
+        assert!(read_capped(&file, 999).is_err());
+        assert!(read_capped(&dir, 1000).is_err(), "directories are not files");
+        assert!(read_capped(&dir.join("missing"), 1000).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn data_directory_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("aerial-private-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        make_private_dir(&dir);
+        assert_eq!(std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777, 0o700);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

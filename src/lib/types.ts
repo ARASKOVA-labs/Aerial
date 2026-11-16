@@ -45,6 +45,13 @@ export interface AerialEngine {
   pointer_down: (x: number, y: number, pressure: number) => void;
   pointer_move: (x: number, y: number, pressure: number) => void;
   pointer_up: (x: number, y: number) => void;
+  /** Abandons the gesture in progress: unfinished ink is discarded, a drag / resize / partial erase rolled back. */
+  pointer_cancel: () => void;
+  /** Finishes the gesture where it stands (the real pointer-up was lost). */
+  pointer_finish: () => void;
+  /** Pans from a screen point without changing tool or selection; continue with pointer_move / pointer_up. */
+  pan_begin: (x: number, y: number) => void;
+  is_gesture_active: () => boolean;
 
   // Style & selection
   apply_style: (json: string) => void;

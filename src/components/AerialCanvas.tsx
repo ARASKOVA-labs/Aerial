@@ -135,8 +135,10 @@ export const AerialCanvas = forwardRef<AerialCanvasRef, AerialCanvasProps>(funct
         onPointerDown={pointer.onPointerDown}
         onPointerMove={pointer.onPointerMove}
         onPointerUp={pointer.onPointerUp}
-        onPointerCancel={pointer.onPointerUp}
+        onPointerCancel={pointer.onPointerCancel}
+        onLostPointerCapture={pointer.onLostPointerCapture}
         onPointerLeave={pointer.onPointerLeave}
+        onMouseDown={pointer.onMouseDown}
         onDoubleClick={pointer.onDoubleClick}
         onContextMenu={(e) => e.preventDefault()}
       />

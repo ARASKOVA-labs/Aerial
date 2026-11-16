@@ -1080,8 +1080,7 @@ fn paint_freehand(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv) 
         None => {
             // Charge this outline against the repaint's budget; when it is
             // spent, draw the stroke as a plain line instead.
-            let length: f64 = el.points.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
-            let cost = (length / step).min(freehand::MAX_SAMPLES as f64) + 16.0;
+            let cost = freehand::sample_estimate(&el.points, &opts, step).min(freehand::MAX_SAMPLES as f64) + 16.0;
             let left = env.scratch.sample_budget.get() - cost;
             if cost.is_nan() || left < 0.0 {
                 paint_plain_stroke(ctx, el, env, &style, opts.size);

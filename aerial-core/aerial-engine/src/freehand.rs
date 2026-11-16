@@ -54,6 +54,12 @@ pub struct Sample {
 /// for billions of samples (a crafted file could exhaust memory that way).
 pub const MAX_SAMPLES: usize = 60_000;
 
+/// Samples kept at full density after every input point, where the centre
+/// line is still bending towards the new direction (see `Sampler::push`).
+const DENSE_HEAD: f64 = 48.0;
+/// Extra dense samples before every input point, on top of the end taper.
+const DENSE_TAIL: f64 = 8.0;
+
 fn ease_out_quad(t: f64) -> f64 {
     let t = t.clamp(0.0, 1.0);
     t * (2.0 - t)
@@ -160,6 +166,8 @@ pub struct Sampler {
     lag: f64,
     pressure_gain: f64,
     simulate: Option<SpeedPressure>,
+    /// Leap over long straight runs (always on outside tests).
+    sparse: bool,
     /// Input points offered, including any ignored as non-finite.
     seen: usize,
     count: usize,
@@ -186,6 +194,7 @@ impl Sampler {
             lag: 1.0 - (1.0 - per_base).powf(ratio),
             pressure_gain: 1.0 - 0.5f64.powf(ratio),
             simulate: simulate.then(SpeedPressure::new),
+            sparse: true,
             seen: 0,
             count: 0,
             last: (0.0, 0.0),
@@ -213,6 +222,16 @@ impl Sampler {
         self.seen
     }
 
+    /// Feeds the next input point.
+    ///
+    /// A segment far longer than the sample spacing is not walked step by
+    /// step. Once the lag has settled after the corner, the centre line is a
+    /// straight line and pressure a straight ramp, so the samples in between
+    /// add nothing: the sampler leaps over them, with strides that grow away
+    /// from the segment's ends. A leap lands exactly where single steps would
+    /// (the lag filter has a closed form on a straight line), so the outline
+    /// is unchanged while the cost follows the number of input points rather
+    /// than the distance between them.
     pub fn push(&mut self, pt: (f64, f64), pressure: f32) {
         self.seen += 1;
         if !(pt.0.is_finite() && pt.1.is_finite()) {
@@ -234,15 +253,49 @@ impl Sampler {
         let (a, pa) = (self.last, self.last_p);
         let len = ((pt.0 - a.0).powi(2) + (pt.1 - a.1).powi(2)).sqrt();
         if len.is_finite() && len >= 1e-12 {
-            let mut at = self.step - self.carry;
+            let step = self.step;
+            let (head, tail) = (DENSE_HEAD * step, self.o.taper_end.max(0.0) + DENSE_TAIL * step);
+            let mut at = step - self.carry;
             while at <= len {
-                let t = at / len;
-                self.emit(a.0 + (pt.0 - a.0) * t, a.1 + (pt.1 - a.1) * t, pa + (p - pa) * t);
-                at += self.step;
+                // Steps that can be skipped here: half the distance to the
+                // nearer dense zone, and none inside the start taper.
+                let room = (at - head).min(len - tail - at);
+                let skip = if room >= 2.0 * step && self.sparse && self.run >= self.o.taper_start { (room / (2.0 * step)).floor() } else { 0.0 };
+                if skip >= 1.0 {
+                    let from = (at - step) / len;
+                    at += skip * step;
+                    let to = at / len;
+                    let unit = ((pt.0 - a.0) / len, (pt.1 - a.1) / len);
+                    self.leap(skip + 1.0, unit, (a.0 + (pt.0 - a.0) * from, a.1 + (pt.1 - a.1) * from), (a.0 + (pt.0 - a.0) * to, a.1 + (pt.1 - a.1) * to), pa + (p - pa) * from, pa + (p - pa) * to);
+                } else {
+                    let t = at / len;
+                    self.emit(a.0 + (pt.0 - a.0) * t, a.1 + (pt.1 - a.1) * t, pa + (p - pa) * t);
+                }
+                at += step;
             }
-            self.carry = len - (at - self.step);
+            self.carry = len - (at - step);
         }
         (self.last, self.last_p) = (pt, p);
+    }
+
+    /// `m` steps along a straight line in one go: from input position `x0`
+    /// (pressure `p0`, the last one emitted) to `x1` (pressure `p1`). The
+    /// distance by which the smoothed point trails the input obeys
+    /// `e' = (1 - lag)(e + step·unit)` per step, which converges
+    /// geometrically to a fixed point; pressure behaves the same way.
+    fn leap(&mut self, m: f64, unit: (f64, f64), x0: (f64, f64), x1: (f64, f64), p0: f64, p1: f64) {
+        let keep = (1.0 - self.lag).powf(m);
+        let settled = (1.0 - self.lag) * self.step / self.lag;
+        let (fx, fy) = (unit.0 * settled, unit.1 * settled);
+        let (ex, ey) = (fx + keep * (x0.0 - self.sx - fx), fy + keep * (x0.1 - self.sy - fy));
+        let (nx, ny) = (x1.0 - ex, x1.1 - ey);
+        self.run += ((nx - self.sx).powi(2) + (ny - self.sy).powi(2)).sqrt();
+        let g = self.pressure_gain;
+        let q_settled = (1.0 - g) * (p1 - p0) / m / g;
+        let q = q_settled + (1.0 - g).powf(m) * (p0 - self.prev_p - q_settled);
+        self.prev_p = p1 - q;
+        (self.sx, self.sy) = (nx, ny);
+        self.samples.push(Sample { x: nx, y: ny, p: self.prev_p, run: self.run });
     }
 
     fn emit(&mut self, x: f64, y: f64, p: f64) {
@@ -268,11 +321,33 @@ impl Sampler {
     }
 }
 
+/// Upper estimate of the samples a `Sampler` emits for `points` at `step`:
+/// every step of a short segment, and for a long one only its dense ends plus
+/// a logarithmic number of leaps.
+pub fn sample_estimate(points: &[(f64, f64)], o: &Opts, step: f64) -> f64 {
+    let step = step.max(base_step(o));
+    let dense = DENSE_HEAD + DENSE_TAIL + o.taper_end.max(0.0) / step + 2.0;
+    let mut total = (o.taper_start.max(0.0) / step).min(MAX_SAMPLES as f64) + 2.0;
+    for w in points.windows(2) {
+        let n = ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt() / step;
+        if n.is_finite() {
+            total += if n > dense { dense + 4.0 * (n / dense).log2() + 4.0 } else { n };
+        }
+    }
+    total
+}
+
 /// Whole centre line of a finished stroke at sample spacing `step`.
 pub fn collect(points: &[(f64, f64)], pressures: &[f32], o: &Opts, step: f64) -> Vec<Sample> {
     let real = has_real_pressure(points, pressures);
-    let length: f64 = points.windows(2).map(|w| ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt()).sum();
-    let step = if length.is_finite() { step.max(length / MAX_SAMPLES as f64) } else { step };
+    // Sample cap: an enormous stroke is sampled more coarsely.
+    let mut step = if step.is_finite() { step.max(base_step(o)) } else { base_step(o) };
+    for _ in 0..64 {
+        if sample_estimate(points, o, step) <= MAX_SAMPLES as f64 {
+            break;
+        }
+        step *= 2.0;
+    }
     let mut sampler = Sampler::new(*o, step, !real);
     for (i, &pt) in points.iter().enumerate() {
         sampler.push(pt, if real { pressures[i] } else { 0.5 });
@@ -629,6 +704,109 @@ mod tests {
         // Non-finite input is ignored rather than looping or poisoning output.
         let weird = collect(&[(0.0, 0.0), (f64::INFINITY, 1.0), (f64::NAN, 2.0), (10.0, 0.0)], &[], &o, base_step(&o));
         assert!(weird.iter().all(|p| p.x.is_finite() && p.y.is_finite() && p.p.is_finite()));
+    }
+
+    fn sampled(points: &[(f64, f64)], pressures: &[f32], o: &Opts, sparse: bool) -> Vec<Sample> {
+        let mut sampler = Sampler::new(*o, base_step(o), pressures.is_empty());
+        sampler.sparse = sparse;
+        for (i, &pt) in points.iter().enumerate() {
+            sampler.push(pt, pressures.get(i).copied().unwrap_or(0.5));
+        }
+        let tip = sampler.tip();
+        let mut out = sampler.samples;
+        out.extend(tip);
+        out
+    }
+
+    /// Leaping over a long straight run must land exactly where stepping
+    /// through it would: every sample of the sparse centre line is a sample
+    /// of the dense one, and the two end identically.
+    #[test]
+    fn leaps_land_on_the_dense_centre_line() {
+        let pts = [(0.0, 0.0), (4000.0, 0.0), (4003.0, 2.0), (4010.0, 3000.0), (-2500.0, 3100.0), (-2500.0, 3101.0), (900.0, -700.0)];
+        let pressures = [0.2f32, 0.9, 0.85, 0.3, 0.6, 0.6, 0.1];
+        for kind in ["FreeDraw", "FountainPen", "Marker", "Highlighter", "LaserPen"] {
+            let o = preset(kind, 2.0);
+            for pr in [&pressures[..], &[]] {
+                let dense = sampled(&pts, pr, &o, false);
+                let sparse = sampled(&pts, pr, &o, true);
+                assert!(sparse.len() * 8 < dense.len(), "{kind}: {} of {} samples kept", sparse.len(), dense.len());
+                let mut j = 0;
+                for smp in &sparse {
+                    while j + 1 < dense.len() && dense[j].run < smp.run - 1e-6 {
+                        j += 1;
+                    }
+                    let d = &dense[j];
+                    assert!((d.x - smp.x).abs() < 1e-6 && (d.y - smp.y).abs() < 1e-6, "{kind}: position {smp:?} vs {d:?}");
+                    assert!((d.p - smp.p).abs() < 1e-6 && (d.run - smp.run).abs() < 1e-6, "{kind}: pressure/run {smp:?} vs {d:?}");
+                }
+                let (a, b) = (sparse.last().unwrap(), dense.last().unwrap());
+                assert!((a.x - b.x).abs() < 1e-9 && (a.run - b.run).abs() < 1e-6);
+            }
+        }
+    }
+
+    /// The outline built from the sparse centre line fills the same area:
+    /// each polygon's vertices lie inside the other (nonzero winding, as the
+    /// canvas fills it) or within a small distance of its boundary. Vertex
+    /// positions alone cannot be compared: the outline keeps a vertex only
+    /// every `size × smoothing / 2`, so which ones survive depends on the
+    /// samples before them, and on the inside of a turn the outline folds
+    /// back under ink that is filled either way.
+    #[test]
+    fn leaping_does_not_change_the_outline() {
+        fn covered(poly: &[(f64, f64)], p: (f64, f64), tol: f64) -> bool {
+            let n = poly.len();
+            let mut winding = 0i32;
+            let mut near = f64::INFINITY;
+            for i in 0..n {
+                let (a, b) = (poly[i], poly[(i + 1) % n]);
+                let (vx, vy) = (b.0 - a.0, b.1 - a.1);
+                let t = (((p.0 - a.0) * vx + (p.1 - a.1) * vy) / (vx * vx + vy * vy).max(1e-18)).clamp(0.0, 1.0);
+                near = near.min((p.0 - a.0 - vx * t).hypot(p.1 - a.1 - vy * t));
+                let cross = vx * (p.1 - a.1) - vy * (p.0 - a.0);
+                if a.1 <= p.1 && b.1 > p.1 && cross > 0.0 {
+                    winding += 1;
+                } else if a.1 > p.1 && b.1 <= p.1 && cross < 0.0 {
+                    winding -= 1;
+                }
+            }
+            winding != 0 || near < tol
+        }
+        let pts = [(0.0, 0.0), (3000.0, 40.0), (3004.0, 43.0), (2800.0, 2500.0), (-900.0, 2400.0)];
+        let pressures = [0.3f32, 0.8, 0.8, 0.4, 0.7];
+        for kind in ["FreeDraw", "FountainPen", "Marker", "Highlighter"] {
+            let o = preset(kind, 2.0);
+            let (mut dense, mut sparse) = (Vec::new(), Vec::new());
+            outline_samples(&sampled(&pts, &pressures, &o, false), &o, &mut dense);
+            outline_samples(&sampled(&pts, &pressures, &o, true), &o, &mut sparse);
+            // Chord sagitta of the vertex thinning at the tightest corner.
+            let tol = o.size * 0.1;
+            for (a, b, what) in [(&sparse, &dense, "sparse vertex outside dense ink"), (&dense, &sparse, "dense vertex outside sparse ink")] {
+                if let Some(p) = a.iter().find(|&&p| !covered(b, p, tol)) {
+                    panic!("{kind}: {what} at {p:?}");
+                }
+            }
+        }
+    }
+
+    /// Cost follows the number of input points, not the distance they span.
+    #[test]
+    fn long_segments_cost_a_bounded_number_of_samples() {
+        for kind in ["FreeDraw", "FountainPen", "Marker", "Highlighter", "LaserPen"] {
+            let o = preset(kind, 0.0);
+            let pts = [(-9.0e8, 0.0), (9.0e8, 500.0)];
+            let s = collect(&pts, &[], &o, base_step(&o));
+            assert!(s.len() < 400, "{kind}: {} samples for one segment", s.len());
+            assert!(s.len() as f64 <= sample_estimate(&pts, &o, base_step(&o)), "{kind}: estimate too low");
+            // The far end is still where the input ends.
+            let last = s.last().unwrap();
+            assert!((last.x - 9.0e8).abs() < 1e-3 && (last.y - 500.0).abs() < 1e-3);
+            // A zigzag of long segments stays proportional to its point count.
+            let zig: Vec<(f64, f64)> = (0..200).map(|i| (if i % 2 == 0 { -1.0e6 } else { 1.0e6 }, i as f64 * 10.0)).collect();
+            let z = collect(&zig, &[], &o, base_step(&o));
+            assert!(z.len() < 200 * 400 && z.len() as f64 <= sample_estimate(&zig, &o, base_step(&o)), "{kind}: {}", z.len());
+        }
     }
 
     /// Spans drawn separately (as the live renderer does) must cover what the

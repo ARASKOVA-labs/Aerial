@@ -125,8 +125,7 @@ impl SpatialIndex {
     /// Collects every element whose bounds intersect `rect` and whose level is
     /// within `[min_level, LEVELS)`. Each hit is reported exactly once.
     pub fn query(&self, rect: &Rect, min_level: usize, out: &mut Vec<Hit>) {
-        for level in min_level..LEVELS {
-            let grid = &self.levels[level];
+        for (level, grid) in self.levels.iter().enumerate().skip(min_level) {
             if grid.is_empty() {
                 continue;
             }

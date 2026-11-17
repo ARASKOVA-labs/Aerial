@@ -242,8 +242,8 @@ pub fn hachure(poly: &[(f64, f64)], gap: f64, angle_deg: f64) -> Vec<((f64, f64)
             }
         }
         xs.sort_by(|a, b| a.total_cmp(b));
-        for pair in xs.chunks_exact(2) {
-            lines.push((rot((pair[0], y), sin), rot((pair[1], y), sin)));
+        for &[a, b] in xs.as_chunks::<2>().0 {
+            lines.push((rot((a, y), sin), rot((b, y), sin)));
         }
         y += gap;
     }

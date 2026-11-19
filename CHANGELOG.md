@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- Diagrams with multi-line labels (`<br/>` or `\n`) lost text and failed to
+  insert; the MCP `add_diagram` tool now reports an error instead of returning
+  an empty id when a diagram cannot be placed.
+
 ## 3.0.0 — 2026-10-06
 
 ### Fixed

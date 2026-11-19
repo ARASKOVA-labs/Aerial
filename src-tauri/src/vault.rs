@@ -26,7 +26,9 @@ use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 const MAGIC: &[u8; 4] = b"AEV1";
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 const KEYCHAIN_SERVICE: &str = "com.araskova.aerial";
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "windows"))]
 const KEYCHAIN_ACCOUNT: &str = "storage-key-v1";
 
 pub const LOCKED_MESSAGE: &str = "Aerial could not unlock its storage key in the system keychain";
@@ -133,6 +135,8 @@ impl Vault {
     }
 }
 
+// Only platforms with a credential store ever produce a key or a locked vault.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios", target_os = "windows")), allow(dead_code))]
 enum KeyOutcome {
     Key([u8; KEY_LEN]),
     Locked,

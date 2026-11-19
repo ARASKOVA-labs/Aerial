@@ -75,6 +75,7 @@ pub struct Store {
 impl Store {
     pub fn open(app_data_dir: &Path, vault: Vault) -> Result<Store, String> {
         std::fs::create_dir_all(app_data_dir).map_err(db_err)?;
+        crate::security::make_private_dir(app_data_dir);
         let db = Database::create(app_data_dir.join(DB_FILE)).map_err(db_err)?;
         let txn = db.begin_write().map_err(db_err)?;
         {

@@ -29,8 +29,8 @@ export function useEngineLifecycle(core: CanvasCore, canvasId: string, isDark: b
         if (!canvas) return;
         const parent = canvas.parentElement ?? canvas;
         const dpr = window.devicePixelRatio || 1;
-        canvas.width = Math.max(1, parent.clientWidth * dpr);
-        canvas.height = Math.max(1, parent.clientHeight * dpr);
+        canvas.width = Math.max(1, Math.round(parent.clientWidth * dpr));
+        canvas.height = Math.max(1, Math.round(parent.clientHeight * dpr));
 
         const engine = await loadAerialEngine(canvasId, { basePath: wasmBasePath });
         engine.set_dpr(dpr);
@@ -46,16 +46,29 @@ export function useEngineLifecycle(core: CanvasCore, canvasId: string, isDark: b
         engine.render();
         core.setEngineReady(true);
 
+        // Back the canvas with exactly the device pixels it covers. Where the
+        // browser reports that size (it also fires when only the pixel ratio
+        // changes — browser zoom, a move to another display) it is used as is;
+        // elsewhere it is rounded. A fractional or truncated size makes the
+        // browser resample the whole canvas, which blurs every stroke at
+        // 125% / 150% display scaling.
         observer = new ResizeObserver((entries) => {
           for (const entry of entries) {
             const d = window.devicePixelRatio || 1;
-            canvas.width = Math.max(1, entry.contentRect.width * d);
-            canvas.height = Math.max(1, entry.contentRect.height * d);
+            const px = entry.devicePixelContentBoxSize?.[0];
+            const w = Math.max(1, Math.round(px ? px.inlineSize : entry.contentRect.width * d));
+            const h = Math.max(1, Math.round(px ? px.blockSize : entry.contentRect.height * d));
+            if (canvas.width !== w) canvas.width = w;
+            if (canvas.height !== h) canvas.height = h;
             engine.set_dpr(d);
             engine.render();
           }
         });
-        observer.observe(canvas);
+        try {
+          observer.observe(canvas, { box: 'device-pixel-content-box' });
+        } catch {
+          observer.observe(canvas); // Safari: no device-pixel box
+        }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
         core.setLoadError(msg);

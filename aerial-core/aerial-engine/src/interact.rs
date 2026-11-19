@@ -9,6 +9,8 @@ use crate::{AerialCanvas, EraserType, Tool, COMMIT_SIMPLIFY_PX};
 const HANDLE_PX: f64 = 9.0;
 /// Hit tolerance for clicking strokes, CSS px.
 const HIT_PX: f64 = 8.0;
+/// Strokes with more settled samples than this reuse their live ink on pen-up.
+const PROMOTE_MIN_SAMPLES: usize = 1500;
 
 impl AerialCanvas {
     // ── Hit testing ──────────────────────────────────────────────────────────
@@ -62,10 +64,12 @@ impl AerialCanvas {
     // ── Pointer lifecycle ────────────────────────────────────────────────────
 
     pub(crate) fn handle_down(&mut self, raw_x: f64, raw_y: f64, pressure: f64) {
-        // A previous stroke may be uncommitted if pointerup was lost (tablet
-        // driver double-fire, stylus leaving the digitiser) — commit it now.
-        self.commit_active_stroke();
-        self.history.commit(&self.scene);
+        if !(raw_x.is_finite() && raw_y.is_finite()) {
+            return;
+        }
+        // A previous gesture may be unfinished if pointerup was lost (tablet
+        // driver double-fire, stylus leaving the digitiser) — finish it now.
+        self.finish_gesture();
 
         let (wx, wy) = (self.screen_to_world_x(raw_x), self.screen_to_world_y(raw_y));
         self.last_mouse_x = raw_x;
@@ -125,14 +129,21 @@ impl AerialCanvas {
         if self.tool == Tool::LaserPen {
             el.font_size = 1.0; // reused as the fade-out alpha
         }
-        if pressure >= 0.0 && el.is_freehand() {
-            el.pressures.push(pressure as f32);
+        // A negative pressure means the device has none (mouse, touch). Pens
+        // record it for every point — including a 0 on first contact, which
+        // many styluses report — and whether it is "real" is decided from the
+        // whole stroke (see `freehand::has_real_pressure`).
+        if pressure.is_finite() && pressure >= 0.0 && el.is_freehand() {
+            el.pressures.push(pressure.min(1.0) as f32);
         }
         self.shape_anchor = (wx, wy);
         self.active_stroke = Some(el);
     }
 
     pub(crate) fn handle_move(&mut self, raw_x: f64, raw_y: f64, pressure: f64) {
+        if !(raw_x.is_finite() && raw_y.is_finite()) {
+            return;
+        }
         if self.is_panning {
             self.offset_x += raw_x - self.last_mouse_x;
             self.offset_y += raw_y - self.last_mouse_y;
@@ -221,9 +232,17 @@ impl AerialCanvas {
                         }
                     }
                 }
+                // Repeated positions (a resting pen at 240 Hz) add nothing to
+                // the line; and one stroke never outgrows what can be stored.
+                if stroke.points.last() == Some(&(wx, py)) || stroke.points.len() >= crate::element::MAX_POINTS {
+                    return;
+                }
                 stroke.points.push((wx, py));
-                if !stroke.pressures.is_empty() {
-                    stroke.pressures.push(pressure.clamp(0.0, 1.0) as f32);
+                if let Some(&last) = stroke.pressures.last() {
+                    // No reading for this event (pen-up, a driver hiccup):
+                    // hold the last one rather than snapping the width to 0.
+                    let p = if pressure.is_finite() && pressure >= 0.0 { pressure.min(1.0) as f32 } else { last };
+                    stroke.pressures.push(p);
                 }
                 // Incremental bounds: O(1) per point.
                 let (max_x, max_y) = (stroke.x + stroke.w, stroke.y + stroke.h);
@@ -239,9 +258,37 @@ impl AerialCanvas {
 
     pub(crate) fn handle_up(&mut self, raw_x: f64, raw_y: f64) {
         self.handle_move(raw_x, raw_y, -1.0);
-        if self.tool == Tool::Eraser && self.eraser_type != EraserType::Precision {
+        self.finish_gesture();
+    }
+
+    /// Completes whatever the pointer was doing: commits the stroke or shape,
+    /// applies the eraser's pending deletions, closes the undo step.
+    pub(crate) fn finish_gesture(&mut self) {
+        if self.is_drawing && self.tool == Tool::Eraser && self.eraser_type != EraserType::Precision {
             self.commit_erase();
         }
+        self.end_gesture_state();
+        self.commit_active_stroke();
+        self.history.commit(&self.scene);
+        self.needs_render = true;
+    }
+
+    /// Abandons the gesture in progress as if it never started: ink being
+    /// drawn is discarded, elements being dragged, resized or partially
+    /// erased return to where they were, and nothing is added to undo.
+    /// Used when a touch turns out to be the start of a pinch, or the system
+    /// cancels the pointer (palm rejection).
+    pub(crate) fn cancel_gesture(&mut self) {
+        self.active_stroke = None;
+        self.eraser.pending.clear();
+        self.history.rollback(&mut self.scene);
+        self.end_gesture_state();
+        let sel: Vec<u64> = self.selected.iter().copied().filter(|id| self.scene.contains(*id)).collect();
+        self.set_selection(sel);
+        self.needs_render = true;
+    }
+
+    fn end_gesture_state(&mut self) {
         if self.marquee.take().is_some() {
             self.needs_render = true;
         }
@@ -252,9 +299,6 @@ impl AerialCanvas {
         self.resize_handle = 0;
         self.resize_orig_points.clear();
         self.eraser.last = None;
-        self.commit_active_stroke();
-        self.history.commit(&self.scene);
-        self.needs_render = true;
     }
 
     fn commit_active_stroke(&mut self) {
@@ -269,6 +313,12 @@ impl AerialCanvas {
             "LaserPen" => self.laser_strokes.push(stroke),
             "MagicPen" => self.magic_strokes.push(stroke),
             _ => {
+                // A long stroke is expensive to rebuild from scratch on the
+                // pen-up frame; its finished live ink is reused instead.
+                let view = self.current_view();
+                let promote = stroke.is_freehand()
+                    && self.ink.advance(&stroke, &view, self.is_dark_mode, &self.scratch)
+                    && self.ink.sample_count() > PROMOTE_MIN_SAMPLES;
                 if stroke.is_freehand() && stroke.points.len() > 8 {
                     if !crate::freehand::has_real_pressure(&stroke.points, &stroke.pressures) {
                         let opts = crate::freehand::preset(&stroke.kind, stroke.stroke_width);
@@ -281,6 +331,7 @@ impl AerialCanvas {
                 }
                 let id = stroke.id;
                 self.insert_recorded(stroke);
+                self.promote = promote.then_some(id);
                 // Excalidraw: after drawing a shape, switch to selection with it
                 // selected — unless the tool is locked.
                 if is_shape && !self.tool_locked {

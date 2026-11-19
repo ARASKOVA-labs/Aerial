@@ -124,13 +124,13 @@ impl Element {
         let sw = self.stroke_width.clamp(0.0, MAX_STROKE_WIDTH);
         let sketch = self.roughness.clamp(0.0, 3.0) * 5.0;
         match self.kind.as_str() {
-            "Highlighter" => sw * 3.2 + 1.0,
+            "Highlighter" => crate::freehand::max_radius(&crate::freehand::preset("Highlighter", sw)) + 1.5,
             "Arrow" => (sw * 5.0).max(14.0) + sw + sketch,
             "LaserPen" => sw * 1.0 + 16.0,
             "MagicPen" => sw * 0.5 + 9.0,
-            "FountainPen" => sw * 2.7 + 1.0,
-            "FreeDraw" => sw * 1.4 + 1.0,
-            "Marker" => sw * 1.2 + 1.0,
+            // Pens: half the widest the outline gets (full pressure), see
+            // `freehand::max_radius`, plus a pixel for antialiasing.
+            "FountainPen" | "FreeDraw" | "Marker" => crate::freehand::max_radius(&crate::freehand::preset(&self.kind, sw)) + 1.5,
             "Text" | "Image" | "Diagram" => 2.0,
             _ => sw * 0.5 + 1.0 + sketch,
         }
@@ -359,6 +359,27 @@ mod tests {
         let stroke = sanitize(Element { kind: "FreeDraw".into(), points: vec![(0.0, 0.0), (100.0, 0.0)], ..Default::default() }).unwrap();
         assert!(stroke.hit(50.0, 3.0, 2.0));
         assert!(!stroke.hit(50.0, 30.0, 2.0));
+    }
+
+    /// Ink must never extend past the bounds used for repaint clipping and
+    /// the spatial index, or erasing / moving a stroke leaves pixels behind.
+    #[test]
+    fn visual_bounds_contain_full_pressure_ink() {
+        for kind in ["FreeDraw", "FountainPen", "Marker", "Highlighter"] {
+            for sw in [0.5, 1.0, 2.0, 3.5, 6.0, 40.0] {
+                let points: Vec<(f64, f64)> = (0..200).map(|i| (i as f64 * 0.7, (i as f64 * 0.11).sin() * 30.0)).collect();
+                let pressures: Vec<f32> = (0..200).map(|i| if i % 7 == 0 { 0.9 } else { 1.0 }).collect();
+                let el = sanitize(Element { kind: kind.into(), points, pressures, stroke_width: sw, ..Default::default() }).unwrap();
+                let o = crate::freehand::preset(kind, sw);
+                let mut outline = Vec::new();
+                crate::freehand::outline(&el.points, &el.pressures, &o, crate::freehand::base_step(&o), &mut outline);
+                let b = el.visual_bounds();
+                assert!(outline.len() > 10);
+                for p in outline {
+                    assert!(b.contains_point(p.0, p.1), "{kind} sw {sw}: ink at {p:?} outside visual bounds {b:?}");
+                }
+            }
+        }
     }
 
     #[test]

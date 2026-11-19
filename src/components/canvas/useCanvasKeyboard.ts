@@ -96,11 +96,21 @@ export function useCanvasKeyboard(core: CanvasCore, actions: { insertImage: () =
       }
     };
 
+    // No key-up arrives once the window loses focus: without this, Space
+    // released elsewhere would leave the hand tool stuck on.
+    const onBlur = () => {
+      const prev = spaceTool.current;
+      spaceTool.current = null;
+      if (prev) ref.current.core.applyTool(prev, false);
+    };
+
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
     return () => {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', onBlur);
     };
   }, []);
 }

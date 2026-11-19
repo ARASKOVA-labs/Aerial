@@ -54,9 +54,9 @@ impl DensityPyramid {
     }
 
     pub fn insert(&mut self, size_level: usize, center: (f64, f64), rgb: (u8, u8, u8)) {
-        for p in size_level..LEVELS {
+        for (p, grid) in self.levels.iter_mut().enumerate().skip(size_level) {
             let s = cell_size(p);
-            let agg = self.levels[p].entry((cell_coord(center.0, s), cell_coord(center.1, s))).or_default();
+            let agg = grid.entry((cell_coord(center.0, s), cell_coord(center.1, s))).or_default();
             agg.count += 1;
             agg.r += rgb.0 as u64;
             agg.g += rgb.1 as u64;
@@ -65,10 +65,9 @@ impl DensityPyramid {
     }
 
     pub fn remove(&mut self, size_level: usize, center: (f64, f64), rgb: (u8, u8, u8)) {
-        for p in size_level..LEVELS {
+        for (p, grid) in self.levels.iter_mut().enumerate().skip(size_level) {
             let s = cell_size(p);
             let key = (cell_coord(center.0, s), cell_coord(center.1, s));
-            let grid = &mut self.levels[p];
             if let Some(agg) = grid.get_mut(&key) {
                 agg.count = agg.count.saturating_sub(1);
                 agg.r = agg.r.saturating_sub(rgb.0 as u64);

@@ -81,20 +81,15 @@ fn storage_status(state: State<'_, AppState>) -> vault::VaultState {
 /// readable, only image extensions are accepted, and size is capped.
 #[tauri::command]
 async fn read_dropped_image(state: State<'_, AppState>, path: String) -> Result<String, String> {
-    let path = std::path::PathBuf::from(path);
-    if !state.drops.is_granted(&path) {
+    let requested = std::path::PathBuf::from(path);
+    let Some(path) = state.drops.resolve(&requested) else {
         tracing::warn!(target: "audit", "rejected read of a path that was not dropped by the user");
         return Err("file was not dropped onto Aerial".to_string());
-    }
-    let mime = image_mime_for(&path).ok_or("unsupported file type")?;
-    let meta = std::fs::metadata(&path).map_err(|_| "file not readable".to_string())?;
-    if !meta.is_file() || meta.len() > MAX_DROPPED_FILE_BYTES {
-        return Err("file is too large or not a regular file".to_string());
-    }
-    let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
+    };
+    let mime = image_mime_for(&requested).ok_or("unsupported file type")?;
+    let bytes = tokio::task::spawn_blocking(move || security::read_capped(&path, MAX_DROPPED_FILE_BYTES))
         .await
-        .map_err(|_| "read failed".to_string())?
-        .map_err(|_| "file not readable".to_string())?;
+        .map_err(|_| "read failed".to_string())??;
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
@@ -115,13 +110,12 @@ pub fn run() {
 
     let builder = tauri::Builder::default().plugin(tauri_plugin_http::init()).plugin(tauri_plugin_dialog::init());
 
-    let builder = builder.on_window_event(|window, event| match event {
-        tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+    let builder = builder.on_window_event(|window, event| {
+        if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
             if let Some(state) = window.try_state::<AppState>() {
                 state.drops.grant(paths);
             }
         }
-        _ => {}
     });
 
     let result = builder

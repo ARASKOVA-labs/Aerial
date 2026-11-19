@@ -16,7 +16,8 @@
 //! as on an empty board: the static layer is reused and only the stroke itself
 //! is painted each frame.
 
-use std::cell::RefCell;
+use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use wasm_bindgen::{Clamped, JsCast, JsValue};
@@ -24,7 +25,7 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement, Ima
 
 use crate::element::Element;
 use crate::freehand;
-use crate::geom::{decimate_into, FxHashSet, Rect};
+use crate::geom::{decimate_into, FxHashMap, FxHashSet, Rect};
 use crate::path::{emit, to_path, Seg};
 use crate::pyramid::{lod_level, DensityPyramid};
 use crate::rough::{self, Rng};
@@ -36,6 +37,14 @@ use crate::style::{dash_pattern, themed};
 pub const SMALL_STROKE_PX: f64 = 24.0;
 /// Dirty regions covering more than this fraction of the viewport → full repaint.
 const PARTIAL_AREA_LIMIT: f64 = 0.45;
+/// A full repaint slower than this (ms) makes zooming scale the painted layer
+/// instead of repainting every frame.
+const ZOOM_DEFER_COST_MS: f64 = 4.0;
+/// Scale range over which a deferred zoom still looks acceptable.
+const ZOOM_DEFER_MIN: f64 = 0.6;
+const ZOOM_DEFER_MAX: f64 = 1.75;
+/// Fraction of the viewport the scaled layer must still cover.
+const ZOOM_DEFER_COVERAGE: f64 = 0.5;
 const MAX_REGIONS: usize = 48;
 
 // ── View transform ──────────────────────────────────────────────────────────
@@ -132,7 +141,7 @@ impl Layer {
         Ok(Layer { canvas, ctx })
     }
 
-    fn resize(&self, w: u32, h: u32) {
+    pub fn resize(&self, w: u32, h: u32) {
         if self.canvas.width() != w {
             self.canvas.set_width(w);
         }
@@ -152,6 +161,11 @@ pub struct RenderStats {
     pub full_repaints: u64,
     pub partial_repaints: u64,
     pub blits: u64,
+    /// Zoom frames shown by scaling the existing layer instead of repainting.
+    pub deferred_zooms: u64,
+    /// Long strokes whose live ink was reused on pen-up instead of rebuilt.
+    pub promoted_strokes: u64,
+    pub cached_paths: usize,
     pub last_static_ms: f64,
     pub last_frame_ms: f64,
 }
@@ -166,6 +180,9 @@ pub struct LayerCache {
     theme: Option<Theme>,
     exclude: FxHashSet<u64>,
     hits: Vec<Hit>,
+    /// Cost of the most recent full repaint, which decides whether zooming
+    /// repaints every frame or scales the existing layer until it settles.
+    full_cost_ms: f64,
     pub stats: RenderStats,
 }
 
@@ -175,6 +192,113 @@ pub struct Scratch {
     pub points: RefCell<Vec<(f64, f64)>>,
     pub outline: RefCell<Vec<(f64, f64)>>,
     pub segs: RefCell<Vec<Seg>>,
+    /// Centre-line samples that may still be generated in this repaint (see
+    /// `FRAME_SAMPLE_BUDGET`).
+    pub sample_budget: Cell<f64>,
+}
+
+/// Centre-line samples one repaint may generate for outlines that are not
+/// cached yet. An ordinary page needs a small fraction of this. It exists
+/// because a file is untrusted: thousands of two-point "strokes" spanning the
+/// world would each ask for the per-stroke maximum, turning a few kilobytes
+/// into seconds of work per frame. Past the budget, strokes are drawn as
+/// plain lines (and outlined properly on a later repaint, once others are
+/// cached).
+const FRAME_SAMPLE_BUDGET: f64 = 4_000_000.0;
+/// Lines of one text element drawn per repaint.
+const MAX_TEXT_LINES: usize = 5_000;
+
+/// Total path segments the stroke-outline cache may hold (~17 bytes each).
+const PATH_CACHE_SEGS: usize = 1_500_000;
+
+struct CachedPath {
+    path: Path2d,
+    /// Sample spacing the outline was built with (smaller = more detail).
+    step: f64,
+    segs: usize,
+    used: u64,
+}
+
+/// Outlines of committed freehand strokes, kept as ready-to-fill `Path2d`s.
+///
+/// Building a stroke's outline (resample, streamline, offset, smooth, then one
+/// JS call per segment) costs far more than filling it. Without the cache
+/// every repaint — each zoom step, every dirty rectangle under a new stroke —
+/// rebuilt the outline of every stroke it touched. Entries are dropped when
+/// their element changes (the scene's dirty feed) and evicted oldest-first
+/// beyond a fixed segment budget.
+#[derive(Default)]
+pub struct PathCache {
+    map: RefCell<FxHashMap<u64, CachedPath>>,
+    segs: Cell<usize>,
+    tick: Cell<u64>,
+}
+
+impl PathCache {
+    pub fn begin_frame(&self) {
+        self.tick.set(self.tick.get() + 1);
+    }
+
+    pub fn invalidate(&self, id: u64) {
+        if let Some(e) = self.map.borrow_mut().remove(&id) {
+            self.segs.set(self.segs.get().saturating_sub(e.segs));
+        }
+    }
+
+    pub fn clear(&self) {
+        self.map.borrow_mut().clear();
+        self.segs.set(0);
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.borrow().len()
+    }
+
+    /// A cached outline detailed enough for `step`, but not wastefully finer
+    /// (a path built at 100% is not reused at 1%, where it would be mostly
+    /// sub-pixel segments).
+    fn get(&self, id: u64, step: f64) -> Option<Path2d> {
+        let mut map = self.map.borrow_mut();
+        let e = map.get_mut(&id)?;
+        if e.step > step * 1.0001 || e.step * 8.0 < step {
+            return None;
+        }
+        e.used = self.tick.get();
+        Some(e.path.clone())
+    }
+
+    fn put(&self, id: u64, path: &Path2d, step: f64, segs: usize) {
+        if segs > PATH_CACHE_SEGS / 4 {
+            return; // one giant stroke must not evict everything else
+        }
+        self.invalidate(id);
+        if self.segs.get() + segs > PATH_CACHE_SEGS {
+            self.evict(PATH_CACHE_SEGS * 3 / 4);
+            if self.segs.get() + segs > PATH_CACHE_SEGS {
+                return;
+            }
+        }
+        self.map.borrow_mut().insert(id, CachedPath { path: path.clone(), step, segs, used: self.tick.get() });
+        self.segs.set(self.segs.get() + segs);
+    }
+
+    /// Drops least-recently-used entries until at most `target` segments
+    /// remain. Entries used this frame are kept.
+    fn evict(&self, target: usize) {
+        let mut map = self.map.borrow_mut();
+        let now = self.tick.get();
+        let mut order: Vec<(u64, u64, usize)> = map.iter().filter(|(_, e)| e.used < now).map(|(id, e)| (e.used, *id, e.segs)).collect();
+        order.sort_unstable();
+        let mut total = self.segs.get();
+        for (_, id, segs) in order {
+            if total <= target {
+                break;
+            }
+            map.remove(&id);
+            total = total.saturating_sub(segs);
+        }
+        self.segs.set(total);
+    }
 }
 
 /// Everything the painter needs that is not the scene itself.
@@ -184,6 +308,8 @@ pub struct PaintEnv<'a> {
     pub is_dark: bool,
     pub zoom: f64,
     pub scratch: &'a Scratch,
+    /// Outline cache for committed strokes; None for transient ink.
+    pub paths: Option<&'a PathCache>,
     /// Multiplies every element's opacity (eraser preview fades to 0.2).
     pub alpha: f64,
 }
@@ -204,6 +330,7 @@ impl LayerCache {
             theme: None,
             exclude: FxHashSet::default(),
             hits: Vec::new(),
+            full_cost_ms: 0.0,
             stats: RenderStats { lod_level: -1, ..Default::default() },
         })
     }
@@ -212,13 +339,44 @@ impl LayerCache {
         self.valid = false;
     }
 
-    /// Sub-pixel offset between where the static layer was painted and where
-    /// the view is now (device px). Non-zero only mid-pan.
-    pub fn residual(&self, view: &View) -> (f64, f64) {
+    /// Where the static layer goes on screen for `view`, as `(scale, dx, dy)`
+    /// in device px. Identity when the layer was painted for exactly this
+    /// view; a sub-pixel shift mid-pan; a scale while a zoom is deferred.
+    pub fn placement(&self, view: &View) -> (f64, f64, f64) {
         match &self.view {
-            Some(v) => ((view.off_x - v.off_x) * view.dpr, (view.off_y - v.off_y) * view.dpr),
-            None => (0.0, 0.0),
+            Some(p) if p.zoom > 0.0 => {
+                let k = view.zoom / p.zoom;
+                (k, (view.off_x - p.off_x * k) * view.dpr, (view.off_y - p.off_y * k) * view.dpr)
+            }
+            _ => (1.0, 0.0, 0.0),
         }
+    }
+
+    /// True when the layer is being shown shifted or scaled and should be
+    /// repainted crisply once the view stops moving.
+    pub fn is_stale(&self, view: &View) -> bool {
+        let (k, dx, dy) = self.placement(view);
+        k != 1.0 || dx.abs() > 1e-3 || dy.abs() > 1e-3
+    }
+
+    /// Whether a zoom from the painted view `p` to `v` may be shown by
+    /// scaling the existing layer. Only worth it when a repaint is expensive
+    /// (a full page of ink costs tens of ms to rasterise; scaling a bitmap
+    /// costs the same however much is on the board), and only while the
+    /// scaled layer still looks right: not too blurry, most of the viewport
+    /// covered.
+    fn can_defer_zoom(&self, p: &View, v: &View) -> bool {
+        if self.full_cost_ms < ZOOM_DEFER_COST_MS {
+            return false;
+        }
+        let k = v.zoom / p.zoom;
+        if !(ZOOM_DEFER_MIN..=ZOOM_DEFER_MAX).contains(&k) {
+            return false;
+        }
+        let (tx, ty) = ((v.off_x - p.off_x * k) * v.dpr, (v.off_y - p.off_y * k) * v.dpr);
+        let cw = ((tx + v.w * k).min(v.w) - tx.max(0.0)).max(0.0);
+        let ch = ((ty + v.h * k).min(v.h) - ty.max(0.0)).max(0.0);
+        cw * ch >= v.w * v.h * ZOOM_DEFER_COVERAGE
     }
 
     /// The static layer canvas, for compositing.
@@ -226,9 +384,30 @@ impl LayerCache {
         &self.front.canvas
     }
 
+    /// A viewport-sized layer whose contents are free between `update` calls
+    /// (it is only used while painting LOD aggregates).
+    pub fn scratch_layer(&self) -> &Layer {
+        &self.agg
+    }
+
     /// Brings the static layer up to date for `view`, repainting as little as
     /// possible.
-    pub fn update(&mut self, scene: &mut Scene, view: View, theme: &Theme, exclude: &FxHashSet<u64>, env: &PaintEnv) {
+    ///
+    /// `promote` names a stroke that was just committed and whose finished
+    /// ink is still in the live layer: instead of rebuilding its whole outline
+    /// on the pen-up frame (a long scribble costs tens of ms), that ink is
+    /// copied onto the static layer — it is the newest element, so on top is
+    /// where it belongs. Returns true when that happened; the caller repaints
+    /// the stroke from its stored geometry later, while idle.
+    pub fn update(
+        &mut self,
+        scene: &mut Scene,
+        view: View,
+        theme: &Theme,
+        exclude: &FxHashSet<u64>,
+        env: &PaintEnv,
+        promote: Option<(&mut crate::ink::LiveInk, u64)>,
+    ) -> bool {
         let t0 = now_ms();
         let (wu, hu) = (view.w as u32, view.h as u32);
         let resized = self.front.canvas.width() != wu || self.front.canvas.height() != hu;
@@ -238,15 +417,30 @@ impl LayerCache {
             self.agg.resize(wu, hu);
         }
         let (scene_full, dirty) = scene.take_dirty();
+        env.scratch.sample_budget.set(FRAME_SAMPLE_BUDGET);
+        if let Some(paths) = env.paths {
+            paths.begin_frame();
+            if scene_full {
+                paths.clear();
+            } else {
+                dirty.iter().for_each(|(id, _)| paths.invalidate(*id));
+            }
+        }
         let prev = self.view;
-        let mut full = resized
-            || !self.valid
-            || scene_full
-            || self.theme.as_ref() != Some(theme)
-            || prev.is_none_or(|p| p.zoom != view.zoom || p.dpr != view.dpr || p.w != view.w || p.h != view.h);
+        let same_look = !resized && self.valid && !scene_full && self.theme.as_ref() == Some(theme);
+        // Zooming a heavy board: keep showing the painted layer, scaled by the
+        // compositor, and repaint once the zoom settles (`invalidate`).
+        if let Some(p) = prev.filter(|p| same_look && p.zoom != view.zoom && p.dpr == view.dpr && p.w == view.w && p.h == view.h) {
+            if dirty.is_empty() && self.exclude == *exclude && self.can_defer_zoom(&p, &view) {
+                self.stats.deferred_zooms += 1;
+                return false;
+            }
+        }
+        let mut full = !same_look || prev.is_none_or(|p| p.zoom != view.zoom || p.dpr != view.dpr || p.w != view.w || p.h != view.h);
 
         let mut regions: Vec<DevRect> = Vec::new();
         let mut painted_view = prev.unwrap_or(view);
+        let mut promoted: Option<u64> = None;
 
         // Pan: shift existing pixels instead of repainting them.
         if !full {
@@ -293,6 +487,10 @@ impl LayerCache {
                 if exclude.contains(id) && self.exclude.contains(id) {
                     continue;
                 }
+                if promote.as_ref().is_some_and(|(ink, pid)| pid == id && ink.holds(*id, &painted_view, theme.is_dark)) && scene.get(*id).is_some() {
+                    promoted = Some(*id);
+                    continue;
+                }
                 regions.extend(painted_view.device_rect(r));
             }
             regions = merge_regions(regions);
@@ -313,8 +511,11 @@ impl LayerCache {
 
         if full {
             painted_view = view;
+            let t_full = now_ms();
             self.paint_region(scene, &painted_view, theme, painted_view.full(), false, env);
+            self.full_cost_ms = now_ms() - t_full;
             self.stats.full_repaints += 1;
+            promoted = None; // painted from the scene like everything else
         } else {
             for r in &regions {
                 self.paint_region(scene, &painted_view, theme, *r, true, env);
@@ -322,12 +523,23 @@ impl LayerCache {
             if !regions.is_empty() {
                 self.stats.partial_repaints += 1;
             }
+            if let (Some(id), Some((ink, _))) = (promoted, promote) {
+                if let Some(el) = scene.get(id) {
+                    let ctx = &self.front.ctx;
+                    ctx.save();
+                    painted_view.apply(ctx);
+                    ink.paint(ctx, el, &painted_view, theme.is_dark, &self.agg, env.scratch);
+                    ctx.restore();
+                    self.stats.promoted_strokes += 1;
+                }
+            }
         }
         self.view = Some(painted_view);
         self.valid = true;
         if full || !regions.is_empty() {
             self.stats.last_static_ms = now_ms() - t0;
         }
+        promoted.is_some()
     }
 
     fn paint_region(&mut self, scene: &Scene, view: &View, theme: &Theme, d: DevRect, clip: bool, env: &PaintEnv) {
@@ -730,7 +942,7 @@ pub fn paint_element(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEn
             ctx.set_font(&format!("{:.0}px {}", el.font_size, el.font_family));
             ctx.set_fill_style_str(&themed(&el.stroke_color, env.is_dark));
             let line_height = el.font_size * 1.25;
-            for (i, line) in el.text.split('\n').enumerate() {
+            for (i, line) in el.text.split('\n').take(MAX_TEXT_LINES).enumerate() {
                 let _ = ctx.fill_text(line, el.x, el.y + el.font_size + i as f64 * line_height);
             }
         }
@@ -815,41 +1027,99 @@ fn stroke_styled(ctx: &CanvasRenderingContext2d, el: &Element, color: &str, sw: 
     let _ = ctx.set_line_dash(&js_sys::Array::new());
 }
 
+/// How a freehand stroke's ink goes onto the canvas.
+pub struct InkStyle<'a> {
+    pub color: Cow<'a, str>,
+    /// The stroke's own alpha (element opacity × the ink's translucency).
+    pub alpha: f64,
+    pub composite: Option<&'static str>,
+    /// Shadow colour and blur (device px) for glowing inks.
+    pub glow: Option<(&'static str, f64)>,
+}
+
+impl InkStyle<'_> {
+    /// Opaque, plainly blended ink: overlapping pieces of the same stroke can
+    /// be drawn straight onto the canvas without showing their overlap.
+    pub fn is_plain(&self) -> bool {
+        self.alpha >= 1.0 && self.composite.is_none() && self.glow.is_none()
+    }
+}
+
+pub fn ink_style(el: &Element, is_dark: bool) -> InkStyle<'_> {
+    let opacity = (el.opacity / 100.0).clamp(0.0, 1.0);
+    match el.kind.as_str() {
+        // The laser's alpha is its fade-out, kept in `font_size`.
+        "LaserPen" => InkStyle { color: "#ff2d2d".into(), alpha: el.font_size.clamp(0.0, 1.0), composite: None, glow: Some(("#ff4d4d", 14.0)) },
+        "MagicPen" => InkStyle { color: "#e73f07".into(), alpha: opacity, composite: None, glow: Some(("#ff7a45", 8.0)) },
+        // Real highlighter ink: multiplies on paper so text underneath stays
+        // crisp; on dark paper it glows in its true hue instead of being
+        // inverted to a muddy tone.
+        "Highlighter" if is_dark => InkStyle { color: Cow::Borrowed(el.stroke_color.as_str()), alpha: opacity * 0.34, composite: Some("screen"), glow: None },
+        "Highlighter" => InkStyle { color: themed(&el.stroke_color, false), alpha: opacity * 0.42, composite: Some("multiply"), glow: None },
+        _ => InkStyle { color: themed(&el.stroke_color, is_dark), alpha: opacity, composite: None, glow: None },
+    }
+}
+
+/// Pen preset for an element kind (the magic pen writes like a marker).
+pub fn ink_opts(el: &Element) -> freehand::Opts {
+    freehand::preset(if el.kind == "MagicPen" { "Marker" } else { el.kind.as_str() }, el.stroke_width)
+}
+
 fn paint_freehand(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv) {
-    let kind = el.kind.as_str();
-    let (color, glow): (std::borrow::Cow<'_, str>, Option<(&str, f64)>) = match kind {
-        "LaserPen" => {
-            ctx.set_global_alpha(el.font_size.clamp(0.0, 1.0) * env.alpha);
-            ("#ff2d2d".into(), Some(("#ff4d4d", 14.0)))
-        }
-        "MagicPen" => ("#e73f07".into(), Some(("#ff7a45", 8.0))),
-        "Highlighter" => {
-            // Real highlighter ink: multiplies on paper so text underneath
-            // stays crisp; on dark paper it glows in its true hue instead of
-            // being inverted to a muddy tone.
-            let base = (el.opacity / 100.0).clamp(0.0, 1.0) * env.alpha;
-            if env.is_dark {
-                ctx.set_global_alpha(base * 0.34);
-                let _ = ctx.set_global_composite_operation("screen");
-                (std::borrow::Cow::Borrowed(el.stroke_color.as_str()), None)
-            } else {
-                ctx.set_global_alpha(base * 0.42);
-                let _ = ctx.set_global_composite_operation("multiply");
-                (themed(&el.stroke_color, false), None)
+    let style = ink_style(el, env.is_dark);
+    ctx.set_global_alpha(style.alpha * env.alpha);
+    if let Some(op) = style.composite {
+        let _ = ctx.set_global_composite_operation(op);
+    }
+    let opts = ink_opts(el);
+    let step = freehand::step_for(&opts, env.zoom);
+    // Laser and magic-pen strokes are short-lived and never enter the scene.
+    let cache = env.paths.filter(|_| el.id != 0 && !matches!(el.kind.as_str(), "LaserPen" | "MagicPen"));
+    let path = match cache.and_then(|c| c.get(el.id, step)) {
+        Some(path) => path,
+        None => {
+            // Charge this outline against the repaint's budget; when it is
+            // spent, draw the stroke as a plain line instead.
+            let cost = freehand::sample_estimate(&el.points, &opts, step).min(freehand::MAX_SAMPLES as f64) + 16.0;
+            let left = env.scratch.sample_budget.get() - cost;
+            if cost.is_nan() || left < 0.0 {
+                paint_plain_stroke(ctx, el, env, &style, opts.size);
+                return;
             }
+            env.scratch.sample_budget.set(left);
+            let mut outline = env.scratch.outline.borrow_mut();
+            let mut segs = env.scratch.segs.borrow_mut();
+            freehand::outline_segs(&el.points, &el.pressures, &opts, step, &mut outline, &mut segs);
+            let Some(path) = to_path(&segs) else { return };
+            if let Some(c) = cache {
+                c.put(el.id, &path, step, segs.len());
+            }
+            path
         }
-        _ => (themed(&el.stroke_color, env.is_dark), None),
     };
-    let preset_kind = if kind == "MagicPen" { "Marker" } else { kind };
-    let opts = freehand::preset(preset_kind, el.stroke_width);
-    let mut outline = env.scratch.outline.borrow_mut();
-    let mut segs = env.scratch.segs.borrow_mut();
-    freehand::outline_segs(&el.points, &el.pressures, &opts, &mut outline, &mut segs);
-    let Some(path) = to_path(&segs) else { return };
-    if let Some((shadow, blur)) = glow {
+    if let Some((shadow, blur)) = style.glow {
         ctx.set_shadow_color(shadow);
         ctx.set_shadow_blur(blur);
     }
-    ctx.set_fill_style_str(&color);
+    ctx.set_fill_style_str(&style.color);
     ctx.fill_with_path_2d(&path);
+}
+
+/// Fallback for a stroke whose outline would exceed the repaint's budget: the
+/// centre line at a uniform width, decimated to about a pixel.
+fn paint_plain_stroke(ctx: &CanvasRenderingContext2d, el: &Element, env: &PaintEnv, style: &InkStyle, size: f64) {
+    let mut pts = env.scratch.points.borrow_mut();
+    decimate_into(&el.points, 0.75 / env.zoom.max(1e-9), &mut pts);
+    let Some(&first) = pts.first() else { return };
+    let Ok(path) = Path2d::new() else { return };
+    path.move_to(first.0, first.1);
+    if pts.len() == 1 {
+        path.line_to(first.0 + 0.01, first.1);
+    }
+    for p in pts.iter().skip(1) {
+        path.line_to(p.0, p.1);
+    }
+    ctx.set_stroke_style_str(&style.color);
+    ctx.set_line_width(size * 0.75);
+    ctx.stroke_with_path(&path);
 }

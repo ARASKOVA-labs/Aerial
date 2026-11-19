@@ -20,7 +20,7 @@ tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "io-util", "sync", "time"] }
-redb = "2.1.1"
+redb = "4.3.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 aras-dsl = { version = "0.1.0", path = "../aerial-core/aras-dsl" }
